@@ -280,6 +280,92 @@ func eeveeFire(_ control: UIView?) -> String? {
     return nil
 }
 
+/// **比 `eeveeFire` 更宽一档的转发** —— 只给艺人页那颗 `i`（"关于艺人"）用。
+///
+/// ★★ 2026-10-18 第二轮（用户：「点击 i 按键不会跳转到艺人介绍」）：`SPTArtistAboutBiographyView`
+/// **自己对点击没反应** —— 日志 96 已经验过：用户**自己**点那一块能跳到 `BiographyViewController`，
+/// 我们把点击转发给这一块本身却什么都不发生 ⇒ 处理它的那一层在**祖先链**上；而且那一层很可能是
+/// **cell 的选中回调**（`UICollectionViewCell` 的点击不是 `UIGestureRecognizer`，`eeveeFire` 那三条路
+/// 一条都碰不到它）。
+///
+/// 三档，走通一档就返回：
+///   ① 先按 `eeveeFire` 的老三档（自己 → 子树 → 上两层）；
+///   ② **再往上走 6 层**找 tap（闸门照旧：不碰 `UIScrollView` / `UICollectionView` / `UITableView`，
+///      也不碰比目标宽太多的容器）；
+///   ③ 祖先链上有 `UICollectionViewCell` / `UITableViewCell` 就走**它的选中回调** ——
+///      这正是真人点一下走的那条路。
+@discardableResult
+func eeveeFireWide(_ view: UIView?) -> String? {
+    guard let view else { return nil }
+    if let fired = eeveeFire(view) { return fired }
+
+    var node: UIView? = view.superview
+    var levels = 0
+    while let current = node, levels < 6 {
+        if current is UIScrollView || current is UICollectionView || current is UITableView { break }
+        let tooWide = current.bounds.width > view.bounds.width * 1.8 + 60
+        if !tooWide, let fired = eeveeFireRecognizers(of: current) {
+            return "wide.ancestor\(levels + 1).\(fired)"
+        }
+        node = current.superview
+        levels += 1
+    }
+    return eeveeSelectAncestorCell(of: view)
+}
+
+/// 顺着祖先链找 `UICollectionViewCell` / `UITableViewCell`，**替用户"选中"它**。
+///
+/// ⚠️ 调的是 delegate 的可选方法（`collectionView(_:didSelectItemAt:)` / `tableView(_:didSelectRowAt:)`），
+/// 也就是真人点一下走的那一条；`selectItem` 只是把选中态一起做掉（Spotify 的 cell 多半自己画高亮）。
+private func eeveeSelectAncestorCell(of view: UIView) -> String? {
+    var node: UIView? = view
+    var levels = 0
+    while let current = node, levels < 10 {
+        if let cell = current as? UICollectionViewCell {
+            if let collection = eeveeEnclosingCollectionView(of: cell),
+               let indexPath = collection.indexPath(for: cell) {
+                collection.selectItem(at: indexPath, animated: false, scrollPosition: [])
+                guard let delegate = collection.delegate else {
+                    return "cell.selected(\(indexPath.section),\(indexPath.item)) but no delegate"
+                }
+                delegate.collectionView?(collection, didSelectItemAt: indexPath)
+                return "cell.didSelectItemAt(\(indexPath.section),\(indexPath.item))"
+            }
+        }
+        if let cell = current as? UITableViewCell {
+            if let table = eeveeEnclosingTableView(of: cell), let indexPath = table.indexPath(for: cell) {
+                table.selectRow(at: indexPath, animated: false, scrollPosition: .none)
+                guard let delegate = table.delegate else {
+                    return "row.selected(\(indexPath.section),\(indexPath.row)) but no delegate"
+                }
+                delegate.tableView?(table, didSelectRowAt: indexPath)
+                return "row.didSelectRowAt(\(indexPath.section),\(indexPath.row))"
+            }
+        }
+        node = current.superview
+        levels += 1
+    }
+    return nil
+}
+
+private func eeveeEnclosingCollectionView(of view: UIView) -> UICollectionView? {
+    var node: UIView? = view.superview
+    while let current = node {
+        if let collection = current as? UICollectionView { return collection }
+        node = current.superview
+    }
+    return nil
+}
+
+private func eeveeEnclosingTableView(of view: UIView) -> UITableView? {
+    var node: UIView? = view.superview
+    while let current = node {
+        if let table = current as? UITableView { return table }
+        node = current.superview
+    }
+    return nil
+}
+
 /// `sendActions` 候选事件。**顺序有讲究**：`primaryActionTriggered` 是 iOS 14+ 那个"主操作"
 /// 事件，Spotify 的 Encore 按钮注册的多半是它；`touchUpInside` 是经典那颗。
 private let eeveeFireEvents: [(UIControl.Event, String)] = [
@@ -444,6 +530,11 @@ final class EntityPageHeaderButton: UIControl {
     /// 用户什么都看不见。由调用方按需打开。
     var scrollsSourceIntoView = false
 
+    /// ★★ 2026-10-18 第二轮（用户：「点击 i 按键不会跳转到艺人介绍」）：**要不要用更宽一档的转发**
+    /// （`eeveeFireWide`：再往上 6 层找 tap + cell 的选中回调）。只有艺人页那颗 `i` 打开 ——
+    /// 别的按钮（play / shuffle / follow）本来就能用老三档走通，放宽只会多出误触的机会。
+    var firesDeep = false
+
     /// ★★ 2026-10-17：**真正要转发的目标**（可以不是 `source`）。
     ///
     /// 艺人页左边那颗 `i` 就是这样：`source` 只负责"这颗按钮显示什么字形"（找不到"关于艺人"时
@@ -509,7 +600,8 @@ final class EntityPageHeaderButton: UIControl {
         var path = "NOTHING (no target, no tap recogniser)"
         if let target {
             if scrollsSourceIntoView { scrolled = eeveeScrollIntoView(target) }
-            path = eeveeFire(target) ?? path
+            // ★★ 2026-10-18：那颗 `i` 走"宽转发"（祖先链上的 tap + cell 的选中回调），见 `eeveeFireWide`。
+            path = (firesDeep ? eeveeFireWide(target) : eeveeFire(target)) ?? path
         } else if scrollsSourceIntoView {
             // 目标那一段还没建出来（懒加载）⇒ 把页面往下滚一屏让它出现，**不转发**。
             scrolled = eeveeScrollPageDown(from: self)
@@ -806,6 +898,8 @@ final class EntityPageHeaderView: UIView {
         shuffleButton.fireTarget = target
         shuffleButton.fallbackGlyph = glyph
         shuffleButton.scrollsSourceIntoView = true
+        // ★★ 2026-10-18：这一颗（艺人页的 `i`）要**宽转发** —— 见 `eeveeFireWide` 那段。
+        shuffleButton.firesDeep = true
     }
 
     /// 创建者那一行可点（点开作者页）：`control` 是 Spotify 自己那个按钮，被藏着只负责响应。

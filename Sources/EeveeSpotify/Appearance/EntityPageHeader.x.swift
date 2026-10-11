@@ -72,6 +72,10 @@ enum EntityPageHeaderManager {
     private static var cachedArtistFollow: UIView?
     /// 艺人页左边那颗 `i` 的转发目标：**艺人简介卡**（`CreatorBiographyCard`）。
     private static var cachedArtistBio: UIView?
+    /// ★★ 2026-10-18 第二轮：从页面根出发那条兜底搜索**每页只试两拍**（见 `applyToArtistPage`）——
+    /// 这两个数就是它的记账（换页清零；主力是 `ArtistBiographyViewHook`）。
+    private static weak var artistBioSearchPage: UIView?
+    private static var artistBioSearchPasses = 0
     /// 「Follow 那颗的子树」只打一次（见 `probeFollowSubtree`）。
     private static var didProbeFollow = false
     /// ★★ 2026-10-06（照片 115-117：「**旁边还是随机播放**」）：简介卡是**懒加载**的（页面滚到
@@ -535,7 +539,17 @@ enum EntityPageHeaderManager {
         let bioStale = cachedArtistBio == nil
             || cachedArtistBio?.window == nil
             || !(cachedArtistBio?.isDescendant(of: page) ?? false)
-        if bioStale {
+        // ★★ 2026-10-18 第二轮（用户：「点击 i 按键不会跳转到艺人介绍」）：**这条 BFS 只在前两拍试**。
+        //    真机日志 91 的树里 `SPTArtistAboutBiographyView` 落在**深度 20**，从页面根搜要走掉几千个节点；
+        //    日志 97 逐字 `leading MISSING`（用户按了四次，我们只把页面往下滚，从来没拿到目标）。
+        //    现在的主力是 `ArtistBiographyViewHook`（那个类出现即认下，事件驱动、零搜索），
+        //    这里只剩"钩子还没触发时"的兜底。
+        if artistBioSearchPage !== page {
+            artistBioSearchPage = page
+            artistBioSearchPasses = 0
+        }
+        if bioStale, artistBioSearchPasses < 2 {
+            artistBioSearchPasses += 1
             cachedArtistBio = eeveeFindView(page, classNameContains: "SPTArtistAboutBiographyView")
                 ?? eeveeFindView(page, identifier: "Components.UI.CreatorBiographyCard*")
         }
@@ -559,7 +573,10 @@ enum EntityPageHeaderManager {
         //    shuffle 的样子；**动作**落在"关于艺人"上（`setLeadingTarget`），目标没建出来时点它
         //    只会把页面往下滚一屏去把它滚出来，**绝不退回去做随机播放**。
         //    随机播放改挂**长按播放键**（见 `updatePlayLongPress`）。
-        headerView.setLeadingTarget(leading, glyph: UIImage(systemName: "info.circle"))
+        // ★★ 2026-10-18 第二轮：**转发目标换成"关于艺人"那一块本身**（`cachedArtistBio`，不是它里面
+        //    第一颗 `UIControl`）—— 用户自己点那一块能跳转，说明处理它的那一层在**祖先链**上；
+        //    配合 `eeveeFireWide`（再往上 6 层 + cell 的选中回调）才有机会走通。
+        headerView.setLeadingTarget(cachedArtistBio, glyph: UIImage(systemName: "info.circle"))
         headerView.updatePlayLongPress(shuffle)
         headerView.updateCreatorLink(nil)
 
@@ -605,6 +622,32 @@ enum EntityPageHeaderManager {
             queue.append(contentsOf: view.subviews)
         }
         return nil
+    }
+
+    /// ★★ 2026-10-18 第二轮（用户：「点击 i 按键不会跳转到艺人介绍」）：**"关于艺人"出现的那一拍就认下它**。
+    ///
+    /// 为什么不能靠搜：`applyToArtistPage` 里那次 BFS 从**页面根**出发，而真机日志 91 的树里
+    /// `SPTArtistAboutBiographyView` 落在**深度 20**（`21.UIScrollView` → … → 那个 section，
+    /// 旁边就是 `ArtistAboutListenersView` / `ListRow id=artist-about-listeners`）⇒ 日志 97 逐字
+    /// `leading MISSING`：用户按了四次，我们只把页面往下滚，**从来没拿到目标**。
+    /// 这个类**没有 accessibility id**，但它是 ObjC 类（`SPT*`）⇒ 直接挂它自己：事件驱动、零搜索。
+    static func artistBiographyAppeared(_ view: UIView) {
+        guard isEnabled else { return }
+        guard isArtistPageAncestor(of: view) else { return }
+        cachedArtistBio = view
+        if let control = firstControl(in: view) { artistBioControl = control }
+    }
+
+    /// 往上找页面根那个 `creator-page`（与 `EntityPageAppearance.isArtistPage` 同一个判据）。
+    private static func isArtistPageAncestor(of view: UIView) -> Bool {
+        var node: UIView? = view
+        var level = 0
+        while let current = node, level < 24 {
+            level += 1
+            if current.accessibilityIdentifier == "creator-page" { return true }
+            node = current.superview
+        }
+        return false
     }
 
     /// 藏掉艺人页头里 Spotify 自己画的东西，**绕开那张照片**，而且**只用空 mask**（见 `eeveeBlank`）。
@@ -1200,6 +1243,24 @@ class EntityPageArtistLayoutHook: ClassHook<UIView> {
     }
 }
 
+/// ★★ 2026-10-18 第二轮：**"关于艺人"那一块**（`SPTArtistAboutBiographyView`）自己那一拍 ——
+/// 它一出现就把引用交给管理器，`i` 那颗按键才有东西可转发（见 `artistBiographyAppeared`）。
+///
+/// 这个类**没有 accessibility id**，从页面根 BFS 又太深（深度 20，日志 97 的 `leading MISSING` 就是它），
+/// 所以挂它自己：事件驱动、零搜索。
+///
+/// ⚠️ 家族里的同名卡在别的页面上也有（比如听歌页的"了解艺人"），所以管理器里还有一道
+/// `creator-page` 祖先判据 —— 不在艺人页上一个字节都不动。
+class ArtistBiographyViewHook: ClassHook<UIView> {
+    typealias Group = EntityPageHeaderGroup
+    static let targetName = "SPTArtistAboutBiographyView"
+
+    func layoutSubviews() {
+        orig.layoutSubviews()
+        EntityPageHeaderManager.artistBiographyAppeared(target)
+    }
+}
+
 func activateEntityPageHeader() {
     // 两个开关共用这一条每帧的布局拍：AM 页头（`entityPageAMHeader`）与"满幅封面 + 取色底"
     // （`entityPageDissolve`）。**任一打开这条钩子就得在**，否则满幅封面那条路又退回 0.6s 的 tick。
@@ -1207,7 +1268,7 @@ func activateEntityPageHeader() {
 
     let required = [
         EntityPageHeaderLayoutHook.targetName,
-        EntityPagePlayButtonHook.targetName,
+        EntityPageHeaderPlayButtonHook.targetName,
     ]
     let missing = required.filter { NSClassFromString($0) == nil }
     guard missing.isEmpty else {
@@ -1219,11 +1280,15 @@ func activateEntityPageHeader() {
     // 专辑页 / 艺人页那两条路都是**可选**的：类不在就少做一页（不能因为一个可选的类把整组拖垮）。
     let album = NSClassFromString(EntityPageAlbumLayoutHook.targetName) != nil
     let artist = NSClassFromString(EntityPageArtistLayoutHook.targetName) != nil
+    // ★★ 2026-10-18 第二轮：`SPTArtistAboutBiographyView` 那条也是可选的 —— 它不在就等于"关于艺人"
+    //    只能靠 `applyToArtistPage` 那条兜底搜索（每页两拍），日志里会写出来。
+    let bio = NSClassFromString(ArtistBiographyViewHook.targetName) != nil
     writeDebugLog(
         "[EntityPageHeader] on — AM header \(EntityPageHeaderManager.isEnabled ? "ON" : "OFF"),"
             + " page look \(EntityPageAppearance.isEnabled ? "ON" : "OFF")"
             + " (one layout pass drives both; playlist pages"
             + (album ? " + album pages" : "; album hook missing")
-            + (artist ? " + artist pages)" : "; artist hook missing)")
+            + (artist ? " + artist pages)" : "; artist hook missing")
+            + (bio ? "; about-artist hook on" : "; about-artist hook MISSING")
     )
 }

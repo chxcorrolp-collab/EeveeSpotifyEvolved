@@ -139,42 +139,48 @@ extension EeveeLyricsSettingsView {
 
             // SL 的条款（§3/§12）：key 不许共用；要分发到别人设备上，正解是让每个人**各自**
             // 拿一份 key（提交 app template），而不是把你的 key 打包发出去。
-            // 所以这里必须**教用户怎么拿**（上游也是这么做的）—— 那句说明里的
-            // 「开发者面板」是可点的，见 `spicyKeyHelpText()`。
-            spicyKeyHelpText()
+            // 所以这里必须**教用户怎么拿**（上游也是这么做的）—— 那句说明下面那颗 `Link` 就是入口，
+            // 见 `spicyKeyHelp()`（★ 2026-10-18：旧版是把链接**嵌在说明文本里**找那一段贴 `link`，
+            // 中文说明里没有那串字 ⇒ 直接甩裸 URL，照片 131 就是那个现场）。
+            spicyKeyHelp()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// 「想用自己的密钥」那段说明 —— 把里面那句**开发者面板**做成可点链接。
+    /// 「想用自己的密钥」那段说明 —— 说明是**纯文本**，入口是**单独一行 `Link`**。
     ///
-    /// 做法照上游：文案与链接文本**一起本地化**，再按链接文本自己的 key 在字符串里找那一段
-    /// 贴上 `link`。好处是译文可以自由调整语序，不必维护 `%@` 的位置。
+    /// ★★ 2026-10-18 第五轮（用户报的现场：**照片 131** —— 说明下面直接甩了一条裸 URL ✗）：
+    /// 旧做法是把说明本地化、再拿 `spicylyrics_key_link` 的**译文**在说明里找那一段贴 `link`（照上游）。
+    /// 这要求**每个语言的说明都逐字包含**那串链接文本：中文说明写的是「…在 Spicy Lyrics 上**同意用户协议**，
+    /// 按「Add」，复制它给出的客户端密钥即可。」——**没有"在 Spicy Lyrics 上添加本应用"这句** ⇒
+    /// `range(of:)` 找不到 ⇒ 走降级分支：纯文本 + 把裸 URL 附在末尾（照片 131 里那条就是它）。
+    /// en 碰巧包含，所以**只有中文坏** ✗。
     ///
-    /// ⚠️ 现在指向的是**面板的 applications 页**：任何账号都能在那里建 application、
-    /// 开 Client access、打开 "Allow requests with no Origin header"，拿到自己的 `sl_pk_`。
-    /// 等我们自己的 **app template** 过审之后，把 `spicyKeyHelpURL` 换成
-    /// `https://developers.spicylyrics.org/catalog/<slug>`、并同步改文案即可 ——
-    /// 那时用户只需点一下 Add（条款 §12 对"要分发的应用"推荐的正是这条）。
-    private func spicyKeyHelpText() -> Text {
-        let raw = "spicylyrics_api_key_description".localized
-        let linkText = "spicylyrics_key_link".localized
-        var attributed = AttributedString(raw)
+    /// ⇒ 改成**结构上不依赖译文**：说明永远是纯文本、入口是独立一行 `Link`。
+    /// （List 里 `Link` 自己吃点击；`Text` 里嵌的 link 在 List 行里本来就常常点不动 ——
+    /// 那是旧做法在别的语言里迟早会翻车的另一个原因。）
+    ///
+    /// ⚠️ 地址现在是**我们自己的 app template 目录页**（`developers.spicylyrics.org/catalog/
+    /// eeveespotifyevolved`）：用户只需登录/注册 → 按 Add → 复制它给出的 Client key
+    /// （**不用**建 application、也不用管 Client access / Origin 那几项，模板里已经定好）。
+    @ViewBuilder private func spicyKeyHelp() -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("spicylyrics_api_key_description".localized)
+                .font(.footnote)
+                .foregroundColor(.secondary)
 
-        if let url = Self.spicyKeyHelpURL, let range = attributed.range(of: linkText) {
-            // 只贴 `link`：SwiftUI 会照 app 的 tint 把这一段画成可点链接，不额外设下划线
-            // （`underlineStyle` 在两个 attribute scope 里类型不同，能不碰就不碰）。
-            attributed[range].link = url
-        } else {
-            // 找不到那一段（比如译文只翻了说明、没照抄那句链接文本）⇒ 退化成纯文本，
-            // **不静默丢掉整句说明**，并把地址原样附在末尾（至少用户能看见/复制）。
-            writeDebugLog("[Settings] spicy key help link text missing in this locale — showing the raw URL")
             if let url = Self.spicyKeyHelpURL {
-                attributed.append(AttributedString("\n" + url.absoluteString))
+                Link(destination: url) {
+                    HStack(spacing: 4) {
+                        Text("spicylyrics_key_link".localized)
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .font(.footnote)
+                }
             }
         }
-
-        return Text(attributed).font(.footnote).foregroundColor(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
     
     /// Musixmatch 用户令牌输入框。

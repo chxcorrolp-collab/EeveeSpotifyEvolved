@@ -736,6 +736,33 @@ enum EntityPageHeaderManager {
         guard isArtistPageAncestor(of: view) else { return }
         cachedArtistBio = view
         if let control = firstControl(in: view) { artistBioControl = control }
+        captureBioTextOnSight(from: view)
+    }
+
+    /// ★★ 2026-10-11（**日志 101 + 图片 133 的现场**）：**这一块露头的那一刻就把正文读走**。
+    ///
+    /// 以前这里只记下"它在哪儿"（给 `i` 转发用），正文全靠进页面 1.5s 那一次扫列表 —— 而这张卡
+    /// 是**懒加载**的：奈奈塚那次 1.5s 时整页还是 `leading MISSING`（日志 101 逐字），
+    /// 卡片是用户自己滚下去、之后才建出来的 ⇒ **它出现了，我们却什么都没读**：
+    /// `bioTexts` 一直空 ⇒ ① `i` 那张卡说"没有可读的介绍"；② 列表里那一段因为折叠闸门
+    /// （`hasCapturedBio`）也不折 —— 用户两边都看不到，而 Spotify 自己那份其实就在页面上
+    /// （图片 133 逐字：*Nanatsukaze is a Japan-based EDM × J-POP music duo…*）。
+    ///
+    /// 所以：**只要它露头就读**（必须当场读 —— cell 一被回收文字就没了），并按艺人名存起来；
+    /// 存下来那一刻顺手作废一次布局，折叠闸门才打得开（见 `relayoutAfterBioCapture`）。
+    private static func captureBioTextOnSight(from view: UIView) {
+        let name = artistNameStorage
+        guard !name.isEmpty, bioTexts[name] == nil, bioTexts.count < 32 else { return }
+        // 先按 id 精确那颗 label 读（`3e91ac3` 那条），读不到再退"这一块里最长的一段文字"。
+        let text = eeveeArtistBioText(in: view) ?? eeveeLongestText(in: view, minimum: 20)
+        guard let text, !text.isEmpty else { return }
+        bioTexts[name] = text
+        writeDebugLog(
+            "[EntityPageHeader] about-artist captured on sight — \(name), \(text.count) char"
+        )
+        if let page = eeveeAncestor(withIdentifier: "creator-page", of: view) {
+            relayoutAfterBioCapture(in: page)
+        }
     }
 
     /// 往上找页面根那个 `creator-page`（与 `EntityPageAppearance.isArtistPage` 同一个判据）。
@@ -1367,6 +1394,37 @@ class ArtistBiographyViewHook: ClassHook<UIView> {
     }
 }
 
+/// ★★ 2026-10-11（**日志 101 逐字**）：**这一版真正装着正文的那张卡**。
+///
+/// 日志 101 两行就是判决：
+///   · 迈克尔·杰克逊那次 —— `about-artist found without scrolling —`
+///     `_TtC14Creator_ECMKitP33_9A9A9C9886A2DEDE51521D11F82E7F9026CreatorBiographyCardLayout`；
+///   · 奈奈塚那次 —— 同一个读者什么都没找到，因为**那一刻卡片还没建出来**。
+///
+/// 也就是说 `SPTArtistAboutBiographyView` 这个类在这一版页面上**根本不露头**
+/// （启动日志里那句 `about-artist hook on` 只说明"类在二进制里"，不等于它会出现）
+/// ⇒ "出现即认下"这条事件线一直是**空的**，只有进页面 1.5s 那次扫列表在干活，
+/// 而卡片什么时候建出来完全看用户滚不滚。
+/// 两个类都挂：**谁先露头谁把正文交出来**（`captureBioTextOnSight`）。
+///
+/// ⚠️ 它**自己一组**（`ArtistBioCardHookGroup`），**不并进 `EntityPageHeaderGroup`**：
+/// 上面那个名字里带 `P33_…` 的私有类，Spotify 换一版就可能改名 —— 并进共用组的话，
+/// 一个解析不到的名字有把**整组页头钩子**（页头 / 取色底 / 状态栏）一起拖下水的风险。
+/// 单独一组 + 装之前先问一句 `NSClassFromString`（与上游 `ArtistHides` / 本仓库
+/// `activatePlayerCardsDeclutter` 同一条纪律）⇒ 最坏情况只是少这一条事件线，日志里写着 MISSING。
+struct ArtistBioCardHookGroup: HookGroup {}
+
+class ArtistBiographyCardLayoutHook: ClassHook<UIView> {
+    typealias Group = ArtistBioCardHookGroup
+    static let targetName =
+        "_TtC14Creator_ECMKitP33_9A9A9C9886A2DEDE51521D11F82E7F9026CreatorBiographyCardLayout"
+
+    func layoutSubviews() {
+        orig.layoutSubviews()
+        EntityPageHeaderManager.artistBiographyAppeared(target)
+    }
+}
+
 func activateEntityPageHeader() {
     // 两个开关共用这一条每帧的布局拍：AM 页头（`entityPageAMHeader`）与"满幅封面 + 取色底"
     // （`entityPageDissolve`）。**任一打开这条钩子就得在**，否则满幅封面那条路又退回 0.6s 的 tick。
@@ -1388,7 +1446,13 @@ func activateEntityPageHeader() {
     let artist = NSClassFromString(EntityPageArtistLayoutHook.targetName) != nil
     // ★★ 2026-10-18 第二轮：`SPTArtistAboutBiographyView` 那条也是可选的 —— 它不在就等于"关于艺人"
     //    只能靠 `applyToArtistPage` 那条兜底搜索（每页两拍），日志里会写出来。
+    //    ★ 2026-10-11（日志 101）：**真正露头的是下面那个 `CreatorBiographyCardLayout`** ——
+    //    两个各报各的，少一个就少一条事件线（日志里必须一眼看得出缺哪个）。
     let bio = NSClassFromString(ArtistBiographyViewHook.targetName) != nil
+    let bioCard = NSClassFromString(ArtistBiographyCardLayoutHook.targetName) != nil
+    // ⚠️ 这一组**单独装**（见 `ArtistBioCardHookGroup` 的说明）：名字里带私有哈希，
+    //    换一版就可能解析不到 —— 解析不到就只是少一条事件线，不能连累共用组。
+    if bioCard { ArtistBioCardHookGroup().activate() }
     writeDebugLog(
         "[EntityPageHeader] on — AM header \(EntityPageHeaderManager.isEnabled ? "ON" : "OFF"),"
             + " page look \(EntityPageAppearance.isEnabled ? "ON" : "OFF")"
@@ -1396,5 +1460,6 @@ func activateEntityPageHeader() {
             + (album ? " + album pages" : "; album hook missing")
             + (artist ? " + artist pages)" : "; artist hook missing")
             + (bio ? "; about-artist hook on" : "; about-artist hook MISSING")
+            + (bioCard ? " + card-layout hook on" : " + card-layout hook MISSING")
     )
 }

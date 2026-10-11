@@ -29,6 +29,9 @@ final class ArtistBioSheet: UIView {
     private let creditLabel = UILabel()
     /// 那一颗 Wikipedia 链接的地址（`build` 里按 app 语言算好）。
     private var wikiURL: URL?
+    /// **已经真的显示了正文**吗（占位那句不算）—— 只给"原生正文晚一拍到了"那条补看用，
+    /// 免得把已经取到的 Genius / 维基正文又盖掉。
+    private var hasBody = false
 
     /// 弹一张（同时只留一张：连点两次不会叠）。
     static func present(name: String, text: String?, colour: UIColor?) {
@@ -128,6 +131,8 @@ final class ArtistBioSheet: UIView {
                 show(text, credit: "artist_bio_from_spotify".localized)
             } else {
                 showFailure("artist_bio_spotify_failed".localized)
+                // 原生那份可能只是**还没建出来**（懒加载）⇒ 盯一会儿，抓到就补上。
+                watchForNativeText(name)
             }
         case .genius:
             loadGenius(name)
@@ -138,6 +143,8 @@ final class ArtistBioSheet: UIView {
                 show(text, credit: "artist_bio_from_spotify".localized)
             } else {
                 loadGenius(name)
+                // 同上：Genius 在跑，原生那份晚一拍到了就换成它（`.automatic` = 原生优先）。
+                watchForNativeText(name)
             }
         }
 
@@ -196,7 +203,26 @@ final class ArtistBioSheet: UIView {
     /// 正文 + 底部那行**永远显示**的署名/状态。
     private func show(_ body: String, credit: String) {
         bodyView.text = body
+        hasBody = true
         setCredit(credit)
+    }
+
+    /// ★★ 2026-10-11（**日志 101**）：**原生正文晚一拍才抓到时，把这张已经开着的卡片补上**。
+    ///
+    /// 为什么需要：那张卡是懒加载的（见 `EntityPageHeaderManager.artistBiographyAppeared` 的说明）
+    /// —— 用户点 `i` 的**那一刻**它可能还没建出来，日志 101 里 `native text none` 就是这么来的，
+    /// 而几秒之后卡片才露头、正文才被 `captureBioTextOnSight` 读走。
+    /// 盯 6 秒（12 × 0.5s）：一拿到就写上去，仍按 `.automatic` 的口径"原生优先"，
+    /// **但绝不盖掉已经真的显示出来的正文**（`hasBody`）。
+    private func watchForNativeText(_ name: String) {
+        guard !name.isEmpty else { return }
+        for step in 1...12 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(step) * 0.5) { [weak self] in
+                guard let self, self.superview != nil, !self.hasBody else { return }
+                guard let text = EntityPageHeaderManager.cachedBioText(for: name) else { return }
+                self.show(text, credit: "artist_bio_from_spotify".localized)
+            }
+        }
     }
 
     /// 拿不到正文：正文照旧那句说明，但**底部必须说清是哪一档没取到**（以前四种失败长得一样）。
@@ -221,6 +247,7 @@ final class ArtistBioSheet: UIView {
                 return
             }
             self.bodyView.text = bio
+            self.hasBody = true
             self.setCredit("artist_bio_from_genius".localized)
         }
     }
@@ -236,6 +263,7 @@ final class ArtistBioSheet: UIView {
                 return
             }
             self.bodyView.text = bio
+            self.hasBody = true
             self.setCredit("artist_bio_from_wikipedia".localized)
         }
     }

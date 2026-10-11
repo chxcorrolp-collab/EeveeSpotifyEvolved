@@ -81,6 +81,40 @@ enum ArtistBioSource {
         }
     }
 
+    /// **找 `fetchArtistAboutForArtist:withCompletion:` 的宿主类**（一次性诊断，只为下一轮铺路）。
+    ///
+    /// 为什么要它：`dump-9.1.88.txt` 是**按字母排的选择器表**（`:24502` 那一行只有选择器名），
+    /// **没有"选择器 → 类"的映射** ✗ ⇒ 猜不出来。而运行时有 `objc_getClassList`：扫一遍、只读、
+    /// 找到就打一行日志 ✓（零副作用）。
+    ///
+    /// 下一份日志里出现类名之后，就能 hook 它 —— 把**完整正文**收下来（而不是像现在这样读收起态那个
+    /// 大概被截断过的 label；`biographyText:withStyle:`（`dump:22624`）说明"收起/展开"是**样式**，
+    /// 而 flag 里那条 `is_async_biography_truncation_enabled` 也说明截断是真实存在的）。
+    static func reportArtistAboutFetcher() {
+        let selector = NSSelectorFromString("fetchArtistAboutForArtist:withCompletion:")
+        let count = objc_getClassList(nil, 0)
+        guard count > 0 else { return }
+        let buffer = UnsafeMutablePointer<AnyClass>.allocate(capacity: Int(count))
+        defer { buffer.deallocate() }
+        let filled = objc_getClassList(AutoreleasingUnsafeMutablePointer<AnyClass>(buffer), count)
+
+        var instanceHits: [String] = []
+        var classHits: [String] = []
+        for index in 0..<Int(filled) {
+            let candidate: AnyClass = buffer[index]
+            if class_getInstanceMethod(candidate, selector) != nil {
+                instanceHits.append(NSStringFromClass(candidate))
+            } else if class_getClassMethod(candidate, selector) != nil {
+                classHits.append(NSStringFromClass(candidate))
+            }
+        }
+        let detail = instanceHits + classHits.map { $0 + " (class method)" }
+        writeDebugLog(
+            "[ArtistBio] artist-about fetcher — \(Int(filled)) class(es) scanned, "
+                + (detail.isEmpty ? "no host found" : detail.joined(separator: ", "))
+        )
+    }
+
     /// 一次 GET → JSON。**日志与回调都在主线程**（底色/界面那边只认主线程；日志文件也不从后台线程写）。
     ///
     /// ⚠️ 名字**不能叫 `get`** —— `swift_member_check.py` 会把这种通用名当成"不该私有的短名"

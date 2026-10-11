@@ -82,6 +82,8 @@ enum EntityPageHeaderManager {
     /// 这一页已经安排过"扫列表读简介"了（每页一次，延后 1.5s）。
     private static weak var bioSweepPage: UIView?
     private static var didReportBioSweep = false
+    /// ★★ 2026-10-18 第四轮：那份"Spotify 原生数据线在哪"的诊断**只打一次**（见 `scheduleBioSweepIfNeeded`）。
+    private static var didReportArtistAboutFetcher = false
     /// 现在这一页的艺人名（`applyToArtistPage` 每拍写）—— "我们自己的艺人介绍"拿它当标题。
     private static var artistNameStorage = ""
 
@@ -99,6 +101,12 @@ enum EntityPageHeaderManager {
         guard !name.isEmpty, bioTexts[name] == nil, bioTexts.count < 32 else { return }
         guard bioSweepPage !== page else { return }
         bioSweepPage = page
+        // ★★ 2026-10-18 第四轮：顺手把"Spotify 原生那条数据线"的宿主类打进日志（一次性诊断，
+        //    见 `ArtistBioSource.reportArtistAboutFetcher`）—— 下一份日志就能定下一轮怎么取**完整正文**。
+        if !didReportArtistAboutFetcher {
+            didReportArtistAboutFetcher = true
+            ArtistBioSource.reportArtistAboutFetcher()
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak page] in
             guard let page, page.window != nil else { return }
             let text = eeveeArtistBio(from: page)?.text

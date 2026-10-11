@@ -72,6 +72,25 @@ enum EntityPageAppearance {
     private static let fieldColorEnd: CGFloat = 0.58
     /// 封面化开成的那片背景占页面高度的比例（pw 那张 playlist 截图约 45%，这里给到 52%）。
     private static let heroHeightRatio: CGFloat = 0.52
+    /// ★★ 2026-10-18（用户：「AM 那三颗按键比 Spotify 靠下一点，所以它的渐变刚好不压到艺人名字；
+    ///    Spotify 的靠上就会被压住」）——**把渐变的收口绑到"我们自己那块页头里的名字"上**。
+    ///
+    /// 改之前的几何（真机日志 96 + `EntityPageHeaderView.layoutSubviews` 的算式）：
+    ///   · 满幅照片的 mask 是 `0 → 54% → 100%`，作用在 **520pt** 的 `HeaderContainer` 上
+    ///     ⇒ 照片从 281pt 一路化到 520pt（**239pt 长的尾巴**）；
+    ///   · 页头那一块贴底排：名字在 **347–388**、三颗在 **408–506** ⇒ 整块都落在尾巴里，
+    ///     名字那一行照片还剩六成 ⇒ 用户看到的正是"**渐变压在艺人名字上**"。
+    /// AM 那边不是我们的做法：它的收口在名字**上方**就收完（照片 118：渐变在 ~360pt 收干净，
+    /// 名字 365 起、三颗 416–493 全落在平色上）。它靠的是"那一行更靠下"，我们靠这两行常数。
+    ///
+    /// ⇒ `goneAt = 名字上沿 − meltGap`（照片到这里已经**完全**化没），
+    ///    `solidUntil = 名字上沿 − meltSpanRatio × 页头高`（再往上才是完全不透明的照片）。
+    /// 页头多高、Spotify 自己把那一行摆在哪，都不再影响收口落点；名字与三颗按钮一律落在平色上。
+    private static let meltGap: CGFloat = 8
+    /// 化开那一段占页头高度的比例（520pt 的艺人页 ⇒ 104pt）。
+    private static let meltSpanRatio: CGFloat = 0.20
+    /// 化开那一段的**下限**：页头矮的时候别把渐变整成一条硬边。
+    private static let minMeltSpan: CGFloat = 90
     /// 底子的模糊半径 —— **照 MeloX 的常数**：它是 `filter.radius = 18`，
     /// 而且作用在"**先缩到最长边 160px**"的那张图上（`makeBlurredBackdrop` ✓）。
     /// 先缩再糊 = 半径的相对强度可控、也快 ✓。
@@ -930,7 +949,16 @@ enum EntityPageAppearance {
 
         if !view.frame.equalTo(frame) { view.frame = frame }
         if view.image !== source { view.image = source }
-        applyDissolveMask(to: view, opaqueFraction: 0.54)
+
+        // ★★ 2026-10-18：**收口绑名字，不绑页头高度** —— 见 `meltGap` / `meltSpanRatio` 那段。
+        //    认得出我们那块页头（名字的 y 拿得到）就用它算；认不出（还没建 / 正在收起、整块已渐隐）
+        //    就退回老行为（54% 起化、到底化完），**绝不因为算不出来把渐变整条撤掉**。
+        if let textTop = ourHeaderTextTop(in: host), textTop > host.bounds.height * 0.2 {
+            let span = max(minMeltSpan, host.bounds.height * meltSpanRatio)
+            applyDissolveMask(to: view, solidUntil: textTop - span, goneAt: textTop - meltGap)
+        } else {
+            applyDissolveMask(to: view, opaqueFraction: 0.54)
+        }
 
         // ★ 2026-10-17：照片**照旧铺到顶**，顶上那条由**页面取色**去化（不是黑纱）—— 见 `ensureScrim`。
         ensureScrim(in: host, above: view, page: page, colour: colour)
@@ -1171,8 +1199,16 @@ enum EntityPageAppearance {
     // 参数名一个 color 一个 colour 也算重复声明，编译器直接报 `invalid redeclaration`。
 
 
-    /// 向下化开：上 `opaqueFraction` 不透明 → 底全透明。两张 hero 共用这一份（改一处就够）。
-    private static func applyDissolveMask(to view: UIView, opaqueFraction: CGFloat) {
+    /// 向下化开：`solidUntil` 之上**完全不透明**，`goneAt` 之下**完全透明**，中间线性。
+    ///
+    /// ★★ 2026-10-18：从"只抽一个比例"改成**两个绝对 y** —— 艺人页的收口要落在**名字上沿**
+    /// （见 `meltGap` / `meltSpanRatio`），那是按内容算出来的位置，不是一个固定比例。
+    /// 比例那条路（模糊底）仍然走下面那个薄包装 ⇒ 行为与改之前**逐字一致**。
+    private static func applyDissolveMask(to view: UIView, solidUntil: CGFloat, goneAt: CGFloat) {
+        let height = max(1, view.bounds.height)
+        let solid = max(0, min(1, solidUntil / height))
+        let gone = max(solid, min(1, goneAt / height))
+
         let mask: CAGradientLayer
         if let existing = view.layer.mask as? CAGradientLayer {
             mask = existing
@@ -1185,15 +1221,54 @@ enum EntityPageAppearance {
                 UIColor.white.cgColor,
                 UIColor.clear.cgColor,
             ]
-            layer.locations = [
-                NSNumber(value: 0),
-                NSNumber(value: opaqueFraction),
-                NSNumber(value: 1),
-            ]
             view.layer.mask = layer
             mask = layer
         }
+
+        // ⚠️ 复用的那个 layer 上写的是**上一拍的比例** ⇒ 位置**每次都要重写**（原来只在新建那一支里写过，
+        //    所以换一个更矮/更高的收口时它不会跟着动）。写的时候关掉隐式动画，免得收口自己动。
+        let wanted = [0, Double(solid), Double(gone)]
+        let current = mask.locations?.map { $0.doubleValue } ?? []
+        if current != wanted {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            mask.locations = [
+                NSNumber(value: 0),
+                NSNumber(value: solid),
+                NSNumber(value: gone),
+            ]
+            CATransaction.commit()
+        }
         if !mask.frame.equalTo(view.bounds) { mask.frame = view.bounds }
+    }
+
+    /// 按比例那条路（**模糊底**用）：上 `opaqueFraction` 不透明 → 底全透明。
+    private static func applyDissolveMask(to view: UIView, opaqueFraction: CGFloat) {
+        let height = max(1, view.bounds.height)
+        applyDissolveMask(to: view, solidUntil: height * opaqueFraction, goneAt: height)
+    }
+
+    /// 我们自己那块页头（`EntityPageHeaderView`）里**名字的上沿**，换算到 `host` 的坐标里；认不出就是 nil。
+    ///
+    /// ★★ 2026-10-18：`ensureSharpHero` 用它决定渐变收在哪 —— **名字与那三颗都是我们自己画的**
+    /// ⇒ 这个位置是我们说了算的。AM 靠"把那一行做得更靠下"避开渐变，我们靠这一行避开
+    /// （页头多高、那一行摆在哪都不影响）。
+    ///
+    /// 两道闸门：**整块已经渐隐（收起中）时不算** —— 那时候它本来就让位了，
+    /// 用它的 y 会把收口推到屏幕上方；**y ≤ 0 不算** —— 那是"还没布局"的现场。
+    private static func ourHeaderTextTop(in host: UIView) -> CGFloat? {
+        var queue: [UIView] = [host]
+        var visited = 0
+        while !queue.isEmpty, visited < 200 {
+            let view = queue.removeFirst()
+            visited += 1
+            if let block = view as? EntityPageHeaderView,
+               block.window != nil, !block.isHidden, block.alpha > 0.99, block.textTop > 0 {
+                return block.convert(CGPoint(x: 0, y: block.textTop), to: host).y
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
     }
 
     /// 让 Spotify 自己那张封面**让位**：**改层不改属性**（Spotify 会用 `setHidden:NO` 把视图写回来）

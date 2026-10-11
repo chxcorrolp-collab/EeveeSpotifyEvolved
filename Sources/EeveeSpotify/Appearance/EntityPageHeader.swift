@@ -855,6 +855,17 @@ final class EntityPageHeaderView: UIView {
     /// ⇒ 改成一个显式开关，只有 `applyToArtistPage` 打开它。
     var fadesWhenTight = false
 
+    /// **名字（标题）上沿**在本视图坐标里的 y；没有名字时是 −1。
+    ///
+    /// ★★ 2026-10-18（用户：「AM 那三颗按键比 Spotify 靠下一点，所以它的渐变刚好不压到艺人名字；
+    ///    Spotify 的靠上就会被压住」）：`EntityPageAppearance.ensureSharpHero` 用它把**满幅照片的渐变
+    ///    收在名字上方**（`meltGap` / `meltSpanRatio`）—— AM 靠"把那一行做得更靠下"避开渐变，
+    ///    我们靠这一行避开：**页头多高、Spotify 自己把那一行摆在哪，都不影响收口落点**。
+    ///
+    /// ⚠️ 读的是 `titleLabel.frame`，也就是**上一次 `layoutSubviews` 的结果**（本文件就是排它的地方）
+    ///    ⇒ 首帧可能还是 0，那一拍 `ensureSharpHero` 会退回默认收口，下一拍就对上了（0.6s 的拍子）。
+    var textTop: CGFloat { titleLabel.isHidden ? -1 : titleLabel.frame.minY }
+
     override func layoutSubviews() {
         super.layoutSubviews()
 

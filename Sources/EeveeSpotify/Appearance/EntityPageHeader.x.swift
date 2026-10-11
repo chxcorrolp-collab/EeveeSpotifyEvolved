@@ -76,6 +76,43 @@ enum EntityPageHeaderManager {
     /// 这两个数就是它的记账（换页清零；主力是 `ArtistBiographyViewHook`）。
     private static weak var artistBioSearchPage: UIView?
     private static var artistBioSearchPasses = 0
+    /// ★★ 2026-10-18 第三轮（用户：「要不点击 i 之后不要 spotify 自己的了 … 我们自己搞」）：
+    /// **读到过的艺人简介**按艺人名缓存（那一块是懒加载的，读一次就够；cell 一被回收文字就没了）。
+    private static var bioTexts: [String: String] = [:]
+    /// 这一页已经安排过"扫列表读简介"了（每页一次，延后 1.5s）。
+    private static weak var bioSweepPage: UIView?
+    private static var didReportBioSweep = false
+    /// 现在这一页的艺人名（`applyToArtistPage` 每拍写）—— "我们自己的艺人介绍"拿它当标题。
+    private static var artistNameStorage = ""
+
+    static var currentArtistName: String { artistNameStorage }
+
+    /// 读到的简介（没有就是 nil）。
+    static func cachedBioText(for name: String) -> String? { bioTexts[name] }
+
+    /// **安排一次"扫列表读简介"**（每页一次，延后 1.5s）。
+    ///
+    /// 为什么不同步做：那一下会把列表里到"关于艺人"为止的 cell 全建出来，进页面那几帧本来就忙
+    /// （页头在逐帧布局）。延后一拍半、而且 `eeveeMaterialiseBio` **一找到就停 + 回到原位**，代价小。
+    /// 读到之后：① 存起来给 `i` 那张卡片用；② 列表里那一段已经由 `EntityPageSectionDrop` 折成 0 高。
+    private static func scheduleBioSweepIfNeeded(in page: UIView, name: String) {
+        guard !name.isEmpty, bioTexts[name] == nil, bioTexts.count < 32 else { return }
+        guard bioSweepPage !== page else { return }
+        bioSweepPage = page
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak page] in
+            guard let page, page.window != nil else { return }
+            let text = eeveeArtistBio(from: page)?.text
+            if let text, bioTexts[name] == nil { bioTexts[name] = text }
+            guard !didReportBioSweep else { return }
+            didReportBioSweep = true
+            let count = text?.count ?? 0
+            writeDebugLog(
+                "[EntityPageHeader] about-artist read — \(name), biography "
+                    + (text == nil ? "NOT READ" : "\(count) char")
+                    + "; the section itself is folded to 0 height"
+            )
+        }
+    }
     /// 「Follow 那颗的子树」只打一次（见 `probeFollowSubtree`）。
     private static var didProbeFollow = false
     /// ★★ 2026-10-06（照片 115-117：「**旁边还是随机播放**」）：简介卡是**懒加载**的（页面滚到
@@ -473,6 +510,11 @@ enum EntityPageHeaderManager {
             return
         }
 
+        // ★★ 2026-10-18 第三轮：① 记下艺人名（`i` 那张"我们自己的艺人介绍"拿它当标题）；
+        //    ② 安排一次"扫列表读简介"（见 `scheduleBioSweepIfNeeded`）。
+        artistNameStorage = name
+        scheduleBioSweepIfNeeded(in: page, name: name)
+
         // 副标题：`Components.Header.UI.Metadata` —— 树里是 "58,4M monthly listeners"。
         var meta = ""
         if let metadata = find("Components.Header.UI.Metadata*", in: header, cache: &cachedArtistMeta) {
@@ -496,6 +538,9 @@ enum EntityPageHeaderManager {
         // ★★ 2026-10-17：**只有这一页的页头会缩**（520 → 100pt 的导航栏）⇒ 也只有这一页要那条
         //    "装不下就渐隐让位"。歌单/专辑页的页头是定高的，给它打开只会把整块内容弄没（照片 124）。
         headerView.fadesWhenTight = true
+        // ★★ 2026-10-18 第三轮（用户：「**spotify 的按键又靠上**」）：**贴底 0**（不是默认的 14）
+        //    ⇒ 姓名与那三颗整体下移 14pt，与 AM 的照片 118 对齐（见 `contentBottom` 那段）。
+        if headerView.contentBottom != 0 { headerView.contentBottom = 0 }
 
         // Spotify 那一列：**空 mask 藏**（不碰 hidden —— 见函数头那段）。照片归 `EntityPageAppearance`。
         let cover = find("Components.Header.UI.ArtworkImage", in: header, cache: &cachedArtistCover)

@@ -191,48 +191,94 @@ enum EntityPageSectionDrop {
 
     static let curationIdentifier = "PlaylistCuration.Row.CurationActionsToolbar"
     static let likedSongsFragment = "LikedSongs"
-    /// 已经为这一页让布局重算过一次（`invalidateLayout`）。
+    /// ★★ 2026-10-18 第三轮：艺人页的「关于艺人」那一块 —— 正文被
+    /// `ArtistBioSheet` 读走之后，列表里这一段就折掉（用户：「把原本的 spotify 的
+    /// 关于艺人 给去掉，我们自己搞」）。
+    static let aboutArtistFragment = "SPTArtistAboutBiographyView"
+
+    /// 每一格"是什么"与"已经决定不要的格子" —— pw 的 `kindsOf` / `droppedOf`
+    /// （`ArtistSections.x:49-65`）；每段 = 间隔格 + 标题格 + 内容格。
+    enum Kind { case other, spacer, heading }
+    private static var kinds: [IndexPath: Kind] = [:]
+    private static var dropped: Set<IndexPath> = []
     private static weak var invalidatedFor: UIView?
+    private static var invalidations = 0
     private static var didReport = false
 
-    /// 这一格要不要折成 0。
+    /// 这一拍被问"你要多高"时顺手做两件事：**记下这一格是什么**、
+    /// **回答要不要折成 0**。
     ///
-    /// ⚠️ **故意不缓存判定**：cell 会被复用，同一个 `ObjectIdentifier` 先后装着不同的 section
-    /// —— 缓存下来就会"折错格子"。这里只做**有界**的子树走（一个 cell 通常十几个视图），
-    /// 而且只在 `preferredLayoutAttributesFittingAttributes` 那一拍问一次。
+    /// ⚠️ **故意不按 cell 对象缓存判定**：cell 会被复用，同一个对象先后装着不同的 section
+    /// —— 缓存下来就会"折错格子"。这里只做**有界**的子树走（一个 cell 通常十几个视图）。
     ///
     /// 两道闸门：**在我们接管的页面上**（`EntityPageRepaint.root`，与清底色同一条）⇒ 内容对得上；
-    /// 「已点赞」那一族还要求**页面根就是 `creator-page`**（「喜欢的歌曲」那一页也是 playlist，
-    /// 不认这一条会把那一页整段折掉 ✗）。
-    static func shouldCollapse(_ cell: UIView) -> Bool {
+    /// 「已点赞」与「关于艺人」那两族还要求**页面根就是 `creator-page`**
+    /// （「喜欢的歌曲」那一页也是 playlist，不认这一条会把那一页整段折掉 ✗）。
+    static func shouldCollapse(_ cell: UIView, at path: IndexPath?, height: CGFloat) -> Bool {
         guard let root = EntityPageRepaint.root, cell.isDescendant(of: root) else { return false }
-        if containsIdentifier(cell, curationIdentifier) {
-            scheduleRelayout(of: cell)
+
+        if let path, kinds.count < 400, kinds[path] == nil {
+            kinds[path] = kind(of: cell, height: height)
+        }
+        if let path, dropped.contains(path) {
+            scheduleRelayout(of: cell, force: false)
             return true
         }
-        if root.accessibilityIdentifier == "creator-page", containsClassName(cell, likedSongsFragment) {
-            scheduleRelayout(of: cell)
-            return true
+
+        var drop = containsIdentifier(cell, curationIdentifier)
+        if !drop, root.accessibilityIdentifier == "creator-page" {
+            drop = containsClassName(cell, likedSongsFragment)
+                || containsClassName(cell, aboutArtistFragment)
         }
-        return false
+        if drop {
+            if let path { dropPreceding(path) }
+            scheduleRelayout(of: cell, force: true)
+        }
+        return drop
     }
 
-    /// 折了之后**让布局重算一次** —— 高度是布局问出来的，只在下一趟才会问第二遍；不主动作废的话，
-    /// 用户得等到页面因为别的原因重排才看得到效果（pw 的 `dropHeadingOf` 也是这么干的）。
-    private static func scheduleRelayout(of cell: UIView) {
+    /// 这一格是什么：**标题**（`Components.UI.SectionHeadingHome`）/ **间隔**（≤ 16.5pt
+    /// 而且一个 id 都没有）/ 别的 —— pw 的 `kindOf`（`ArtistSections.x:31-47`）逐字。
+    private static func kind(of cell: UIView, height: CGFloat) -> Kind {
+        if containsIdentifier(cell, "Components.UI.SectionHeadingHome") { return .heading }
+        if height <= 16.5, !hasAnyIdentifier(cell) { return .spacer }
+        return .other
+    }
+
+    /// 把这一格**前面**的标题 / 间隔格也标成"不要"（pw 的 `dropHeadingOf`，
+    /// `ArtistSections.x:107-121`）：只折内容格的话，标题会孤零零留在那儿 ✗。
+    private static func dropPreceding(_ path: IndexPath) {
+        var item = path.item - 1
+        var steps = 0
+        var added = false
+        while item >= 0, steps < 2 {
+            steps += 1
+            let candidate = IndexPath(item: item, section: path.section)
+            guard let kind = kinds[candidate], kind == .heading || kind == .spacer else { break }
+            if dropped.count < 400, dropped.insert(candidate).inserted { added = true }
+            item -= 1
+        }
+        guard added, !didReport else { return }
+        didReport = true
+        writeDebugLog(
+            "[PageRepaint] dropping a section (the playlist's pills / the artist's liked songs,"
+                + " about artist) \u2014 the list is asked to lay out again"
+        )
+    }
+
+    /// 折了之后**让布局重算一次**：高度是布局问出来的，只在下一趟才会问第二遍；
+    /// 不主动作废的话，用户得等到页面因为别的原因重排才看得到效果（pw 也是这么干的）。
+    /// **每页最多 4 次**、一律 `async`，不会在布局回合里递归。
+    private static func scheduleRelayout(of cell: UIView, force: Bool) {
+        if invalidatedFor !== EntityPageRepaint.root { invalidations = 0 }
+        guard force || invalidatedFor !== EntityPageRepaint.root else { return }
+        guard invalidations < 4 else { return }
         var node: UIView? = cell.superview
         var depth = 0
         while let current = node, depth < 8 {
             if let collection = current as? UICollectionView {
-                guard invalidatedFor !== EntityPageRepaint.root else { return }
+                invalidations += 1
                 invalidatedFor = EntityPageRepaint.root
-                if !didReport {
-                    didReport = true
-                    writeDebugLog(
-                        "[PageRepaint] dropping a section to 0 height (playlist pills / the artist's"
-                            + " liked-songs shelf) — the list is asked to lay out again"
-                    )
-                }
                 DispatchQueue.main.async { collection.collectionViewLayout.invalidateLayout() }
                 return
             }
@@ -266,6 +312,19 @@ enum EntityPageSectionDrop {
         }
         return false
     }
+
+    /// 这棵子树里**一个 accessibility id 都没有**（pw 的间隔格判据）。
+    private static func hasAnyIdentifier(_ root: UIView) -> Bool {
+        var queue: [UIView] = [root]
+        var visited = 0
+        while !queue.isEmpty, visited < 60 {
+            let view = queue.removeFirst()
+            visited += 1
+            if !(view.accessibilityIdentifier ?? "").isEmpty { return true }
+            queue.append(contentsOf: view.subviews)
+        }
+        return false
+    }
 }
 
 /// 折 `Element_List.CollectionViewCell`（艺人页那一族的 section 都是它）。
@@ -277,7 +336,11 @@ class ElementListSectionDropHook: ClassHook<UICollectionViewCell> {
         _ attributes: UICollectionViewLayoutAttributes
     ) -> UICollectionViewLayoutAttributes {
         let result = orig.preferredLayoutAttributesFittingAttributes(attributes)
-        guard EntityPageSectionDrop.shouldCollapse(target) else { return result }
+        guard EntityPageSectionDrop.shouldCollapse(
+            target,
+            at: attributes.indexPath,
+            height: result.size.height
+        ) else { return result }
         result.size = CGSize(width: result.size.width, height: 0)
         // 折起来之后内容仍在视图里，不裁剪会溢到相邻格子上（`PlayerCardCellHook` 同一条）。
         target.clipsToBounds = true
@@ -294,7 +357,11 @@ class PlaylistSectionDropHook: ClassHook<UICollectionViewCell> {
         _ attributes: UICollectionViewLayoutAttributes
     ) -> UICollectionViewLayoutAttributes {
         let result = orig.preferredLayoutAttributesFittingAttributes(attributes)
-        guard EntityPageSectionDrop.shouldCollapse(target) else { return result }
+        guard EntityPageSectionDrop.shouldCollapse(
+            target,
+            at: attributes.indexPath,
+            height: result.size.height
+        ) else { return result }
         result.size = CGSize(width: result.size.width, height: 0)
         target.clipsToBounds = true
         return result

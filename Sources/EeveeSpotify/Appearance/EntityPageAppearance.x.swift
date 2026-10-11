@@ -141,6 +141,9 @@ enum EntityPageAppearance {
 
     // MARK: - 状态
 
+    /// 这一页现在用的底色（`tick` 每拍写）—— "艺人介绍"那张卡片拿它当卡面颜色（见 `ArtistBioSheet`）。
+    static var currentFieldColour: UIColor?
+
     private static var timer: Timer?
     private static var currentPage: UIView?
     private static var field: GradientView?
@@ -397,6 +400,7 @@ enum EntityPageAppearance {
         // ★★ 2026-10-18：**这一页的底色用哪个颜色**只算一次，三条路共用（底 / 照片的化开 / 顶带）——
         //    否则"底是压暗过的、顶带还是原色"这种不一致会从缝里露出来。见 `pageColour(for:)`。
         let colour = pageColour(for: target)
+        currentFieldColour = colour
 
         if wantsField {
             ensureField(on: target, colour: colour)

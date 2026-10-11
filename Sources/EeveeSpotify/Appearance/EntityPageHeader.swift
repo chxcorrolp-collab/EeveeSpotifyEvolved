@@ -261,6 +261,40 @@ func eeveeMaterialiseBio(from view: UIView) -> UIView? {
     return found
 }
 
+/// 扫一遍列表、把"关于艺人"那一段逼出来，**顺手把正文读出来**。
+///
+/// ⚠️ 读文字必须和"逼出来"在**同一个主线程回合**里做：那一段是懒加载的 section，滚走之后 cell 会被
+/// 回收、文字就没了（所以我们不缓存 view，缓存的是文字，见 `EntityPageHeaderManager`）。
+@discardableResult
+func eeveeArtistBio(from view: UIView) -> (view: UIView, text: String?)? {
+    guard let bio = eeveeMaterialiseBio(from: view) else { return nil }
+    return (bio, eeveeLongestText(in: bio))
+}
+
+/// 一棵子树里**最长的那段文字** —— 艺人简介就在 `SPTArtistAboutBiographyView` 的正文里
+/// （`UILabel` / `UITextView` 两种都可能，取最长的那个）。
+///
+/// `minimum` = "短于这个字数不算正文"（页头里"收听""已关注"那些短标签会被排除掉）。
+func eeveeLongestText(in root: UIView, minimum: Int = 40) -> String? {
+    var best: String?
+    var queue: [UIView] = [root]
+    var visited = 0
+    while !queue.isEmpty, visited < 300 {
+        let view = queue.removeFirst()
+        visited += 1
+        var text: String?
+        if let label = view as? UILabel { text = label.text }
+        if let textView = view as? UITextView { text = textView.text }
+        if let candidate = text?.trimmingCharacters(in: .whitespacesAndNewlines),
+           candidate.count >= minimum,
+           candidate.count > (best?.count ?? 0) {
+            best = candidate
+        }
+        queue.append(contentsOf: view.subviews)
+    }
+    return best
+}
+
 /// 往上找**最外层**的 `UIScrollView`（与 `eeveeScrollPageDown` 同一条，只是这里只取不滚）。
 private func eeveeOutermostScroll(from view: UIView) -> UIScrollView? {
     var outermost: UIScrollView?
@@ -590,6 +624,12 @@ final class EntityPageHeaderButton: UIControl {
     /// 别的按钮（play / shuffle / follow）本来就能用老三档走通，放宽只会多出误触的机会。
     var firesDeep = false
 
+    /// ★★ 2026-10-18 第三轮（用户：「要不点击 i 之后**不要 spotify 自己的了**，把原本的 spotify 的
+    /// 关于艺人 给去掉，**我们自己搞**」）：这一颗点下去**不转发给 Spotify**，改弹我们自己的
+    /// 「艺人介绍」（`ArtistBioSheet`）—— 正文从 Spotify 那一块里读走（`eeveeLongestText`），
+    /// 而列表里那一段已经被折成 0 高（`EntityPageSectionDrop.aboutArtistFragment`），页面上不留重复。
+    var presentsOwnBio = false
+
     /// ★★ 2026-10-17：**真正要转发的目标**（可以不是 `source`）。
     ///
     /// 艺人页左边那颗 `i` 就是这样：`source` 只负责"这颗按钮显示什么字形"（找不到"关于艺人"时
@@ -647,6 +687,18 @@ final class EntityPageHeaderButton: UIControl {
 
     @objc private func tapped() {
         refreshTint()
+
+        // ★★ 2026-10-18 第三轮（用户：「点击 i 之后不要 spotify 自己的了 … 我们自己搞」）：
+        //    艺人页这颗 `i` 现在**弹我们自己的"艺人介绍"**，不再往 Spotify 那一块转发。
+        if presentsOwnBio {
+            let bio = eeveeArtistBio(from: self)
+            ArtistBioSheet.present(
+                name: EntityPageHeaderManager.currentArtistName,
+                text: bio?.text,
+                colour: EntityPageAppearance.currentFieldColour
+            )
+            return
+        }
 
         // 转发目标：**优先 `fireTarget`**；只有没开"先滚进视野"这一档时才退回 `source`
         // （否则目标缺失时就会去点那颗只负责显示字形的 shuffle —— 见 `fireTarget` 的说明）。
@@ -961,6 +1013,8 @@ final class EntityPageHeaderView: UIView {
         shuffleButton.scrollsSourceIntoView = true
         // ★★ 2026-10-18：这一颗（艺人页的 `i`）要**宽转发** —— 见 `eeveeFireWide` 那段。
         shuffleButton.firesDeep = true
+        // ★★ 2026-10-18 第三轮：而且它**不转发**了 —— 弹我们自己的那张（见 `presentsOwnBio`）。
+        shuffleButton.presentsOwnBio = true
     }
 
     /// 创建者那一行可点（点开作者页）：`control` 是 Spotify 自己那个按钮，被藏着只负责响应。
@@ -1010,6 +1064,14 @@ final class EntityPageHeaderView: UIView {
     /// ⇒ 改成一个显式开关，只有 `applyToArtistPage` 打开它。
     var fadesWhenTight = false
 
+    /// 贴底排时留多少（默认 `EntityPageHeaderMetrics.bottom` = 14）。
+    ///
+    /// ★★ 2026-10-18 第三轮（用户：「**那怎么解决艺人页的展示问题，spotify 的按键又靠上**」）：
+    /// **艺人页给 0** —— AM 的姓名与那三颗比我们低约 14pt（照片 118：名字 361–403、三颗 417–494；
+    /// 我们原来是 347–388 / 408–506），把整块往下挪 14pt 就对上了。专辑 / 歌单页维持 14
+    /// （那两页的版式用户没提意见）。
+    var contentBottom: CGFloat = EntityPageHeaderMetrics.bottom
+
     /// **名字（标题）上沿**在本视图坐标里的 y；没有名字时是 −1。
     ///
     /// ★★ 2026-10-18（用户：「AM 那三颗按键比 Spotify 靠下一点，所以它的渐变刚好不压到艺人名字；
@@ -1035,7 +1097,7 @@ final class EntityPageHeaderView: UIView {
         //      `room ≥ 32pt` 全亮、`room ≤ 0` 全隐、中间线性。用 `alpha` 而不是 `isHidden`，
         //      免得折叠过程中一闪一闪。
         if fadesWhenTight {
-            let needed = contentHeight(forWidth: bounds.width) + EntityPageHeaderMetrics.bottom
+            let needed = contentHeight(forWidth: bounds.width) + contentBottom
             let room = bounds.height - needed
             let fade = max(0, min(1, room / 32))
             if alpha != fade { alpha = fade }
@@ -1045,7 +1107,7 @@ final class EntityPageHeaderView: UIView {
 
         let width = bounds.width
         let text = max(0, width - 2 * EntityPageHeaderMetrics.side)
-        var y = round(bounds.height - EntityPageHeaderMetrics.bottom - contentHeight(forWidth: width))
+        var y = round(bounds.height - contentBottom - contentHeight(forWidth: width))
 
         var previous: UILabel?
         for label in [titleLabel, creatorLabel, lengthLabel] where !label.isHidden {

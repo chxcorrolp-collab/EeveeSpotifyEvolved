@@ -25,6 +25,10 @@ final class ArtistBioSheet: UIView {
     private let card = UIView()
     private let titleLabel = UILabel()
     private let bodyView = UITextView()
+    /// 来源署名（只有走 Genius 那条兜底时才显示 —— 它的条款要求署名）。
+    private let creditLabel = UILabel()
+    /// 那一颗 Wikipedia 链接的地址（`build` 里按 app 语言算好）。
+    private var wikiURL: URL?
 
     /// 弹一张（同时只留一张：连点两次不会叠）。
     static func present(name: String, text: String?, colour: UIColor?) {
@@ -85,11 +89,12 @@ final class ArtistBioSheet: UIView {
         close.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
         card.addSubview(close)
 
+        let footer: CGFloat = 52
         bodyView.frame = CGRect(
             x: 16,
             y: 58,
             width: card.bounds.width - 32,
-            height: card.bounds.height - 58 - 16
+            height: card.bounds.height - 58 - footer
         )
         bodyView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         bodyView.backgroundColor = .clear
@@ -99,8 +104,67 @@ final class ArtistBioSheet: UIView {
         bodyView.textContainerInset = UIEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
         bodyView.font = .systemFont(ofSize: 17)
         bodyView.textColor = UIColor.white.withAlphaComponent(0.92)
-        bodyView.text = text ?? "这一位艺人暂时没有可读的介绍（Spotify 那边还没把它交给我们）。"
         card.addSubview(bodyView)
+
+        // ★★ 2026-10-18 第四轮（用户：「关于艺人 的来源你有什么好方法么」）：正文**优先用 Spotify 那份**
+        //    （跟着 app 语言、官方）；**读不到才去 Genius 要一份**（免 key 的那条现成线，见 `ArtistBioSource`；
+        //    英文，而且必须署名）。两条都没有就留一句说明 + 那颗 Wikipedia 链接。
+        if let text {
+            bodyView.text = text
+        } else {
+            bodyView.text = "artist_bio_empty".localized
+            ArtistBioSource.geniusBio(for: name) { [weak self] genius in
+                guard let self, let genius else { return }
+                self.bodyView.text = genius
+                self.creditLabel.text = "artist_bio_from_genius".localized
+                self.creditLabel.isHidden = false
+            }
+        }
+
+        // 页脚：左边一颗**维基百科链接**（只给入口、**不抄文本** ⇒ 不欠 CC BY-SA 的署名 ——
+        // Spotify 自己的 About 页也是这么干的：`SPTArtistAbout:sArtistWikipediaButtonTitle`，dump:21079），
+        // 右边一句来源署名（走 Genius 那条时才显示）。
+        let wiki = UIButton(type: .system)
+        wiki.setTitle("artist_bio_wikipedia".localized, for: .normal)
+        wiki.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
+        wiki.setTitleColor(UIColor.white.withAlphaComponent(0.85), for: .normal)
+        wiki.frame = CGRect(x: 12, y: card.bounds.height - footer, width: 170, height: 40)
+        wiki.autoresizingMask = [.flexibleTopMargin]
+        wiki.contentHorizontalAlignment = .left
+        wiki.addTarget(self, action: #selector(wikipediaTapped), for: .touchUpInside)
+        card.addSubview(wiki)
+        wikiURL = Self.wikipediaURL(for: name)
+
+        creditLabel.font = .systemFont(ofSize: 13)
+        creditLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+        creditLabel.textAlignment = .right
+        creditLabel.isHidden = true
+        creditLabel.frame = CGRect(
+            x: card.bounds.width - 198,
+            y: card.bounds.height - footer,
+            width: 186,
+            height: 40
+        )
+        creditLabel.autoresizingMask = [.flexibleTopMargin, .flexibleLeftMargin]
+        card.addSubview(creditLabel)
+    }
+
+    @objc private func wikipediaTapped() {
+        guard let wikiURL else { return }
+        UIApplication.shared.open(wikiURL, options: [:], completionHandler: nil)
+        writeDebugLog("[ArtistBio] wikipedia link opened")
+    }
+
+    /// 维基百科那条**链接**：用**搜索页**（省掉"先找条目"这一步，同名艺人也不怕），
+    /// wiki 主机按 app 语言挑（zh / ja / en，其余落 en）。
+    private static func wikipediaURL(for name: String) -> URL? {
+        let language = String(Locale.preferredLanguages.first?.prefix(2) ?? "en").lowercased()
+        let host = ["zh", "ja", "en"].contains(language) ? language : "en"
+        guard var components = URLComponents(string: "https://\(host).wikipedia.org/wiki/Special:Search") else {
+            return nil
+        }
+        components.queryItems = [URLQueryItem(name: "search", value: name)]
+        return components.url
     }
 
     /// 卡片底色：跟着这一页的取色走（太暗就抬一点，免得和页面糊成一片）。

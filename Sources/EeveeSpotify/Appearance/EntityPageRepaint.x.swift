@@ -248,13 +248,19 @@ enum EntityPageSectionDrop {
     /// 而之前漏掉的两个模块，各自的真实名字都只有这种写法认得出来：
     ///   · 「你已点赞」→ id `Components.UI.LikedSongs.Row`（日志 99 逐字），类名却是 `ListRow`；
     ///   · 「关于艺人」→ 类名 `CreatorBiographyCardLayout`，见上面那条。
-    static let artistDropMarkers = [
+    /// 「你已点赞」那一族 —— 折它**不需要**先读到任何东西。
+    static let likedSongsMarkers = [
         likedSongsFragment,
         likedSongsIdentifier,
+    ]
+    /// 「关于艺人」那一族 —— 折它**有闸门**：`ArtistBioSheet` 先读到正文才折（见 `shouldCollapse`）。
+    static let aboutArtistMarkers = [
         aboutArtistIdentifierFragment,
         aboutArtistClassFragment,
         aboutArtistFragment,
     ]
+    /// 只用于**日志/排障**的合集（真正的判据在 `shouldCollapse` 里是分开用的）。
+    static let artistDropMarkers = likedSongsMarkers + aboutArtistMarkers
 
     /// 每一格"是什么"与"已经决定不要的格子" —— pw 的 `kindsOf` / `droppedOf`
     /// （`ArtistSections.x:49-65`）；每段 = 间隔格 + 标题格 + 内容格。
@@ -305,7 +311,15 @@ enum EntityPageSectionDrop {
 
         var drop = containsMarker(cell, curationIdentifier)
         if !drop, root.accessibilityIdentifier == "creator-page" {
-            drop = artistDropMarkers.contains { containsMarker(cell, $0) }
+            drop = likedSongsMarkers.contains { containsMarker(cell, $0) }
+            // ★★ 2026-10-11（日志 100）：「关于艺人」**先读到正文再折**。
+            //    折叠这一侧按 `CreatorBiography` 认（认得对），而**读取**那一侧以前按
+            //    `SPTArtistAboutBiographyView` 认 —— 那个类在这一版艺人页上没出现过 ⇒
+            //    那一格被折成 0 高、我们的卡片又读不到文字 = 用户**两边都看不到**（本轮报告的现场）。
+            //    现在读不到就**不折**：宁可留着 Spotify 那一段，也不要都不显示。
+            if !drop, aboutArtistMarkers.contains(where: { containsMarker(cell, $0) }) {
+                drop = EntityPageHeaderManager.hasCapturedBio
+            }
         }
         if drop {
             if let path { dropPreceding(path) }

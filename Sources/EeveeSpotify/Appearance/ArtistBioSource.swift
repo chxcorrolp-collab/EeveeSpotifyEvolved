@@ -74,18 +74,26 @@ enum ArtistBioSource {
             return
         }
 
-        fetchJSON(url, using: wikipediaSession) { search in
+        fetchJSON(url, using: wikipediaSession, tag: "wikipedia search") { search in
             let hits = (search?["query"] as? [String: Any])?["search"] as? [[String: Any]]
             guard let title = hits?.first?["title"] as? String,
                   let encoded = title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
                   let summary = URL(string: "https://\(wikipediaHost())/api/rest_v1/page/summary/\(encoded)")
             else {
+                // ★★ 2026-10-11：**为什么不给正文**必须留在日志里 —— 以前"搜不到条目"与
+                //    "请求压根没成功"在日志里长得一模一样（都是一句 HTTP 0 或者干脆没有）。
+                writeDebugLog(
+                    "[ArtistBio] wikipedia search → no article for this artist"
+                        + " (\(hits?.count ?? 0) hit(s) in the response)"
+                )
                 completion(nil)
                 return
             }
-            fetchJSON(summary, using: wikipediaSession) { payload in
+            writeDebugLog("[ArtistBio] wikipedia search → article \"\(title)\"")
+            fetchJSON(summary, using: wikipediaSession, tag: "wikipedia summary") { payload in
                 let extract = (payload?["extract"] as? String)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
+                writeDebugLog("[ArtistBio] wikipedia summary → \(extract?.count ?? 0) char")
                 completion((extract?.isEmpty ?? true) ? nil : extract)
             }
         }
@@ -104,11 +112,13 @@ enum ArtistBioSource {
             return
         }
 
-        fetchJSON(url) { search in
+        fetchJSON(url, using: session, tag: "genius search") { search in
             guard let hits = (search?["response"] as? [String: Any])?["hits"] as? [[String: Any]] else {
+                writeDebugLog("[ArtistBio] genius search → no hits in the response")
                 completion(nil)
                 return
             }
+            writeDebugLog("[ArtistBio] genius search → \(hits.count) hit(s)")
             var artistID: Int?
             var fallbackID: Int?
             for hit in hits {
@@ -126,14 +136,20 @@ enum ArtistBioSource {
             }
             guard let id = artistID ?? fallbackID,
                   let detail = URL(string: "https://api.genius.com/artists/\(id)") else {
+                writeDebugLog("[ArtistBio] genius search → no artist to ask for (name mismatch)")
                 completion(nil)
                 return
             }
-            fetchJSON(detail) { payload in
+            writeDebugLog(
+                "[ArtistBio] genius → artist \(id)"
+                    + (artistID == nil ? " (fell back to a song hit's primary artist)" : " (exact name match)")
+            )
+            fetchJSON(detail, using: session, tag: "genius artist \(id)") { payload in
                 let artist = (payload?["response"] as? [String: Any])?["artist"] as? [String: Any]
                 let description = artist?["description"] as? [String: Any]
                 let plain = (description?["plain"] as? String)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
+                writeDebugLog("[ArtistBio] genius artist \(id) → description \(plain?.count ?? 0) char")
                 completion((plain?.isEmpty ?? true) ? nil : plain)
             }
         }
@@ -177,21 +193,36 @@ enum ArtistBioSource {
     ///
     /// ⚠️ 名字**不能叫 `get`** —— `swift_member_check.py` 会把这种通用名当成"不该私有的短名"
     /// （实测一次白跑：25 条 `get` 报错，连别的文件的都一起翻出来）。
+    /// - Parameter tag: 这一跳**是谁**（`genius search` / `genius artist 123` / `wikipedia search` …）。
+    ///
+    ///   ★★ 2026-10-11（真机日志 100）：这一行以前把前缀**写死成 "genius"**，于是维基百科那条失败
+    ///   打出来是 `[ArtistBio] genius /w/api.php → HTTP 0` —— **指错了来源**（`/w/api.php` 是 MediaWiki）；
+    ///   而且只在 `status != 200` 时才打、还把 URLSession 的 `error` **丢掉**（`{ data, response, _ in`）
+    ///   ⇒ `HTTP 0`（一个响应都没拿到）到底是 DNS、超时还是 TLS 失败，日志里一个字都没有。
+    ///   现在：**每一次都打**（200 也打，带字节数），失败时带上 `error.localizedDescription`。
     private static func fetchJSON(
         _ url: URL,
         using client: URLSession = session,
+        tag: String,
         completion: @escaping ([String: Any]?) -> Void
     ) {
-        client.dataTask(with: url) { data, response, _ in
+        client.dataTask(with: url) { data, response, error in
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             var json: [String: Any]?
             if let data, let object = try? JSONSerialization.jsonObject(with: data) {
                 json = object as? [String: Any]
             }
+            let bytes = data?.count ?? 0
+            let failure = error?.localizedDescription
+            let host = url.host ?? "?"
             DispatchQueue.main.async {
-                if status != 200 {
-                    writeDebugLog("[ArtistBio] genius \(url.path) → HTTP \(status)")
+                var line = "[ArtistBio] \(tag) \(host)\(url.path) → HTTP \(status), \(bytes) byte(s)"
+                if let failure {
+                    line += " — transport error: \(failure)"
+                } else if status != 200 {
+                    line += " — no usable response"
                 }
+                writeDebugLog(line)
                 completion(json)
             }
         }.resume()

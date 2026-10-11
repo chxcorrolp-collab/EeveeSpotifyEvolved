@@ -219,6 +219,94 @@ func eeveeScrollPageDown(from view: UIView) -> Bool {
     return true
 }
 
+// MARK: - 「关于艺人」在这一版艺人页上的真实名字（真机日志 100 逐字）
+
+/// 卡片：id 前缀 `Components.UI.CreatorBiographyCard.*`、Swift 类名里含 `CreatorBiography`。
+/// 正文：`Components.UI.CreatorBiographyCard.BiographyLabel`（真机树里那一格就是它）。
+///
+/// ⚠️ 为什么不能只认 `SPTArtistAboutBiographyView`（日志 100 的现场）：
+///   · 那个类**在二进制里还在** ⇒ 启动那行 `about-artist hook on` 照样打得出来，
+///     但它在**这一版艺人页上从头到尾没出现过**：`applyToArtistPage` 那条 BFS 只试两拍、
+///     `eeveeMaterialiseBio` 滚到列表底也只报 `nothing built` —— 而**同一份日志**的
+///     `[HeaderProbe]` 明明列出了 `id=Components.UI.CreatorBiographyCard.HeaderLabel` /
+///     `.FreshFindsForwardBadge`：卡片在页面上，**只是不叫那个名字**。
+///   · 这件事本仓库自己早写下来了（`EntityPageRepaint` 的 `aboutArtistClassFragment`：
+///     「`aboutArtistFragment` 那条判据在这一版艺人页上永远不可能命中」）—— 那一轮只把
+///     **折叠**改对了，**读取侧没跟上** ⇒ 折叠照做（那一段被折成 0 高）、我们的卡片又读不到正文，
+///     于是用户**两边都看不到**（2026-10-11：「点击 i 之后，观感还是之前的那个」）。
+let eeveeArtistBioCardIdPrefix = "Components.UI.CreatorBiographyCard"
+let eeveeArtistBioTextId = "Components.UI.CreatorBiographyCard.BiographyLabel"
+let eeveeArtistBioClassFragment = "CreatorBiography"
+
+/// 往上找带这个无障碍 id 的祖先（有界，与 `isArtistPageAncestor` 同一条边界）。
+func eeveeAncestor(withIdentifier identifier: String, of view: UIView) -> UIView? {
+    var node: UIView? = view
+    var level = 0
+    while let current = node, level < 28 {
+        level += 1
+        if current.accessibilityIdentifier == identifier { return current }
+        node = current.superview
+    }
+    return nil
+}
+
+/// 找这一步的搜索根：① `creator-page`（整页）② 它自己的最外层 scroll ③ 窗口。
+///
+/// 为什么必须有它：`i` 那颗按键的**起点是页头里那颗按钮**，从它**往下**走根本到不了列表里
+/// 那张卡（卡在 cell 里）—— 必须先**往上**走到"整页"那一层再往下找。
+func eeveeArtistBioSearchRoot(from view: UIView) -> UIView {
+    if let page = eeveeAncestor(withIdentifier: "creator-page", of: view) { return page }
+    if let scroll = eeveeOutermostScroll(from: view) { return scroll }
+    return view.window ?? view
+}
+
+/// 「关于艺人」那一块 —— **零滚动**，按真机证实过的名字找。
+///
+/// 顺序：正文 label（id 精确）→ 它上面第一个 `CreatorBiography` 类祖先 → id 前缀 → 类名片段。
+/// ⚠️ 只认**落在 `creator-page` 里**的卡：听歌页那张"了解艺人"卡是同一族（`CreatorBiography`），
+///    不设这道闸就会在别的页面上乱认。
+func eeveeArtistBioCard(in view: UIView) -> UIView? {
+    let root = eeveeArtistBioSearchRoot(from: view)
+    let nodeLimit = 20000
+
+    var found: UIView?
+    if let label = eeveeFindView(root, identifier: eeveeArtistBioTextId, maxNodes: nodeLimit) {
+        // 卡片 = label 往上第一个类名含 `CreatorBiography` 的祖先（没有就退回 label 自己）。
+        var node: UIView? = label
+        var level = 0
+        while let current = node, level < 12 {
+            level += 1
+            if NSStringFromClass(type(of: current)).contains(eeveeArtistBioClassFragment) {
+                found = current
+                break
+            }
+            node = current.superview
+        }
+        if found == nil { found = label }
+    }
+    if found == nil {
+        found = eeveeFindView(root, identifier: eeveeArtistBioCardIdPrefix + "*", maxNodes: nodeLimit)
+    }
+    if found == nil {
+        found = eeveeFindView(root, classNameContains: eeveeArtistBioClassFragment, maxNodes: nodeLimit)
+    }
+    guard let found, eeveeAncestor(withIdentifier: "creator-page", of: found) != nil else { return nil }
+    return found
+}
+
+/// 从那一块里读正文：**优先 id 精确的那颗 label**，读不到返回 nil（调用方再退"最长的一段"）。
+///
+/// ⚠️ 读的是**界面上的文字**：Spotify 会把长简介截断（flag `is_async_biography_truncation_enabled`），
+///    要完整正文只能去 hook 数据层（`SPTArtistAboutDataLoader`，见 `ArtistBioSource` 的说明）。
+func eeveeArtistBioText(in card: UIView) -> String? {
+    guard let label = eeveeFindView(card, identifier: eeveeArtistBioTextId)
+        ?? eeveeFindView(card, identifier: eeveeArtistBioTextId + "*") else { return nil }
+    let raw = (label as? UILabel)?.text ?? (label as? UITextView)?.text
+    let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let trimmed, !trimmed.isEmpty else { return nil }
+    return trimmed
+}
+
 /// 把列表**扫一遍**，逼"关于艺人"那一段建出来，然后返回它。
 ///
 /// ★★ 2026-10-18 第三轮（用户：「**按下 i 之后还是没有跳转到 艺人介绍**」；日志 98 逐字
@@ -244,6 +332,18 @@ func eeveeScrollPageDown(from view: UIView) -> Bool {
 /// 列表边滚边长，所以"底"也必须边滚边问。
 @discardableResult
 func eeveeMaterialiseBio(from view: UIView) -> UIView? {
+    // ★★ 2026-10-11（日志 100）：**先零滚动找一遍**。卡片本来就在页面上（只是不叫
+    //    `SPTArtistAboutBiographyView`），cell 通常也已经建出来了 ⇒ 不用滚、也不受"折成 0 高"影响。
+    //    这一步把"扫列表"从**主路**降成**兜底** —— 以前它是主路，而它一次都没成功过
+    //    （日志 100：`2 step(s) down to 603pt of 1416pt, nothing built`）。
+    if let card = eeveeArtistBioCard(in: view) {
+        EntityPageHeaderManager.artistBiographyAppeared(card)
+        writeDebugLog(
+            "[EntityPageHeader] about-artist found without scrolling — "
+                + NSStringFromClass(type(of: card))
+        )
+        return card
+    }
     guard let scroll = eeveeOutermostScroll(from: view), scroll.bounds.height > 1 else { return nil }
     let origin = scroll.contentOffset
     let step = max(120, scroll.bounds.height * 0.9)
@@ -269,6 +369,12 @@ func eeveeMaterialiseBio(from view: UIView) -> UIView? {
         offset = min(offset + step, bottom)
     }
     if found == nil { found = EntityPageHeaderManager.artistBioTarget }
+    // ★★ 2026-10-11（日志 100）：滚完再按真机那三个名字找一次 —— 滚的过程把 cell 建出来了，
+    //    但钩子（`SPTArtistAboutBiographyView`）在这一版页面上永远不会响。
+    if found == nil, let card = eeveeArtistBioCard(in: view) {
+        EntityPageHeaderManager.artistBiographyAppeared(card)
+        found = card
+    }
     // 回到用户原来的位置（不管找没找到）—— 只有真找到时，调用方才把它滚进视野。
     scroll.setContentOffset(origin, animated: false)
     writeDebugLog(
@@ -286,6 +392,10 @@ func eeveeMaterialiseBio(from view: UIView) -> UIView? {
 @discardableResult
 func eeveeArtistBio(from view: UIView) -> (view: UIView, text: String?)? {
     guard let bio = eeveeMaterialiseBio(from: view) else { return nil }
+    // ★★ 2026-10-11（日志 100）：**先按名字精确读** —— 那一格就是
+    //    `Components.UI.CreatorBiographyCard.BiographyLabel`（真机树逐字）。以前一上来就"取最长的一段"，
+    //    在卡片里挑到过别的长文本，而且它压根没走到这一步（卡都没认出来）。
+    if let text = eeveeArtistBioText(in: bio) { return (bio, text) }
     // ★★ 2026-10-18 第五轮：40 字那道闸是给"排除短标签"用的（"收听""已关注"那种），
     //    但日文 / 中文简介本来就短，正文可能只有二十几个字 ⇒ 40 字找不到时**再按 20 字找一次**。
     //    （卡片上那行日志会写出真正读到几个字，下一份日志就能判断这个下限合不合适。）
@@ -712,10 +822,14 @@ final class EntityPageHeaderButton: UIControl {
         // ★★ 2026-10-18 第三轮（用户：「点击 i 之后不要 spotify 自己的了 … 我们自己搞」）：
         //    艺人页这颗 `i` 现在**弹我们自己的"艺人介绍"**，不再往 Spotify 那一块转发。
         if presentsOwnBio {
-            let bio = eeveeArtistBio(from: self)
+            let name = EntityPageHeaderManager.currentArtistName
+            // ★★ 2026-10-11（日志 100）：**读到过一次就不再扫列表** —— 扫列表会滚一遍、
+            //    把沿途 cell 全建出来；用户连点四次就是四次整页扫描（日志 100 的 03:51:41-44）。
+            let text = EntityPageHeaderManager.cachedBioText(for: name)
+                ?? eeveeArtistBio(from: self)?.text
             ArtistBioSheet.present(
-                name: EntityPageHeaderManager.currentArtistName,
-                text: bio?.text,
+                name: name,
+                text: text,
                 colour: EntityPageAppearance.currentFieldColour
             )
             return

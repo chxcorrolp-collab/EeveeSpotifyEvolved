@@ -92,11 +92,22 @@ enum EntityPageHeaderManager {
     /// 读到的简介（没有就是 nil）。
     static func cachedBioText(for name: String) -> String? { bioTexts[name] }
 
+    /// 这一页的艺人简介**已经读到过**了吗 —— `EntityPageSectionDrop` 折叠「关于艺人」那一格之前要问它。
+    ///
+    /// ★★ 2026-10-11（日志 100）：折叠与读取原本是**两条独立的线** —— 折叠按 `CreatorBiography`
+    /// 认（认得对）、读取按 `SPTArtistAboutBiographyView` 认（这一版页面上没有）⇒ 那一格被折成 0 高、
+    /// 我们的卡片又读不到文字，用户**两边都看不到**。现在读不到就**不折**（宁可留着 Spotify 那段，
+    /// 也不要都不显示）。
+    static var hasCapturedBio: Bool {
+        !artistNameStorage.isEmpty && bioTexts[artistNameStorage] != nil
+    }
+
     /// **安排一次"扫列表读简介"**（每页一次，延后 1.5s）。
     ///
     /// 为什么不同步做：那一下会把列表里到"关于艺人"为止的 cell 全建出来，进页面那几帧本来就忙
     /// （页头在逐帧布局）。延后一拍半、而且 `eeveeMaterialiseBio` **一找到就停 + 回到原位**，代价小。
-    /// 读到之后：① 存起来给 `i` 那张卡片用；② 列表里那一段已经由 `EntityPageSectionDrop` 折成 0 高。
+    /// 读到之后：① 存起来给 `i` 那张卡片用；② **读到之后**列表里那一段才会被折成 0 高
+    /// （`EntityPageSectionDrop` 的闸门 = `hasCapturedBio`，所以这里还要主动作废一次布局）。
     private static func scheduleBioSweepIfNeeded(in page: UIView, name: String) {
         guard !name.isEmpty, bioTexts[name] == nil, bioTexts.count < 32 else { return }
         guard bioSweepPage !== page else { return }
@@ -110,17 +121,50 @@ enum EntityPageHeaderManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak page] in
             guard let page, page.window != nil else { return }
             let text = eeveeArtistBio(from: page)?.text
-            if let text, bioTexts[name] == nil { bioTexts[name] = text }
+            if let text, bioTexts[name] == nil {
+                bioTexts[name] = text
+                // ★★ 2026-10-11：折叠现在**排在读取之后**（见 `EntityPageSectionDrop` 的闸门），
+                //    而"这一格多高"只在布局时被问一次 ⇒ 读到之后必须**主动作废一次布局**，
+                //    否则折叠要等用户滚一下才生效（以前折叠在页面加载那一刻就做了，没有这个问题）。
+                relayoutAfterBioCapture(in: page)
+            }
             guard !didReportBioSweep else { return }
             didReportBioSweep = true
             let count = text?.count ?? 0
             writeDebugLog(
                 "[EntityPageHeader] about-artist read — \(name), biography "
                     + (text == nil ? "NOT READ" : "\(count) char")
-                    + "; the section itself is folded to 0 height"
+                    // ★★ 2026-10-11：这句原来是"the section itself is folded to 0 height"（无条件断言）。
+                    //    现在折叠有了闸门（读不到就**不折**），那句话不再恒真 ⇒ 照实写。
+                    + (text == nil
+                        ? "; nothing to fold this time (the section stays on the page)"
+                        : "; the section gets folded now that we have the text")
             )
         }
     }
+    /// 读到简介之后**主动让列表重排一次** —— 折叠的闸门是"读到了吗"（`EntityPageSectionDrop`），
+    /// 而"这一格多高"只在布局时被问，所以读到那一刻不作废布局的话，折叠要等用户滚一下才生效。
+    ///
+    /// 有界：从页面往下最多走 600 个节点、最多作废 **4** 个 `UICollectionView`，一律 `async`，
+    /// 不会在布局回合里递归（与 `EntityPageRepaint.scheduleRelayout` 同一条纪律）。
+    private static func relayoutAfterBioCapture(in page: UIView) {
+        var queue: [UIView] = [page]
+        var visited = 0
+        var invalidated = 0
+        while !queue.isEmpty, visited < 600, invalidated < 4 {
+            let view = queue.removeFirst()
+            visited += 1
+            if let collection = view as? UICollectionView {
+                invalidated += 1
+                DispatchQueue.main.async { collection.collectionViewLayout.invalidateLayout() }
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        writeDebugLog(
+            "[EntityPageHeader] about-artist captured — asked \(invalidated) collection view(s) to re-lay out"
+        )
+    }
+
     /// 「Follow 那颗的子树」只打一次（见 `probeFollowSubtree`）。
     private static var didProbeFollow = false
     /// ★★ 2026-10-06（照片 115-117：「**旁边还是随机播放**」）：简介卡是**懒加载**的（页面滚到
@@ -603,8 +647,11 @@ enum EntityPageHeaderManager {
         }
         if bioStale, artistBioSearchPasses < 2 {
             artistBioSearchPasses += 1
-            cachedArtistBio = eeveeFindView(page, classNameContains: "SPTArtistAboutBiographyView")
-                ?? eeveeFindView(page, identifier: "Components.UI.CreatorBiographyCard*")
+            // ★★ 2026-10-11（日志 100）：判据换成**真机证实过的那三个名字**（见 `eeveeArtistBioCard`）。
+            //    原来第一判据是 `SPTArtistAboutBiographyView` —— 它在这一版艺人页上一次都没出现过，
+            //    却排在前面 ⇒ 就算后面那条 id 前缀能命中，也永远轮不到。
+            cachedArtistBio = eeveeArtistBioCard(in: page)
+                ?? eeveeFindView(page, classNameContains: "SPTArtistAboutBiographyView")
         }
         if let info = cachedArtistBio, let control = firstControl(in: info) { artistBioControl = control }
         // ★★ 2026-10-06：**记住找到过的那颗**（见 `artistBioControl`）—— 那一块是懒加载的，

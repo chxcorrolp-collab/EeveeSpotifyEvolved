@@ -43,14 +43,9 @@ final class ArtistBioSheet: UIView {
 
         sheet.alpha = 0
         UIView.animate(withDuration: 0.2) { sheet.alpha = 1 }
-        writeDebugLog(
-            "[ArtistBio] our own about-artist sheet — name "
-                + (name.isEmpty ? "MISSING" : name)
-                // 0 = automatic, 1 = Spotify, 2 = Genius, 3 = Wikipedia（见 `ArtistBioSourceKind`）。
-                + ", source \(UserDefaults.artistBioSource.rawValue)"
-                + ", biography "
-                + (text == nil ? "NOT READ (0 char)" : "\(text?.count ?? 0) char")
-        )
+        // ★★ 2026-10-11：这里原来还有一条"sheet presented + name/source/biography"的日志 ——
+        //   它与 `build` 里那条**完全重复**（`build` 就在上面一行被调用），已删。
+        //   现在那一行的内容更全：来源、**走哪条分支**、原生读到几个字，都在 `build` 里打。
     }
 
     static func dismissCurrent() {
@@ -112,18 +107,35 @@ final class ArtistBioSheet: UIView {
         //    `ArtistBioSourceKind`）：
         //      · `.automatic`（默认）—— Spotify 原生优先，读不到才退 Genius；
         //      · `.spotify` / `.genius` / `.wikipedia` —— 只用那一个（读不到就一句说明 + 链接）。
-        //    ⚠️ `text` 是**扫列表时顺手读的**那份：`automatic` / `spotify` 用它，另两个选项**忽略**它
-        //      （扫列表本身照做 —— 那是为了把懒加载的「关于艺人」逼出来**折掉**，与来源选择无关）。
-        switch UserDefaults.artistBioSource {
+        //    ⚠️ `text` 是**扫列表时顺手读的**那份：`automatic` / `spotify` 用它，另两个选项**忽略**它。
+        //      ★ 2026-10-11：扫列表现在**主要为"读到正文"服务** —— 折叠排在读取之后
+        //      （`EntityPageSectionDrop` 的闸门是 `hasCapturedBio`）：读不到就**不折**。
+        // ★★ 2026-10-11（真机日志 100）：**每一档都要看得出是哪一档**。
+        //   以前四档在"取不到"时渲染出**一模一样**的卡片（同一句占位 + 底部那颗"维基百科"按钮）
+        //   ⇒ 用户换完设置再点 `i`，观感"还是之前的那个"。现在：
+        //     ① 走哪条分支、原生读到几个字，进日志；
+        //     ② 底部那行署名**永远显示**，写清实际来源与失败原因；
+        //     ③ 底部那颗按钮改成明确的**链接**文案（它本来只是个入口，不是来源标签）。
+        let source = UserDefaults.artistBioSource
+        writeDebugLog(
+            "[ArtistBio] sheet — name \(name.isEmpty ? "MISSING" : name)"
+                + ", source \(source.rawValue) (\(source)), native text "
+                + (text.map { "\($0.count) char" } ?? "none")
+        )
+        switch source {
         case .spotify:
-            bodyView.text = text ?? "artist_bio_empty".localized
+            if let text {
+                show(text, credit: "artist_bio_from_spotify".localized)
+            } else {
+                showFailure("artist_bio_spotify_failed".localized)
+            }
         case .genius:
             loadGenius(name)
         case .wikipedia:
             loadWikipedia(name)
         case .automatic:
             if let text {
-                bodyView.text = text
+                show(text, credit: "artist_bio_from_spotify".localized)
             } else {
                 loadGenius(name)
             }
@@ -131,9 +143,12 @@ final class ArtistBioSheet: UIView {
 
         // 页脚：左边一颗**维基百科链接**（只给入口、**不抄文本** ⇒ 不欠 CC BY-SA 的署名 ——
         // Spotify 自己的 About 页也是这么干的：`SPTArtistAbout:sArtistWikipediaButtonTitle`，dump:21079），
-        // 右边一句来源署名（走 Genius 那条时才显示）。
+        // 右边一句**永远显示**的来源署名/状态（★ 2026-10-11：以前只有成功时才显示 —— 于是四档
+        // 在失败时长得一模一样，用户以为设置没生效）。
         let wiki = UIButton(type: .system)
-        wiki.setTitle("artist_bio_wikipedia".localized, for: .normal)
+        // ★★ 2026-10-11（真机日志 100 的反馈「底部仍然显示 维基百科」）：它一直是个**入口按钮**，
+        //   但文案与"来源"混在一起，用户就把它当成了来源标签 ⇒ 换成明确的链接说法。
+        wiki.setTitle("artist_bio_open_wikipedia".localized, for: .normal)
         wiki.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
         wiki.setTitleColor(UIColor.white.withAlphaComponent(0.85), for: .normal)
         wiki.frame = CGRect(x: 12, y: card.bounds.height - footer, width: 170, height: 40)
@@ -143,9 +158,12 @@ final class ArtistBioSheet: UIView {
         card.addSubview(wiki)
         wikiURL = Self.wikipediaURL(for: name)
 
-        creditLabel.font = .systemFont(ofSize: 13)
+        creditLabel.font = .systemFont(ofSize: 12)
         creditLabel.textColor = UIColor.white.withAlphaComponent(0.55)
         creditLabel.textAlignment = .right
+        // ★★ 2026-10-11：两行 —— 失败原因那句比"来自 Genius"长
+        //   （"维基百科没有响应（本机网络可能屏蔽了它）"）。
+        creditLabel.numberOfLines = 2
         creditLabel.isHidden = true
         creditLabel.frame = CGRect(
             x: card.bounds.width - 198,
@@ -175,25 +193,50 @@ final class ArtistBioSheet: UIView {
         return components.url
     }
 
+    /// 正文 + 底部那行**永远显示**的署名/状态。
+    private func show(_ body: String, credit: String) {
+        bodyView.text = body
+        setCredit(credit)
+    }
+
+    /// 拿不到正文：正文照旧那句说明，但**底部必须说清是哪一档没取到**（以前四种失败长得一样）。
+    private func showFailure(_ credit: String) {
+        bodyView.text = "artist_bio_empty".localized
+        setCredit(credit)
+    }
+
+    private func setCredit(_ text: String) {
+        creditLabel.text = text
+        creditLabel.isHidden = false
+    }
+
     /// Genius 那条（**英文**，卡片上要署名）。
     private func loadGenius(_ name: String) {
         bodyView.text = "artist_bio_empty".localized
+        setCredit("artist_bio_loading".localized)
         ArtistBioSource.geniusBio(for: name) { [weak self] bio in
-            guard let self, let bio else { return }
+            guard let self else { return }
+            guard let bio else {
+                self.setCredit("artist_bio_genius_failed".localized)
+                return
+            }
             self.bodyView.text = bio
-            self.creditLabel.text = "artist_bio_from_genius".localized
-            self.creditLabel.isHidden = false
+            self.setCredit("artist_bio_from_genius".localized)
         }
     }
 
     /// 维基百科那条（**CC BY-SA**：要署名 + 给许可链接 —— 页脚那颗 Wikipedia 按钮就是那个链接）。
     private func loadWikipedia(_ name: String) {
         bodyView.text = "artist_bio_empty".localized
+        setCredit("artist_bio_loading".localized)
         ArtistBioSource.wikipediaBio(for: name) { [weak self] bio in
-            guard let self, let bio else { return }
+            guard let self else { return }
+            guard let bio else {
+                self.setCredit("artist_bio_wikipedia_failed".localized)
+                return
+            }
             self.bodyView.text = bio
-            self.creditLabel.text = "artist_bio_from_wikipedia".localized
-            self.creditLabel.isHidden = false
+            self.setCredit("artist_bio_from_wikipedia".localized)
         }
     }
 

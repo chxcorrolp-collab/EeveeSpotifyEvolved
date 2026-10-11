@@ -155,10 +155,101 @@ def scan_line(line):
     return hits
 
 
+# ── 第二类：**字符串里的非法转义**（2026-10-18 CI 实证） ─────────────────────────
+#
+# 事故原文（`EntityPageRepaint.x.swift:265`）：
+#
+#     + " about artist) \u2014 the list is asked to lay out again"
+#
+# Swift 的 Unicode 转义**必须带花括号**（`\u{2014}`）；`\u2014` 是 C 的写法，Swift 直接报
+# `expected hexadecimal code in braces after unicode escape`，后面还会连出一条"少了参数"的假错 ✗。
+# 那一处是**改文件的脚本**把 `\u2014` 原样写进 Swift 字符串留下的 —— 而上面那套"闭合引号"检查
+# **只看引号后面、不看引号里面** ⇒ 漏过去了 ✗。
+#
+# 只抓**确定非法**的那几种（宁可窄，不可误报）：`\u` 后面不是 `{`、以及 C 风格的 `\x` / `\U`。
+# 合法的（`\0 \\ \t \n \r \" \' \u{…}` 与插值 `\(`）一律放行；`\\u2014`（转义过的反斜杠）也放行 ✓。
+BAD_ESCAPE_RE = re.compile(r"\\(u(?!\{)|U|x)")
+
+
+def scan_bad_escapes(line):
+    """返回 [(列号, 片段)]：本行**字符串字面量内部**的非法转义。"""
+    hits = []
+    i, n = 0, len(line)
+    mode = "code"          # code | str
+    interp = 0
+    raw = 0
+    stack = []
+
+    while i < n:
+        ch = line[i]
+
+        if mode == "str":
+            if raw:
+                if ch == '"' and line[i + 1:i + 1 + raw] == "#" * raw:
+                    mode = "code"
+                    i += 1 + raw
+                    continue
+                i += 1
+                continue
+            if ch == "\\":
+                if i + 1 < n and line[i + 1] == "(":
+                    stack.append(("str", raw))
+                    mode, interp = "code", 1
+                    i += 2
+                    continue
+                if BAD_ESCAPE_RE.match(line, i):
+                    hits.append((i + 1, line[i:i + 6]))
+                i += 2
+                continue
+            if ch == '"':
+                mode = "code"
+        else:
+            if interp > 0:
+                if ch == '"':
+                    mode = "str"
+                elif ch == "(":
+                    interp += 1
+                elif ch == ")":
+                    interp -= 1
+                    if interp == 0:
+                        mode, raw = stack.pop()
+            else:
+                if ch == "#":
+                    j = i
+                    while j < n and line[j] == "#":
+                        j += 1
+                    if j < n and line[j] == '"':
+                        raw = j - i
+                        i = j + 1
+                        mode = "str"
+                        continue
+                    i = j
+                    continue
+                if ch == '"':
+                    mode = "str"
+                elif ch == "/" and i + 1 < n and line[i + 1] == "/":
+                    break
+        i += 1
+
+    return hits
+
+
+# 自查用的"已知坏转义行"（Python 的 `\\u2014` 写出来就是一个字面 `\u2014`）
+SELF_TEST_BAD_ESCAPE = '    let x = "a \\u2014 b"'
+# 反例：转义过的反斜杠（`\\u2014`）是**合法**的，不能报
+SELF_TEST_GOOD_ESCAPE = '    let x = "a \\\\u2014 b"'
+
+
 def main():
-    # ── 自查：扫描器必须抓得住那次真实事故的那一行 ──
+    # ── 自查：两个扫描器各自必须抓得住对应的那次真实事故 ──
     if not scan_line(SELF_TEST_BAD_LINE):
         print("FAIL：检查器自身失效（抓不到已知的坏行）—— 别信它的结论")
+        return 1
+    if not scan_bad_escapes(SELF_TEST_BAD_ESCAPE):
+        print("FAIL：转义检查器自身失效（抓不到已知的 \\u2014）—— 别信它的结论")
+        return 1
+    if scan_bad_escapes(SELF_TEST_GOOD_ESCAPE):
+        print("FAIL：转义检查器误报（把 \\\\u2014 当成了非法转义）—— 会挡住正常提交")
         return 1
 
     root = pathlib.Path("Sources")
@@ -169,6 +260,7 @@ def main():
     files = 0
     lines = 0
     hits = []
+    escape_hits = []
     skipped_files = []
 
     for path in sorted(root.rglob("*.swift")):
@@ -186,9 +278,18 @@ def main():
                 continue
             for column, source in scan_line(line):
                 hits.append((str(path), number, column, source))
+            for column, snippet in scan_bad_escapes(line):
+                escape_hits.append((str(path), number, column, snippet))
 
     if skipped_files:
         print("提示：%d 个文件含多行字符串 \"\"\"（按行跳过，不参与判定）" % len(skipped_files))
+
+    if escape_hits:
+        print("FAIL：%d 处字符串里有非法转义" % len(escape_hits))
+        print("      ——Swift 的 Unicode 转义要带花括号（`\\u{2014}`），C 风格的 `\\u2014` / `\\x..` 都不合法")
+        for path, number, column, snippet in escape_hits:
+            print("  %s:%d:%d  %s" % (path, number, column, snippet))
+        return 1
 
     if hits:
         print("FAIL：%d 处字面量的闭合引号后面跟了非法字符" % len(hits))

@@ -262,7 +262,7 @@ enum EntityPageSectionDrop {
         didReport = true
         writeDebugLog(
             "[PageRepaint] dropping a section (the playlist's pills / the artist's liked songs,"
-                + " about artist) \u2014 the list is asked to lay out again"
+                + " about artist) — the list is asked to lay out again"
         )
     }
 

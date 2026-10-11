@@ -44,11 +44,22 @@ enum ArtistBioSource {
         return URLSession(configuration: configuration)
     }()
 
-    /// 用哪个语言的维基（按 app 语言挑 zh / ja / en，其余落 en）。
-    /// 那颗链接按钮（`ArtistBioSheet.wikipediaURL`）与这里取词**共用同一个**判据，免得两处漂。
+    /// 用哪个语言的维基（按 app 语言挑 zh / ja / en，其余落 en）→ **完整的主机名**。
+    ///
+    /// ⚠️⚠️ 2026-10-11（日志 101 + 图片 132：用户问"`https://zh/wiki/Special:Search?search=…`
+    /// 这玩意是正常的维基百科搜索链接么"）：**不是，它是坏的**。
+    /// 这里原来只返回**语言码**（`"zh"`），而三处 URL 都是 `https://\(host)/…` 拼出来的
+    /// ⇒ 拼成 `https://zh/wiki/Special:Search` —— 主机名只有一个 `zh`，DNS 都解析不了。
+    /// 也就是说：那颗「在维基百科中打开」**从来没打开过**，`.wikipedia` 那一档也**从来没取到过词**
+    /// （而且失败得无声无息，因为请求压根没发出去）。
+    /// 主机名补全成 `<语言>.wikipedia.org` 才是维基。
+    ///
+    /// ⚠️ 仍然**共用同一个**判据（取词那条线与那颗按钮），免得两处漂。
     static func wikipediaHost() -> String {
         let language = String(Locale.preferredLanguages.first?.prefix(2) ?? "en").lowercased()
-        return ["zh", "ja", "en"].contains(language) ? language : "en"
+        return ["zh", "ja", "en"].contains(language)
+            ? "\(language).wikipedia.org"
+            : "en.wikipedia.org"
     }
 
     /// 维基百科那一版：`action=query&list=search` 找条目 → `rest_v1/page/summary` 取**首段**。

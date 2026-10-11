@@ -46,7 +46,6 @@ A derivative work based on [EeveeSpotifyReincarnated](https://github.com/Sideloa
 - **Seven sources** — Spicy Lyrics, NetEase, AMLL, Musixmatch, PetitLyrics, LRCLIB and Genius.
 - You can also choose a **lyrics fallback chain**: `Musixmatch → PetitLyrics → LRCLIB → Genius`.
 - **Word-by-word karaoke** — real word timing, long-tone emphasis and interlude handling, not just line sync.
-- **Apple Music–style lyrics page** — spring-driven line focus, glow reveal and its own typography pass.
 - **Romanization** — Chinese, Korean and Japanese can be shown or hidden independently.
 
 ### Look and feel
@@ -62,7 +61,7 @@ A derivative work based on [EeveeSpotifyReincarnated](https://github.com/Sideloa
 | --- | --- | --- |
 | Public release | [`v1.0.0`](https://github.com/zbzxbg/EeveeSpotifyEvolved/releases) | 9.1.88 |
 
-Development last updated: `2026/10/10`(build 142).
+Development last updated: `2026/10/11`(build 147).
 
 > [!WARNING]
 > Development versions are not publicly distributed to users.

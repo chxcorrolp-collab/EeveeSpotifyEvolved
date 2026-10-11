@@ -166,6 +166,9 @@ class AlbumCellBackgroundHook: ClassHook<UIView> {
     func layoutSubviews() {
         orig.layoutSubviews()
         guard let root = EntityPageRepaint.root, target.isDescendant(of: root) else { return }
+        // ★★ 2026-10-18 第五轮：顺手记一笔"这个类的实例在这一页是活的"（每页一次，见 `noteCellSeen`）。
+        //    它与折行那一趟的 `cell #` 诊断合起来才能分清"类没被用"与"方法没被叫"。
+        EntityPageSectionDrop.noteCellSeen(target)
         eeveeClearBaseSurface(target)
     }
 }
@@ -191,9 +194,31 @@ enum EntityPageSectionDrop {
 
     static let curationIdentifier = "PlaylistCuration.Row.CurationActionsToolbar"
     static let likedSongsFragment = "LikedSongs"
+    /// ★★ 2026-10-18 第五轮（日志 99 的 `[HeaderProbe] page ids:` 逐字，出现两次）：
+    /// **「你已点赞」那一排是有 accessibility id 的** —— `Components.UI.LikedSongs.Row`（挂在
+    /// 一个 `ListRow` 上，frame 0,496,414,64）。上一轮那句"翻遍我们的树都没有"是**错的**，
+    /// 于是判据只剩"类名里含 LikedSongs"，而真机树里那一行的类名是 `ListRow`（**不含**这个词）
+    /// ⇒ 永远认不出来。id 这条现在放**第一顺位**；类名那条留着当兜底（有的版本会给它套一个
+    /// 带 `LikedSongs` 的泛型包装类，见下面 `likedSongsFragment` 的说明）。
+    static let likedSongsIdentifier = "Components.UI.LikedSongs.Row"
+    /// ★★ 2026-10-18 第五轮：**艺人页「关于艺人」那一格带的 id**。
+    ///
+    /// 出处是 pw 的 `Redesigned/Artist/ArtistSections.x:7-9`（GPL 的 v0.21.1，本仓库内那份）逐字：
+    /// > every kind of content carries an identifier of its own, in any language:
+    /// > `Components.UI.RetrievalRowElementUI` (tracks), `PinnedItemUI` (the pick), `HomeCard`
+    /// > (a carousel), `UpcomingReleaseRow`, **`CreatorBiographyCard` (About)**, …
+    ///
+    /// ⚠️ 2026-10-17 我们查过一次 `CreatorBiographyCard`，结论是"那是听歌页的'了解艺人'卡"——
+    /// 那次查的是**听歌页那棵树**。两页共用同一族 id 并不矛盾（`SPTArtistAboutBiographyView`
+    /// 就是这一族的实现），所以两页都认：这条判据外面还有 `creator-page` 那道闸门，
+    /// 听歌页上的同名卡不会被它碰到 ✓。
+    static let aboutArtistIdentifierFragment = "CreatorBiographyCard"
     /// ★★ 2026-10-18 第三轮：艺人页的「关于艺人」那一块 —— 正文被
     /// `ArtistBioSheet` 读走之后，列表里这一段就折掉（用户：「把原本的 spotify 的
     /// 关于艺人 给去掉，我们自己搞」）。
+    ///
+    /// ⚠️ 这个类**没有 accessibility id**（2026-10-18 的树），所以只能按类名认；
+    /// 上面那条 id 判据是第五轮加的**第二顺位**。
     static let aboutArtistFragment = "SPTArtistAboutBiographyView"
 
     /// 每一格"是什么"与"已经决定不要的格子" —— pw 的 `kindsOf` / `droppedOf`
@@ -204,6 +229,8 @@ enum EntityPageSectionDrop {
     private static weak var invalidatedFor: UIView?
     private static var invalidations = 0
     private static var didReport = false
+    /// 这两张表的归属页 —— 换页要清空（见 `shouldCollapse` 开头）。
+    private static weak var tablePage: UIView?
 
     /// 这一拍被问"你要多高"时顺手做两件事：**记下这一格是什么**、
     /// **回答要不要折成 0**。
@@ -217,6 +244,22 @@ enum EntityPageSectionDrop {
     static func shouldCollapse(_ cell: UIView, at path: IndexPath?, height: CGFloat) -> Bool {
         guard let root = EntityPageRepaint.root, cell.isDescendant(of: root) else { return false }
 
+        // ★★ 2026-10-18 第五轮：**换页清账**。`kinds` / `dropped` 一直按 IndexPath 记，
+        //    上一页的 `1-7` 与这一页的 `1-7` 是两回事 ⇒ 不清就会"折错标题格"。
+        if tablePage !== root {
+            tablePage = root
+            kinds.removeAll()
+            dropped.removeAll()
+            didReport = false
+        }
+
+        // ★★ 2026-10-18 第五轮：艺人页上把"被问到高度的 cell"打一次（见 `reportArtistCellsOnce`）。
+        //    ⚠️ 必须放在下面那些 `guard`/提前 return 之前 —— 它的全部意义就是回答
+        //    "到底有没有被叫到"。
+        if root.accessibilityIdentifier == "creator-page" {
+            reportArtistCellsOnce(cell, at: path, height: height)
+        }
+
         if let path, kinds.count < 400, kinds[path] == nil {
             kinds[path] = kind(of: cell, height: height)
         }
@@ -227,7 +270,9 @@ enum EntityPageSectionDrop {
 
         var drop = containsIdentifier(cell, curationIdentifier)
         if !drop, root.accessibilityIdentifier == "creator-page" {
-            drop = containsClassName(cell, likedSongsFragment)
+            drop = containsIdentifier(cell, likedSongsIdentifier)
+                || containsIdentifierFragment(cell, aboutArtistIdentifierFragment)
+                || containsClassName(cell, likedSongsFragment)
                 || containsClassName(cell, aboutArtistFragment)
         }
         if drop {
@@ -298,6 +343,181 @@ enum EntityPageSectionDrop {
             queue.append(contentsOf: view.subviews)
         }
         return false
+    }
+
+    /// ★★ 2026-10-18 第五轮：**「你已点赞」那一行到底装在哪个 cell 类里**（每页一次，不依赖钩子）。
+    ///
+    /// 为什么另开一条诊断：`reportArtistCellsOnce` 走的是 **cell 钩子** —— 万一我们挂的那个类
+    /// 在艺人页压根没被用，它就**一行都不会响**，日志里只剩"什么都没有"，还是分不清
+    /// "类没被用"与"方法没被叫"。这条从**页面那一趟**按 id 直接找到那一行、沿祖先链走到最近的
+    /// `UICollectionViewCell` 并报出它的类名 ⇒ 下一次要挂钩子就有确切的名字了。
+    ///
+    /// ⚠️ 没找到那一行**不立刻放弃**（它可能还没加载出来）：每页最多再看 8 拍，
+    /// 8 拍都没有就把"这一页没有这一行"写进日志收工 —— 免得每次页面扫描都白走一遍 BFS。
+    private static weak var rowClassPage: UIView?
+    private static var rowClassPasses = 0
+    private static var didReportRowClass = false
+
+    static func reportLikedSongsRowClassOnce(in page: UIView) {
+        guard page.accessibilityIdentifier == "creator-page" else { return }
+        if rowClassPage !== page {
+            rowClassPage = page
+            rowClassPasses = 0
+            didReportRowClass = false
+        }
+        guard !didReportRowClass, rowClassPasses < 8 else { return }
+        rowClassPasses += 1
+        guard let row = firstView(in: page, identifier: likedSongsIdentifier) else {
+            guard rowClassPasses >= 8 else { return }
+            didReportRowClass = true
+            writeDebugLog(
+                "[PageRepaint] no view with id `\(likedSongsIdentifier)` on this page after"
+                    + " \(rowClassPasses) pass(es) — nothing to fold by that id"
+            )
+            return
+        }
+        didReportRowClass = true
+        var node: UIView? = row
+        var depth = 0
+        while let current = node, depth < 12 {
+            if let cell = current as? UICollectionViewCell {
+                writeDebugLog(
+                    "[PageRepaint] `\(likedSongsIdentifier)` sits \(depth) level(s) up in"
+                        + " \(NSStringFromClass(type(of: cell)))"
+                        + " (id=\(cell.accessibilityIdentifier ?? "-")) — that is the class"
+                        + " a drop hook has to be on"
+                )
+                return
+            }
+            node = current.superview
+            depth += 1
+        }
+        writeDebugLog(
+            "[PageRepaint] `\(likedSongsIdentifier)` has no UICollectionViewCell above it"
+                + " — folding it by cell height cannot work on this page"
+        )
+    }
+
+    /// 有界地往下找"id 等于这个"的**那一个视图**（`containsIdentifier` 只回答是与否）。
+    private static func firstView(in root: UIView, identifier: String) -> UIView? {
+        var queue: [UIView] = [root]
+        var visited = 0
+        while !queue.isEmpty, visited < 2500 {
+            let view = queue.removeFirst()
+            visited += 1
+            if view.accessibilityIdentifier == identifier { return view }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
+    }
+
+    /// 有界地往下找"**id 里含**这个片段"的视图。
+    ///
+    /// 为什么要"含"而不是"等于"：有的 id 尾上带一串哈希
+    /// （真机树里 `Components.UI.ContextMenuButton-0D5pkUE6Uv8PXqonJZr2Fv` 就是），
+    /// 写死全名会在版本之间悄悄失配。片段取的是**不会漂的那一半**。
+    private static func containsIdentifierFragment(_ root: UIView, _ fragment: String) -> Bool {
+        var queue: [UIView] = [root]
+        var visited = 0
+        while !queue.isEmpty, visited < 200 {
+            let view = queue.removeFirst()
+            visited += 1
+            if (view.accessibilityIdentifier ?? "").contains(fragment) { return true }
+            queue.append(contentsOf: view.subviews)
+        }
+        return false
+    }
+
+    /// 一棵子树里最多 `limit` 个 accessibility id（只给诊断日志用）。
+    private static func identifierSample(in root: UIView, limit: Int) -> [String] {
+        var queue: [UIView] = [root]
+        var visited = 0
+        var found: [String] = []
+        while !queue.isEmpty, visited < 200, found.count < limit {
+            let view = queue.removeFirst()
+            visited += 1
+            if let identifier = view.accessibilityIdentifier, !identifier.isEmpty {
+                found.append(identifier)
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return found
+    }
+
+    // MARK: - 诊断（日志 99 之后加的那两条）
+
+    /// ★★ 2026-10-18 第五轮：**把艺人页上"被问到高度"的 cell 打进日志**（每页最多 14 行）。
+    ///
+    /// ## 为什么必须有它
+    ///
+    /// 日志 99 里 `[PageRepaint] dropping a section` **一行都没有** —— 而"该折的没折成"
+    /// 有两种**完全不同**的原因，要改的地方也完全不同：
+    ///
+    ///   ① **钩子压根没被叫**：这一页的 cell 不是自适应高度的
+    ///      （`preferredLayoutAttributesFittingAttributes` 那一趟不走）⇒ 得换挂点；
+    ///   ② 钩子叫了，但**判据没认出来**（真机的类名 / id 与我们猜的不一样）⇒ 改判据。
+    ///
+    /// 这一行把"这一页到底有哪些 cell、各自什么类、带什么 id"钉进日志 ⇒ 下一份日志直接分岔。
+    /// 有界：**每页最多 14 行**、只在 `creator-page` 上打、只在还没出结果时打。
+    private static var cellDumpPage: UIView?
+    private static var cellDumpCount = 0
+    private static var didDumpCells = false
+
+    private static func reportArtistCellsOnce(
+        _ cell: UIView,
+        at path: IndexPath?,
+        height: CGFloat
+    ) {
+        if cellDumpPage !== EntityPageRepaint.root {
+            cellDumpPage = EntityPageRepaint.root
+            cellDumpCount = 0
+            didDumpCells = false
+        }
+        guard !didDumpCells, cellDumpCount < 14 else { return }
+        cellDumpCount += 1
+        let indexPathText = path.map { "\($0.section)-\($0.item)" } ?? "-"
+        let ids = identifierSample(in: cell, limit: 3)
+        writeDebugLog(
+            "[PageRepaint] cell #\(cellDumpCount)"
+                + " path=\(indexPathText) h=\(Int(height))"
+                + " class=\(NSStringFromClass(type(of: cell)))"
+                + " ids=[\(ids.joined(separator: ", "))]"
+        )
+        if cellDumpCount >= 14 {
+            didDumpCells = true
+            writeDebugLog(
+                "[PageRepaint] cell dump done — those are the artist page's rows;"
+                    + " if none of them carries LikedSongs / CreatorBiographyCard /"
+                    + " SPTArtistAboutBiographyView, the predicate needs the names above"
+            )
+        }
+    }
+
+    /// ★★ 2026-10-18 第五轮：**我们挂的那个 cell 类在这一页有没有活实例**。
+    ///
+    /// 与 `reportArtistCellsOnce` 分两头钉：这条来自 `layoutSubviews`（**只要这个类的实例存在
+    /// 就一定会响**），那条来自 `preferredLayoutAttributesFittingAttributes`（**只有自适应高度
+    /// 那一趟才响**）。两条一对比就能分清 §"① 类没被用" 与 §"② 方法没被叫"。
+    /// 记账每页一次、最多三格，代价可以忽略。
+    private static weak var seenCellsPage: UIView?
+    private static var seenCellCount = 0
+    private static var didSeenCells = false
+
+    static func noteCellSeen(_ cell: UIView) {
+        if seenCellsPage !== EntityPageRepaint.root {
+            seenCellsPage = EntityPageRepaint.root
+            seenCellCount = 0
+            didSeenCells = false
+        }
+        guard !didSeenCells else { return }
+        seenCellCount += 1
+        guard seenCellCount >= 3 else { return }
+        didSeenCells = true
+        writeDebugLog(
+            "[PageRepaint] the element-list cell class is live on this page"
+                + " (\(seenCellCount) layout pass(es) seen) — so the class is right;"
+                + " if no `cell #` lines follow it, this page lays its rows out by fixed height"
+        )
     }
 
     /// 有界地往下找"类名里含这个片段"的视图（Swift 泛型实参会出现在类名里）。

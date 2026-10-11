@@ -231,31 +231,49 @@ func eeveeScrollPageDown(from view: UIView) -> Bool {
 /// 就会响（`ArtistBiographyViewHook`），我们当场拿到它。全程不动画、最后**回到原位**，用户看不到跳动。
 ///
 /// ⚠️ 步数有上限（12 屏）；找不到就返回 nil，调用方照旧退回"滚一屏"那条老路。
+///
+/// ★★ 2026-10-18 第五轮（**日志 99 的现场**）：`about-artist sweep — 1 step(s) over 1416pt,
+/// nothing built` —— 它**只看了列表最顶上那一屏**。原因在下面那个 `bottom`：
+/// 这是**自适应的懒加载列表**，没滚到的那部分还不存在 ⇒ 进来时算出来的
+/// `contentSize.height`（1416pt）比屏幕（896pt）只多 520pt，而 `step` 是 0.9 屏 = 806pt
+/// ⇒ 第一次循环就把 offset 推到 806 > 520，条件不成立、直接退出。
+/// 于是"滚一整趟把那一块逼出来"这句承诺从来没兑现过，`i` 那颗按键也就永远读不到正文
+/// （日志里紧接着的那行 `biography NOT READ (0 char)` 就是这么来的）。
+///
+/// 现在改成：**每一屏都重新读一次 `contentSize`**，翻到"当前这一趟的底"再继续 ——
+/// 列表边滚边长，所以"底"也必须边滚边问。
 @discardableResult
 func eeveeMaterialiseBio(from view: UIView) -> UIView? {
     guard let scroll = eeveeOutermostScroll(from: view), scroll.bounds.height > 1 else { return nil }
     let origin = scroll.contentOffset
-    let bottom = max(0, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
     let step = max(120, scroll.bounds.height * 0.9)
     var offset: CGFloat = 0
+    var deepest: CGFloat = 0
     var passes = 0
     var found: UIView?
-    while offset <= bottom + 1, passes < 12 {
+    while passes < 12 {
         passes += 1
+        deepest = offset
         scroll.setContentOffset(CGPoint(x: origin.x, y: offset), animated: false)
         scroll.layoutIfNeeded()
         if let bio = EntityPageHeaderManager.artistBioTarget {
             found = bio
             break
         }
-        offset += step
+        // ⚠️ 重新问一次"现在到底有多长"（见上面日志 99 那段说明）。
+        let bottom = max(
+            0,
+            scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom
+        )
+        guard offset < bottom else { break }
+        offset = min(offset + step, bottom)
     }
     if found == nil { found = EntityPageHeaderManager.artistBioTarget }
     // 回到用户原来的位置（不管找没找到）—— 只有真找到时，调用方才把它滚进视野。
     scroll.setContentOffset(origin, animated: false)
     writeDebugLog(
-        "[EntityPageHeader] about-artist sweep — \(passes) step(s) over"
-            + " \(Int(scroll.contentSize.height))pt, "
+        "[EntityPageHeader] about-artist sweep — \(passes) step(s) down to"
+            + " \(Int(deepest))pt of \(Int(scroll.contentSize.height))pt, "
             + (found == nil ? "nothing built" : "found it")
     )
     return found
@@ -268,7 +286,10 @@ func eeveeMaterialiseBio(from view: UIView) -> UIView? {
 @discardableResult
 func eeveeArtistBio(from view: UIView) -> (view: UIView, text: String?)? {
     guard let bio = eeveeMaterialiseBio(from: view) else { return nil }
-    return (bio, eeveeLongestText(in: bio))
+    // ★★ 2026-10-18 第五轮：40 字那道闸是给"排除短标签"用的（"收听""已关注"那种），
+    //    但日文 / 中文简介本来就短，正文可能只有二十几个字 ⇒ 40 字找不到时**再按 20 字找一次**。
+    //    （卡片上那行日志会写出真正读到几个字，下一份日志就能判断这个下限合不合适。）
+    return (bio, eeveeLongestText(in: bio) ?? eeveeLongestText(in: bio, minimum: 20))
 }
 
 /// 一棵子树里**最长的那段文字** —— 艺人简介就在 `SPTArtistAboutBiographyView` 的正文里

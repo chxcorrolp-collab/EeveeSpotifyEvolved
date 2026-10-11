@@ -396,6 +396,10 @@ enum EntityPageAppearance {
             currentPage = target.page
         }
         EntityPageRepaint.root = target.page
+        // ★★ 2026-10-18 第五轮（诊断）：这一页上「你已点赞」那一行**装在哪个 cell 类**里 ——
+        //    见 `EntityPageSectionDrop.reportLikedSongsRowClassOnce`。它不依赖任何钩子，
+        //    所以"钩子压根没被叫"那一支照样能给出下一步该挂哪个类（每页一次）。
+        EntityPageSectionDrop.reportLikedSongsRowClassOnce(in: target.page)
 
         // ★★ 2026-10-18：**这一页的底色用哪个颜色**只算一次，三条路共用（底 / 照片的化开 / 顶带）——
         //    否则"底是压暗过的、顶带还是原色"这种不一致会从缝里露出来。见 `pageColour(for:)`。

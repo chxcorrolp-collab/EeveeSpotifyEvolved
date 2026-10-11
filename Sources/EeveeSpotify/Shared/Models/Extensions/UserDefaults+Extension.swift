@@ -124,7 +124,10 @@ extension UserDefaults {
         miniBarRoundArtworkKey,
 
         // 不在上面那批常量里、但同样属于我们的：
-        // 「Flag 覆盖」表（`FlagOverrideStore` 用 `flagOverrides` 存 JSON Data）。
+        // · 「艺人介绍从哪来」—— 常量在 `Appearance/ArtistBioSourceKind.swift` 的扩展里
+        //   （与 `LyricsSource` 一样：**键由功能自己拥有**）；
+        // · 「Flag 覆盖」表（`FlagOverrideStore` 用 `flagOverrides` 存 JSON Data）。
+        "artistBioSource",
         "flagOverrides",
     ]
     // 听歌页「卡片」那批（总开关 + 每张卡一个键）：键表由 `PlayerCard` / `PlayerCardsDeclutter`

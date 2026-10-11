@@ -27,6 +27,8 @@ struct EntityPageSettingsView: View {
         var entityPageDissolve = UserDefaults.entityPageDissolve
         var entityPageHideChrome = UserDefaults.entityPageHideChrome
         var entityPageAMHeader = UserDefaults.entityPageAMHeader
+        /// ★ 2026-10-18 第四轮：艺人介绍的来源（见 `ArtistBioSourceKind`）。
+        var artistBioSource = UserDefaults.artistBioSource
     }
 
     var body: some View {
@@ -134,6 +136,34 @@ struct EntityPageSettingsView: View {
             // ⛔「顶部大标题」（旧"样品"开关）已于 2026-10-02 删除：
             // 壳自己会画顶栏标题（`header=ON` 时），那条是**另一套**标题 —— 两个都开就会画两遍。
 
+            // ★★ 2026-10-18 第四轮（用户：「在设置页放个选项选择吧要不」）：**艺人介绍从哪来**。
+            //   四个选项与各自的代价见 `ArtistBioSourceKind`（原生是唯一跟着 app 语言的；Genius 是英文、
+            //   要署名；维基百科 CC BY-SA、要署名 + 许可链接）。
+            //
+            //   ⚠️ 它**只影响点 `i` 弹出来的那张卡片**：列表里 Spotify 自己那段「关于艺人」在任何选项下
+            //   都会被折成 0 高（`EntityPageSectionDrop.aboutArtistFragment`）—— 那是"把它去掉"那件事，
+            //   与来源选择无关。
+            //   ⚠️ 读取时机：**每次点 `i` 时读一次**（`ArtistBioSheet.present`）⇒ 选完立刻生效，不用重启。
+            Section(
+                header: Text("artist_bio_section".localized),
+                footer: Text("artist_bio_description".localized)
+            ) {
+                Picker(
+                    "artist_bio_source".localized,
+                    selection: Binding(
+                        get: { shadow.artistBioSource },
+                        set: { value in
+                            shadow.artistBioSource = value
+                            UserDefaults.artistBioSource = value
+                        }
+                    )
+                ) {
+                    ForEach(ArtistBioSourceKind.allCases, id: \.self) { kind in
+                        Text(kind.description).tag(kind)
+                    }
+                }
+            }
+
             SettingsResetSection(
                 keys: Self.ownedKeys,
                 afterReset: {
@@ -168,5 +198,7 @@ struct EntityPageSettingsView: View {
         "entityPageDissolve",
         "entityPageHideChrome",
         "entityPageAMHeader",
+        // ★ 2026-10-18 第四轮：「艺人介绍从哪来」（`ArtistBioSourceKind`）—— 重置本页要连它一起。
+        "artistBioSource",
     ]
 }

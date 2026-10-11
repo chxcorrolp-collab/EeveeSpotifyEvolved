@@ -46,6 +46,8 @@ final class ArtistBioSheet: UIView {
         writeDebugLog(
             "[ArtistBio] our own about-artist sheet — name "
                 + (name.isEmpty ? "MISSING" : name)
+                // 0 = automatic, 1 = Spotify, 2 = Genius, 3 = Wikipedia（见 `ArtistBioSourceKind`）。
+                + ", source \(UserDefaults.artistBioSource.rawValue)"
                 + ", biography "
                 + (text == nil ? "NOT READ (0 char)" : "\(text?.count ?? 0) char")
         )
@@ -106,18 +108,24 @@ final class ArtistBioSheet: UIView {
         bodyView.textColor = UIColor.white.withAlphaComponent(0.92)
         card.addSubview(bodyView)
 
-        // ★★ 2026-10-18 第四轮（用户：「关于艺人 的来源你有什么好方法么」）：正文**优先用 Spotify 那份**
-        //    （跟着 app 语言、官方）；**读不到才去 Genius 要一份**（免 key 的那条现成线，见 `ArtistBioSource`；
-        //    英文，而且必须署名）。两条都没有就留一句说明 + 那颗 Wikipedia 链接。
-        if let text {
-            bodyView.text = text
-        } else {
-            bodyView.text = "artist_bio_empty".localized
-            ArtistBioSource.geniusBio(for: name) { [weak self] genius in
-                guard let self, let genius else { return }
-                self.bodyView.text = genius
-                self.creditLabel.text = "artist_bio_from_genius".localized
-                self.creditLabel.isHidden = false
+        // ★★ 2026-10-18 第四轮：**来源由设置里那一项决定**（`UserDefaults.artistBioSource`，见
+        //    `ArtistBioSourceKind`）：
+        //      · `.automatic`（默认）—— Spotify 原生优先，读不到才退 Genius；
+        //      · `.spotify` / `.genius` / `.wikipedia` —— 只用那一个（读不到就一句说明 + 链接）。
+        //    ⚠️ `text` 是**扫列表时顺手读的**那份：`automatic` / `spotify` 用它，另两个选项**忽略**它
+        //      （扫列表本身照做 —— 那是为了把懒加载的「关于艺人」逼出来**折掉**，与来源选择无关）。
+        switch UserDefaults.artistBioSource {
+        case .spotify:
+            bodyView.text = text ?? "artist_bio_empty".localized
+        case .genius:
+            loadGenius(name)
+        case .wikipedia:
+            loadWikipedia(name)
+        case .automatic:
+            if let text {
+                bodyView.text = text
+            } else {
+                loadGenius(name)
             }
         }
 
@@ -156,15 +164,37 @@ final class ArtistBioSheet: UIView {
     }
 
     /// 维基百科那条**链接**：用**搜索页**（省掉"先找条目"这一步，同名艺人也不怕），
-    /// wiki 主机按 app 语言挑（zh / ja / en，其余落 en）。
+    /// wiki 主机与取词那条线**共用** `ArtistBioSource.wikipediaHost()`（免得两处漂）。
     private static func wikipediaURL(for name: String) -> URL? {
-        let language = String(Locale.preferredLanguages.first?.prefix(2) ?? "en").lowercased()
-        let host = ["zh", "ja", "en"].contains(language) ? language : "en"
-        guard var components = URLComponents(string: "https://\(host).wikipedia.org/wiki/Special:Search") else {
+        guard var components = URLComponents(
+            string: "https://\(ArtistBioSource.wikipediaHost())/wiki/Special:Search"
+        ) else {
             return nil
         }
         components.queryItems = [URLQueryItem(name: "search", value: name)]
         return components.url
+    }
+
+    /// Genius 那条（**英文**，卡片上要署名）。
+    private func loadGenius(_ name: String) {
+        bodyView.text = "artist_bio_empty".localized
+        ArtistBioSource.geniusBio(for: name) { [weak self] bio in
+            guard let self, let bio else { return }
+            self.bodyView.text = bio
+            self.creditLabel.text = "artist_bio_from_genius".localized
+            self.creditLabel.isHidden = false
+        }
+    }
+
+    /// 维基百科那条（**CC BY-SA**：要署名 + 给许可链接 —— 页脚那颗 Wikipedia 按钮就是那个链接）。
+    private func loadWikipedia(_ name: String) {
+        bodyView.text = "artist_bio_empty".localized
+        ArtistBioSource.wikipediaBio(for: name) { [weak self] bio in
+            guard let self, let bio else { return }
+            self.bodyView.text = bio
+            self.creditLabel.text = "artist_bio_from_wikipedia".localized
+            self.creditLabel.isHidden = false
+        }
     }
 
     /// 卡片底色：跟着这一页的取色走（太暗就抬一点，免得和页面糊成一片）。

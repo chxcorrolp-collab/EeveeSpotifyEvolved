@@ -33,6 +33,64 @@ enum ArtistBioSource {
         return URLSession(configuration: configuration)
     }()
 
+    /// 维基百科那条线**另开一个 session**：它的 API 要求一个**能认出调用方**的 User-Agent
+    /// （拿 Genius 的 UA 去请求既失礼、也可能被 403）✓。
+    private static let wikipediaSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.httpAdditionalHeaders = [
+            "User-Agent": "EeveeSpotifyEvolved/1.0 (https://github.com/zbzxbg/EeveeSpotifyEvolved)",
+        ]
+        configuration.timeoutIntervalForRequest = 12
+        return URLSession(configuration: configuration)
+    }()
+
+    /// 用哪个语言的维基（按 app 语言挑 zh / ja / en，其余落 en）。
+    /// 那颗链接按钮（`ArtistBioSheet.wikipediaURL`）与这里取词**共用同一个**判据，免得两处漂。
+    static func wikipediaHost() -> String {
+        let language = String(Locale.preferredLanguages.first?.prefix(2) ?? "en").lowercased()
+        return ["zh", "ja", "en"].contains(language) ? language : "en"
+    }
+
+    /// 维基百科那一版：`action=query&list=search` 找条目 → `rest_v1/page/summary` 取**首段**。
+    ///
+    /// ⚠️ 正文是 **CC BY-SA**：用了它**必须**署名 + 给许可链接（卡片右下角那行 + 那颗 Wikipedia 按钮）✓。
+    /// 也因此它只是**选项之一**（默认见 `ArtistBioSourceKind.automatic`），不是主源。
+    static func wikipediaBio(for artist: String, completion: @escaping (String?) -> Void) {
+        let name = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty,
+              var components = URLComponents(string: "https://\(wikipediaHost())/w/api.php") else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        components.queryItems = [
+            URLQueryItem(name: "action", value: "query"),
+            URLQueryItem(name: "list", value: "search"),
+            URLQueryItem(name: "srsearch", value: name),
+            URLQueryItem(name: "srlimit", value: "1"),
+            URLQueryItem(name: "format", value: "json"),
+        ]
+        guard let url = components.url else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+
+        fetchJSON(url, using: wikipediaSession) { search in
+            let hits = (search?["query"] as? [String: Any])?["search"] as? [[String: Any]]
+            guard let title = hits?.first?["title"] as? String,
+                  let encoded = title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+                  let summary = URL(string: "https://\(wikipediaHost())/api/rest_v1/page/summary/\(encoded)")
+            else {
+                completion(nil)
+                return
+            }
+            fetchJSON(summary, using: wikipediaSession) { payload in
+                let extract = (payload?["extract"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                completion((extract?.isEmpty ?? true) ? nil : extract)
+            }
+        }
+    }
+
     /// 取这位艺人的简介（回调一律在**主线程**；取不到就是 nil）。
     static func geniusBio(for artist: String, completion: @escaping (String?) -> Void) {
         let name = artist.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -119,8 +177,12 @@ enum ArtistBioSource {
     ///
     /// ⚠️ 名字**不能叫 `get`** —— `swift_member_check.py` 会把这种通用名当成"不该私有的短名"
     /// （实测一次白跑：25 条 `get` 报错，连别的文件的都一起翻出来）。
-    private static func fetchJSON(_ url: URL, completion: @escaping ([String: Any]?) -> Void) {
-        session.dataTask(with: url) { data, response, _ in
+    private static func fetchJSON(
+        _ url: URL,
+        using client: URLSession = session,
+        completion: @escaping ([String: Any]?) -> Void
+    ) {
+        client.dataTask(with: url) { data, response, _ in
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             var json: [String: Any]?
             if let data, let object = try? JSONSerialization.jsonObject(with: data) {

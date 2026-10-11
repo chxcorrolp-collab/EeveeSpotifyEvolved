@@ -68,8 +68,8 @@ enum EntityPageAppearance {
     /// 取色场在页面之外**上下各渗**多少（pw 的 `kBleed = {600, 0, 600, 0}`）—— 给列表顶部/底部的
     /// 回弹、以及歌单页页头那 134pt 的平移留余量，免得露出底。
     private static let fieldBleed: CGFloat = 600
-    /// 取色底占页面高度的比例（再往下就是 base surface，看不出接缝）。
-    private static let fieldColorEnd: CGFloat = 0.58
+    // ⚠️ 老键 `fieldColorEnd`（"取色底占页面高度的比例"，0.58）**已删** —— 艺人页的收口归 pw 的
+    //    `blackFrom` / `blackTo`，专辑/歌单页那一支是平色，两页都不再用它。
     /// 封面化开成的那片背景占页面高度的比例（pw 那张 playlist 截图约 45%，这里给到 52%）。
     private static let heroHeightRatio: CGFloat = 0.52
     /// ★★ 2026-10-18（用户：「AM 那三颗按键比 Spotify 靠下一点，所以它的渐变刚好不压到艺人名字；
@@ -91,6 +91,28 @@ enum EntityPageAppearance {
     private static let meltSpanRatio: CGFloat = 0.20
     /// 化开那一段的**下限**：页头矮的时候别把渐变整成一条硬边。
     private static let minMeltSpan: CGFloat = 90
+    /// ★★ 2026-10-18（用户：「**现在的模糊艺人底会有看不清字的情况，做成往下渐变变灰/黑的吧，pw 的逻辑**」）
+    /// —— **艺人页的底整个换成 pw 的 `SGRArtworkField`**（`Redesigned/Kit/SGRField.m`，GPL 的 v0.21.1）：
+    ///
+    ///   · `_solid` 一块**深色** —— `SGRFieldColorFor` 把封面颜色压成"白字一定读得清"的那一档
+    ///     （见下面两条上限常数，`SGRPalette.m:76-97`）；
+    ///   · `_black` 一条 `clear → 纯黑` 的 `CAGradientLayer`，locations = **窗口高度**的
+    ///     `kBlackFrom = 0.55` / `kBlackTo = 1`（`SGRField.m:14` 的常数、`:98-102` 的算法；
+    ///     它的注释逐字：*"the redesign is AMOLED throughout, fading the colour to black down the page"*）；
+    ///     两层合起来就是"**上深灰 → 下纯黑**"，这里用一条三段渐变一次画完（`paintField` 的 artist 支）。
+    ///   · 页面**没有模糊底** —— pw 的 `_backdrop` 那一层只有**播放器**用（`SGRField.h:1-4`：
+    ///     *"The player's field also carries the artwork itself at the top, blurred and dimmed…"*），
+    ///     而模糊封面正是用户说"看不清字"的来源 ⇒ 艺人页不再铺它（见 `ensureHero`）。
+    ///
+    /// ⚠️ 这套**只作用于艺人页**：专辑 / 歌单页照旧是 Melox 那三层（纯取色 + 模糊封面 + veil），
+    ///    那是用户 2026-10-18 点名要的（「看 melox 的歌单页和 am 几乎一模一样，看它的吧」）。
+    private static let blackFrom: CGFloat = 0.55
+    private static let blackTo: CGFloat = 1
+    /// pw 的 `SGRPalette.m:8-9`：底板颜色的**饱和度上限 0.55**、**线性亮度上限 0.07**。
+    /// 后一条是最要紧的：**任何封面（哪怕一片白）都被压成一块很深的颜色** ⇒ 白字在上面读得清。
+    /// 实测：`#F2F7FB`（Nanatsukaze 那张白猫）⇒ `#494B4C` 那一档；杰克逊那张 ⇒ 一块暗棕。
+    private static let maxFieldSaturation: CGFloat = 0.55
+    private static let maxFieldLuminance: CGFloat = 0.07
     /// 底子的模糊半径 —— **照 MeloX 的常数**：它是 `filter.radius = 18`，
     /// 而且作用在"**先缩到最长边 160px**"的那张图上（`makeBlurredBackdrop` ✓）。
     /// 先缩再糊 = 半径的相对强度可控、也快 ✓。
@@ -353,18 +375,23 @@ enum EntityPageAppearance {
         }
         EntityPageRepaint.root = target.page
 
+        // ★★ 2026-10-18：**这一页的底色用哪个颜色**只算一次，三条路共用（底 / 照片的化开 / 顶带）——
+        //    否则"底是压暗过的、顶带还是原色"这种不一致会从缝里露出来。见 `pageColour(for:)`。
+        let colour = pageColour(for: target)
+
         if wantsField {
-            ensureField(on: target)
+            ensureField(on: target, colour: colour)
         } else if field != nil {
             restore(reason: "field switch off")
         }
 
         if wantsDissolve {
             // ★★ 2026-10-18（用户：「看 melox 的歌单页和 am 几乎一模一样，看它的吧」）：
-            //    **两页共用** Melox 那两层（模糊封面 + `取色@34% → 取色` 的 veil）；
-            //    **清晰满幅封面 + 顶带只有艺人页**（用户拍板选 A：专辑/歌单留 Spotify 自己那张卡片）。
+            //    **专辑/歌单页**共用 Melox 那两层（模糊封面 + `取色@34% → 取色` 的 veil）；
+            //    **艺人页**是 pw 那一套（深色底 + 往黑渐变、没有模糊底，见 `blackFrom` 那段），
+            //    而且只有它铺清晰满幅照片（用户拍板选 A：专辑/歌单留 Spotify 自己那张卡片）。
             let sharp = target.kind == .artist
-            ensureHero(on: target, sharpCover: sharp)
+            ensureHero(on: target, sharpCover: sharp, colour: colour)
             // ★ 2026-10-14：这里原来还有一条"头部居中"（`centerHeaderLabels`）—— **已删**：
             //    它只在这个艺人页（`sharp`）分支里跑，可名单里那 4 个 id 全是**专辑页**的
             //    `CreativeWorkPlatform.Components.UI.{PreTitleRow,TitleRow,ParentRow,MetadataRow}`
@@ -394,8 +421,10 @@ enum EntityPageAppearance {
 
     // MARK: - ① 取色底
 
-    private static func ensureField(on target: Target) {
-        guard let color = target.color else { return }
+    /// ★★ 2026-10-18：颜色改成**外面算好传进来**（`tick` 里的 `pageColour(for:)`）——
+    /// 艺人页要的是 pw 压暗过的那一版，而且底 / 照片的化开 / 顶上那条带必须用**同一个值**。
+    private static func ensureField(on target: Target, colour: UIColor?) {
+        guard let colour else { return }
         let page = target.page
 
         let view: GradientView
@@ -419,7 +448,8 @@ enum EntityPageAppearance {
         //       那时候外扩会把渐变拉稀 —— 这也是为什么现在才敢做）。
         let painted = page.bounds.insetBy(dx: 0, dy: -fieldBleed)
         if !view.frame.equalTo(painted) { view.frame = painted }
-        paintField(view, color: color)
+        // ⚠️ `paintField` 靠"上下各渗出去的那 600pt"反推页面高度与渐变落点 ⇒ **必须在这两行之后**调。
+        paintField(view, colour: colour, artist: target.kind == .artist)
 
         // ★ 2026-10-13（**日志 79** 实测只有 7 处被清之后发现）：**每一拍都要补清**。
         //   cell 是**随滚动懒建**的 —— 只在建场那一拍清一次的话，往下滚出来的新 cell 会自己再画一层
@@ -431,7 +461,7 @@ enum EntityPageAppearance {
 
         // ★★ 2026-10-06：**浅底时把文字翻成深色** —— 见 `textTone`（你报的"浅色背景下看不清
         //    账号名字 / 本月有 xxx 听众"）。与清底色同一条纪律：**每一拍补一次**。
-        let light = isLight(color)
+        let light = isLight(colour)
         textTone(in: page, isLight: light)
 
         // ★★ 2026-10-17：**状态栏也跟着翻** —— AM 的 118（亮底）是黑字、119（暗棕底）是白字，
@@ -442,12 +472,17 @@ enum EntityPageAppearance {
 
         guard !didReport else { return }
         didReport = true
+        let raw = target.color.map { hex(of: $0) } ?? "?"
         writeDebugLog(
             "[\(logTag)] field on \(type(of: page)) \(frameText(page.bounds))"
-                + " ← cover colour #\(hex(of: color))"
+                + " ← cover colour #\(raw)"
+                + (target.kind == .artist
+                    ? ", artist field #\(hex(of: colour)) (pw: saturation ≤ \(Int(maxFieldSaturation * 100))%,"
+                        + " linear luminance ≤ \(maxFieldLuminance); black from \(Int(blackFrom * 100))%"
+                        + " of the window down)"
+                    : "; Melox layers — solid accent + blurred cover + a 34%→100% veil")
                 + "; cleared \(clearedBackgrounds.count) base-surface background(s)"
-                + " (only the ones equal to #121212, inside this page, depth ≤ \(clearDepth));"
-                + " gradient stops 0 / \(Int(fieldColorEnd * 100))% / 100%"
+                + " (only the ones equal to #121212, inside this page, depth ≤ \(clearDepth))"
         )
     }
 
@@ -528,41 +563,156 @@ enum EntityPageAppearance {
         )
     }
 
-    /// 竖直渐变：顶部是封面取色 → 中段压暗 → **到底仍然留着这片颜色**。
+    /// 竖直渐变。**两种页面两套画法**（这一节的两段注释是历史，别把两页的规矩搞混）：
+    ///
+    /// · **艺人页**（2026-10-18，用户：「现在的模糊艺人底会有看不清字的情况，做成往下渐变变灰/黑的吧，
+    ///   **pw 的逻辑**」）= **照 pw**：上面一块**深色**（封面颜色压过亮度上限的那一版，见
+    ///   `maxFieldLuminance`），从**窗口高度的 55%** 起一路渐变到**纯黑**（`blackFrom` / `blackTo`）。
+    ///   pw 的 `SGRArtworkField` 是两层（`_solid` 一块色 + `_black` 一条 clear→纯黑，`SGRField.m:98-102`），
+    ///   这里用一条三段渐变画出**同一个合成结果** ⇒ 页面越往下越黑，白字就压得住。
+    /// · **专辑 / 歌单页** = Melox 那三层里最底的一层：**纯取色**（不是渐变），
+    ///   那条"往下变沉"归 `veil` 画在模糊封面之上（用户 2026-10-18：「看 melox 的歌单页和 am
+    ///   几乎一模一样，看它的吧」）。
+    ///
+    /// ⚠️ 下面那条"照片 95-97 的教训"说的是**专辑/歌单页**（那两页至今不许落到纯 `#121212`）；
+    ///     艺人页这条"渐到黑"是用户点名要的，字都压在它上面，和 pw 一样。
     ///
     /// ⚠️ **照片 95-97 的教训**：原来 57% 之后就是纯 `#121212` ⇒ 用户看到的是"**下半部分还是黑的**" ✗。
     /// pw 的字段是 `bleed = {600, 0, 600, 0}`（**比整页还大一圈**，见 `AlbumField.x` / `PlaylistField.x`），
-    /// 整页都带着那片颜色 ⇒ 这里改成**三段同色相**：取色 → 压暗 → 更暗，全程带色、只是越往下越沉。
-    private static func paintField(_ view: GradientView, color: UIColor) {
-        // ★ 2026-10-13（照片 110：「专辑页往下滑，是全黑的，没有颜色」）：两个上限原来分别是
-        //   0.26 / 0.14 —— 14% 亮度基本就是黑，所以越往下越"没颜色"。抬到 0.42 / 0.28：
-        //   全程看得出是封面的色相，到底仍然是"这片颜色"而不是 #121212。
-        // ★★ 2026-10-06（照片 111：白底封面 + 白字标题 ⇒ 什么都看不见）：**不再一律压暗** ——
-        //    **封面亮就给亮底**（AM 的艺人页正是这样：白底照片 ⇒ 白底页面 + 黑字），封面暗才压暗。
-        //    这也是 `textTone` 反色的依据：底亮了，字才有得反。
+    /// 整页都带着那片颜色 ⇒ 专辑 / 歌单页那一支至今只画**一块平色**（不再有"越往下越沉"的三段）；
+    /// 要不要抄 pw 那条 `_black`，两页的答案**相反**（艺人页要、这两页不要，见上面两段）。
+    private static func paintField(_ view: GradientView, colour: UIColor, artist: Bool) {
+        // ★ 2026-10-13（照片 110）那条“两个上限 0.26 / 0.14”（`scaled(_:by:)` / `tinted(_:atMost:)`）
+        //    已经**整条退役**：专辑 / 歌单页不再压颜色（Melox 是渐到取色本身），艺人页的压暗改在
+        //    `fieldColourFor` 里按 pw 的线性亮度上限做。那两个旧函数留着，但**已无调用点**。
+        // ★★ 2026-10-06 那条"封面亮就给亮底"（照片 111）**对艺人页已经作废** —— 它正是"看不清字"的
+        //    来源；`textTone` 的反色判据现在跟着 `fieldColourFor` **压暗后**的颜色走
+        //    （压暗之后 `isLight` 恒为假 ⇒ 艺人页不再反色，白字照旧）。专辑 / 歌单页不受影响。
         // ★★★ 2026-10-18（用户：「我看 melox 的歌单页和 am 几乎一模一样，**看它的吧**」）：
         //   照 Melox `Features/Playlist/PlaylistDetailContent.swift:441-452` 的三层 ——
         //   **取色纯色 + 模糊封面 + 一条 `取色@34% → 取色` 的 LinearGradient**（`:237-241` 页头区同一条）。
         //   ⇒ 这一层（最底）只负责"底色是取色"，**它是纯色、不是渐变**；那条渐变由 `veil` 画在
         //     模糊封面**之上**（见 `ensureVeil`），跟 Melox 的叠放次序一致。
         //
-        //   ⚠️ 同时**废止**两件旧做法：
-        //     · "同色相压到 45%"（`scaled(_:by:)` 那一套）—— 我们自己加的，比 Melox 暗、也不是 AM；
-        //     · pw 的 `_black`（`SGRField.m`：clear → 纯黑，按**窗口**高度 0.55→1.0）——
-        //       用户 2026-10-13 明确否过"往下滑是全黑的、没有颜色"，而 Melox 是**渐到取色本身** ✓。
+        //   ⚠️ 2026-10-18 起：**艺人页要 pw 那条 `_black`**（下面 `if artist` 那一支），
+        //     专辑 / 歌单页**不要**（它们照 Melox 渐到取色本身）。用户 2026-10-13 否掉的那句
+        //     「往下滑是全黑的、没有颜色」说的是**专辑/歌单页**，别拿它去撤艺人页。
         let layer = view.gradient
         layer.startPoint = CGPoint(x: 0.5, y: 0)
         layer.endPoint = CGPoint(x: 0.5, y: 1)
-        layer.locations = [NSNumber(value: 0), NSNumber(value: 1)]
-        layer.colors = [color.cgColor, color.cgColor]
-        let key = hex(of: color)
+
+        if artist {
+            // 页面高度 = 渗过之后的高度 − 上下各 600（`ensureField` 就是这么摆的帧）。
+            let painted = max(1, view.bounds.height)
+            let pageHeight = max(1, painted - 2 * fieldBleed)
+            let window = windowHeight(fallback: pageHeight)
+            // pw 的 locations 是**绝对**位置（窗口高度 × 0.55 / × 1）换算成整块画布的比例 ——
+            // `from = height * kBlackFrom + bleed.top`（`SGRField.m:99-102`），这里 `fieldBleed`
+            // 就是那个 bleed.top。
+            let from = min(1, max(0, (fieldBleed + window * blackFrom) / painted))
+            let to = min(1, max(from, (fieldBleed + window * blackTo) / painted))
+            layer.locations = [NSNumber(value: 0), NSNumber(value: from), NSNumber(value: to)]
+            layer.colors = [colour.cgColor, colour.cgColor, UIColor.black.cgColor]
+        } else {
+            layer.locations = [NSNumber(value: 0), NSNumber(value: 1)]
+            layer.colors = [colour.cgColor, colour.cgColor]
+        }
+
+        let key = hex(of: colour)
         if key != lastLoggedHex {
             lastLoggedHex = key
             writeDebugLog(
-                "[\(logTag)] field colour is now #\(key) — flat (Melox: solid accent + blurred cover"
-                    + " + a 34%→100% veil of the same colour; nothing fades to black)"
+                "[\(logTag)] field colour is now #\(key) —"
+                    + (artist
+                        ? " artist page: pw's field (a deep solid, fading to black down the page)"
+                        : " playlist/album: Melox's solid accent (the 34%→100% veil over the blurred"
+                            + " cover is what deepens it going down)")
             )
         }
+    }
+
+    /// 窗口高度（pw 的 `windowHeight()`，`SGRField.m:16-19`）：黑渐变按**窗口**锚定，不按页面。
+    private static func windowHeight(fallback: CGFloat) -> CGFloat {
+        if let height = frontWindow()?.bounds.height, height > 0 { return height }
+        return fallback > 0 ? fallback : 874
+    }
+
+    /// **这一页的底色用哪个颜色**：专辑 / 歌单页 = 封面的平均色（Melox 那套照旧）；
+    /// **艺人页 = pw 压暗过的那一版**（`fieldColourFor`）—— 白字要在它上面读得清。
+    /// 取不到颜色就是 nil（调用方各自早退，不留半套东西）。
+    private static func pageColour(for target: Target) -> UIColor? {
+        guard let colour = target.color else { return nil }
+        return target.kind == .artist ? fieldColourFor(colour) : colour
+    }
+
+    /// **艺人页的底色** = pw 的 `SGRFieldColorFor`（`SGRPalette.m:76-97`）：保住色相，
+    /// **饱和度压到 0.55**、**线性亮度压到 0.07**。
+    ///
+    /// ★★ 2026-10-18（用户：「现在的模糊艺人底会有看不清字的情况，做成往下渐变变灰/黑的吧」）：
+    /// 这一步就是"**白字读得清**"的全部保证 —— 不管封面是一片白还是一团花，底色都落到很深的一档
+    /// （`#F2F7FB` 那张白猫 ⇒ 约 `#494B4C`；杰克逊那张 ⇒ 一块暗棕），再叠下面那条渐到黑。
+    /// pw 那边是整套重设计的前提（它注释里逐字：*"the redesign is AMOLED throughout"*）。
+    ///
+    /// ⚠️ 亮度在**线性空间**里算（sRGB 先解 gamma）—— 直接在 sRGB 数值上乘会偏亮，
+    ///    那正是"看着还是发灰、字还是发虚"的来源。两个换算函数各自只此一份。
+    private static func fieldColourFor(_ colour: UIColor) -> UIColor {
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 1
+        if !colour.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
+            var white: CGFloat = 0
+            guard colour.getWhite(&white, alpha: &alpha) else {
+                return UIColor(red: 0.07, green: 0.07, blue: 0.07, alpha: 1)
+            }
+            red = white
+            green = white
+            blue = white
+        }
+        let clamped = UIColor(
+            red: min(1, max(0, red)),
+            green: min(1, max(0, green)),
+            blue: min(1, max(0, blue)),
+            alpha: 1
+        )
+        var hue: CGFloat = 0
+        var saturation: CGFloat = 0
+        var brightness: CGFloat = 0
+        clamped.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        let capped = UIColor(
+            hue: hue,
+            saturation: min(saturation, maxFieldSaturation),
+            brightness: brightness,
+            alpha: 1
+        )
+        capped.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+
+        var linearRed = linearised(red)
+        var linearGreen = linearised(green)
+        var linearBlue = linearised(blue)
+        let luminance = 0.2126 * linearRed + 0.7152 * linearGreen + 0.0722 * linearBlue
+        if luminance > maxFieldLuminance {
+            let scale = maxFieldLuminance / luminance
+            linearRed *= scale
+            linearGreen *= scale
+            linearBlue *= scale
+        }
+        return UIColor(
+            red: encoded(linearRed),
+            green: encoded(linearGreen),
+            blue: encoded(linearBlue),
+            alpha: 1
+        )
+    }
+
+    /// sRGB 编码值 → 线性（pw 的 `toLinear`，`SGRPalette.m:68-70`）。
+    private static func linearised(_ component: CGFloat) -> CGFloat {
+        component <= 0.04045 ? component / 12.92 : pow((component + 0.055) / 1.055, 2.4)
+    }
+
+    /// 线性 → sRGB 编码值（pw 的 `toEncoded`，`SGRPalette.m:72-74`）。
+    private static func encoded(_ component: CGFloat) -> CGFloat {
+        component <= 0.0031308 ? component * 12.92 : 1.055 * pow(component, 1 / 2.4) - 0.055
     }
 
     /// Melox 的**第三层**：`取色@34% → 取色`，盖在模糊封面**之上**、页面内容**之下**。
@@ -759,7 +909,7 @@ enum EntityPageAppearance {
     ///   · ① **模糊**那张（本函数）铺满页面顶部，负责"化开之后露出来的那片颜色"；
     ///   · ② **清晰**那张（`ensureSharpHero`）是**满幅的封面本身**，底部 54% 起化开 ——
     ///     于是"整张封面融进底子"，而不是"模糊底 + 原地一张小卡"。
-    private static func ensureHero(on target: Target, sharpCover: Bool) {
+    private static func ensureHero(on target: Target, sharpCover: Bool, colour: UIColor?) {
         guard let cover = target.cover else { return }
         // ★ 2026-10-13：**图还没到也要先把 Spotify 那张小封面藏掉**。原来这里和 `let source`
         //   一起 guard，于是"封面元素在、图还没加载出来"的那几拍里原生封面一直亮着
@@ -767,6 +917,17 @@ enum EntityPageAppearance {
         concealNativeCover(cover)
         guard let source = coverImage(in: cover) else { return }
         let container = target.page
+
+        // ★★ 2026-10-18（用户：「现在的模糊艺人底会有看不清字的情况，做成往下渐变变灰/黑的吧，
+        //    pw 的逻辑」）：**艺人页不再铺模糊底，也没有 veil** —— pw 的 `SGRArtworkField` 在**页面**上
+        //    只有"一块深色 + 往黑渐变"（`_backdrop` 那一层只有**播放器**用，见 `SGRField.h:1-4`），
+        //    而模糊封面正是"看不清字"的来源。这里直接交给照片那一层：照片的下缘化进 `paintField`
+        //    已经画好的那片深色。
+        //    ⇒ 下面 Melox 那两层（模糊封面 + veil）**只走专辑 / 歌单页**。
+        if sharpCover {
+            ensureSharpHero(cover: cover, source: source, page: container, colour: colour)
+            return
+        }
 
         let height = max(180, min(container.bounds.height * heroHeightRatio, 560))
         // ★★ 2026-10-06（用户看真机：「专辑页上面是有缓冲了，但是缓冲**没有和封面上部分接上**，
@@ -797,8 +958,9 @@ enum EntityPageAppearance {
             hero = view
             writeDebugLog(
                 "[\(logTag)] hero \(frameText(frame)) in \(type(of: container))"
-                    + " — blurred backdrop for the colour the dissolve fades into;"
-                    + " the sharp full-bleed cover goes on top of it (see `ensureSharpHero`)"
+                    + " — blurred backdrop for the colour the dissolve fades into"
+                    + " (album / playlist only: the artist page draws pw's field instead,"
+                    + " see `blackFrom`)"
             )
         }
 
@@ -815,14 +977,9 @@ enum EntityPageAppearance {
         applyDissolveMask(to: view, opaqueFraction: 0.54)
 
         // ③ ★★ 2026-10-18（Melox）：**模糊封面之上**盖那条 `取色@34% → 取色` —— 见 `ensureVeil`。
-        ensureVeil(above: view, in: container, colour: target.color)
-
-        // ② ★ 2026-10-13（用户看真机后：「也不是把封面整个融进底子」）：
-        //    **把清晰的封面本身铺成满幅**、底部化进下面那片颜色。
-        // ★★ 2026-10-18（用户拍板选 A，照片 123）：**这一层只有艺人页要** —— 专辑/歌单页照 AM
-        //    保留 Spotify 自己那张封面卡片（248×248 / 262×262），不再铺满幅。
-        guard sharpCover else { return }
-        ensureSharpHero(cover: cover, source: source, page: container, colour: target.color)
+        //    ⚠️ 只有走到这里才是**专辑 / 歌单页**：艺人页在上面那个 `if sharpCover` 里就返回了
+        //    （它要的是 pw 的"深色底 + 往黑渐变"，不是模糊底 —— 见那段说明）。
+        ensureVeil(above: view, in: container, colour: colour)
     }
 
     /// 满幅那张清晰封面。

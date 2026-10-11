@@ -650,6 +650,12 @@ enum EntityPageHeaderManager {
         return false
     }
 
+    /// 现在认下的"关于艺人"那一块（没有就是 nil）—— 给 `eeveeMaterialiseBio` 的"扫列表"用。
+    ///
+    /// ★★ 2026-10-18 第三轮（用户：「按下 i 之后还是没有跳转到 艺人介绍」）：那一块是懒加载的，
+    /// 页面刚打开时整棵树只有 1000 来个节点 ⇒ 扫一遍列表把它逼出来之后，这里就能拿到它。
+    static var artistBioTarget: UIView? { cachedArtistBio }
+
     /// 藏掉艺人页头里 Spotify 自己画的东西，**绕开那张照片**，而且**只用空 mask**（见 `eeveeBlank`）。
     private static func blankArtistChrome(in root: UIView, avoiding cover: UIView?, skipping ours: UIView) {
         for sub in root.subviews {

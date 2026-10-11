@@ -170,6 +170,137 @@ class AlbumCellBackgroundHook: ClassHook<UIView> {
     }
 }
 
+/// ★★ 2026-10-18 第三轮（用户：「**艺人页的 你已点赞** 和 **歌单页的那几个按键** 可以全部去掉」）：
+/// **把那一整格折成 0 高**（不是藏内容 —— 藏了会留一块空白）。
+///
+/// 手法照本仓库已经验证过的那条（`PlayerCardCellHook`，`PlayerDeclutter.x.swift:253`）与 pw 的
+/// `ArtistSections.x`：cell 在 `preferredLayoutAttributesFittingAttributes(_:)` 里被问"你要多高"时
+/// 回答 **0** ✓。两个目标各认各的：
+///
+///   · **歌单页那排 pill**（添加 / 编辑 / 排序 / 姓名和详情）= 真机树里
+///     `ElementContentView<String, CurationActionsToolbarElement>` 里那个
+///     `id=PlaylistCuration.Row.CurationActionsToolbar` 的 414×52 视图
+///     （日志 7/8/12/17/47/52… 里到处都有）。pw 把同一个字符串写成常量
+///     `SGRPlaylistCurationIdentifier`（`PlaylistMenu.x:35`）—— 连它也是这么摘的 ✓。
+///   · **艺人页的「你已点赞」那一排** —— 它**没有 accessibility id**（翻遍我们的树都没有），
+///     但它是 `Creator_LikedSongsElementKit` 那一族（`dump-9.1.88.txt:7762-7764`：
+///     `LikedSongsElementProvider` / `CollectionObserver` / `ConnectivityObserver`；Swift 泛型实参
+///     会出现在 `NSStringFromClass` 里，真机树就是 `ElementContentView<String, …Element>` 这种写法）
+///     ⇒ 按**类名**认，而且**只在页面根就是 `creator-page` 时**折 —— 「喜欢的歌曲」那一页不动 ✓。
+enum EntityPageSectionDrop {
+
+    static let curationIdentifier = "PlaylistCuration.Row.CurationActionsToolbar"
+    static let likedSongsFragment = "LikedSongs"
+    /// 已经为这一页让布局重算过一次（`invalidateLayout`）。
+    private static weak var invalidatedFor: UIView?
+    private static var didReport = false
+
+    /// 这一格要不要折成 0。
+    ///
+    /// ⚠️ **故意不缓存判定**：cell 会被复用，同一个 `ObjectIdentifier` 先后装着不同的 section
+    /// —— 缓存下来就会"折错格子"。这里只做**有界**的子树走（一个 cell 通常十几个视图），
+    /// 而且只在 `preferredLayoutAttributesFittingAttributes` 那一拍问一次。
+    ///
+    /// 两道闸门：**在我们接管的页面上**（`EntityPageRepaint.root`，与清底色同一条）⇒ 内容对得上；
+    /// 「已点赞」那一族还要求**页面根就是 `creator-page`**（「喜欢的歌曲」那一页也是 playlist，
+    /// 不认这一条会把那一页整段折掉 ✗）。
+    static func shouldCollapse(_ cell: UIView) -> Bool {
+        guard let root = EntityPageRepaint.root, cell.isDescendant(of: root) else { return false }
+        if containsIdentifier(cell, curationIdentifier) {
+            scheduleRelayout(of: cell)
+            return true
+        }
+        if root.accessibilityIdentifier == "creator-page", containsClassName(cell, likedSongsFragment) {
+            scheduleRelayout(of: cell)
+            return true
+        }
+        return false
+    }
+
+    /// 折了之后**让布局重算一次** —— 高度是布局问出来的，只在下一趟才会问第二遍；不主动作废的话，
+    /// 用户得等到页面因为别的原因重排才看得到效果（pw 的 `dropHeadingOf` 也是这么干的）。
+    private static func scheduleRelayout(of cell: UIView) {
+        var node: UIView? = cell.superview
+        var depth = 0
+        while let current = node, depth < 8 {
+            if let collection = current as? UICollectionView {
+                guard invalidatedFor !== EntityPageRepaint.root else { return }
+                invalidatedFor = EntityPageRepaint.root
+                if !didReport {
+                    didReport = true
+                    writeDebugLog(
+                        "[PageRepaint] dropping a section to 0 height (playlist pills / the artist's"
+                            + " liked-songs shelf) — the list is asked to lay out again"
+                    )
+                }
+                DispatchQueue.main.async { collection.collectionViewLayout.invalidateLayout() }
+                return
+            }
+            node = current.superview
+            depth += 1
+        }
+    }
+
+    /// 有界地往下找"带这个 accessibility id"的视图。
+    private static func containsIdentifier(_ root: UIView, _ identifier: String) -> Bool {
+        var queue: [UIView] = [root]
+        var visited = 0
+        while !queue.isEmpty, visited < 200 {
+            let view = queue.removeFirst()
+            visited += 1
+            if view.accessibilityIdentifier == identifier { return true }
+            queue.append(contentsOf: view.subviews)
+        }
+        return false
+    }
+
+    /// 有界地往下找"类名里含这个片段"的视图（Swift 泛型实参会出现在类名里）。
+    private static func containsClassName(_ root: UIView, _ fragment: String) -> Bool {
+        var queue: [UIView] = [root]
+        var visited = 0
+        while !queue.isEmpty, visited < 200 {
+            let view = queue.removeFirst()
+            visited += 1
+            if NSStringFromClass(type(of: view)).contains(fragment) { return true }
+            queue.append(contentsOf: view.subviews)
+        }
+        return false
+    }
+}
+
+/// 折 `Element_List.CollectionViewCell`（艺人页那一族的 section 都是它）。
+class ElementListSectionDropHook: ClassHook<UICollectionViewCell> {
+    typealias Group = EntityPageRepaintGroup
+    static let targetName = "_TtC12Element_List18CollectionViewCell"
+
+    func preferredLayoutAttributesFittingAttributes(
+        _ attributes: UICollectionViewLayoutAttributes
+    ) -> UICollectionViewLayoutAttributes {
+        let result = orig.preferredLayoutAttributesFittingAttributes(attributes)
+        guard EntityPageSectionDrop.shouldCollapse(target) else { return result }
+        result.size = CGSize(width: result.size.width, height: 0)
+        // 折起来之后内容仍在视图里，不裁剪会溢到相邻格子上（`PlayerCardCellHook` 同一条）。
+        target.clipsToBounds = true
+        return result
+    }
+}
+
+/// 折歌单页的 `ElementCollectionViewCell`（pw 的 `PlaylistRows.x:89` 挂的就是这个类）。
+class PlaylistSectionDropHook: ClassHook<UICollectionViewCell> {
+    typealias Group = EntityPageRepaintGroup
+    static let targetName = "_TtC35ListUXPlatform_FreeTierPlaylistImpl25ElementCollectionViewCell"
+
+    func preferredLayoutAttributesFittingAttributes(
+        _ attributes: UICollectionViewLayoutAttributes
+    ) -> UICollectionViewLayoutAttributes {
+        let result = orig.preferredLayoutAttributesFittingAttributes(attributes)
+        guard EntityPageSectionDrop.shouldCollapse(target) else { return result }
+        result.size = CGSize(width: result.size.width, height: 0)
+        target.clipsToBounds = true
+        return result
+    }
+}
+
 func activateEntityPageRepaint() {
     // 底色拦截只为「满幅封面 + 取色底」那颗开关服务（它不在，页面本来就不该被清成透明）。
     guard UserDefaults.entityPageDissolve else {
@@ -182,6 +313,9 @@ func activateEntityPageRepaint() {
         PlaylistListBackgroundHook.targetName,
         AlbumListBackgroundHook.targetName,
         AlbumCellBackgroundHook.targetName,
+        // ★★ 2026-10-18 第三轮：「你已点赞」/ 歌单 pill 那两格折成 0 高（见 `EntityPageSectionDrop`）。
+        ElementListSectionDropHook.targetName,
+        PlaylistSectionDropHook.targetName,
     ]
     let present = targets.filter { NSClassFromString($0) != nil }
     guard !present.isEmpty else {

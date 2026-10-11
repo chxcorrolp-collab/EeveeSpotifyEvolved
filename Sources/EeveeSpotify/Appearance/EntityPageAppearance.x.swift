@@ -87,8 +87,12 @@ enum EntityPageAppearance {
     ///    `solidUntil = 名字上沿 − meltSpanRatio × 页头高`（再往上才是完全不透明的照片）。
     /// 页头多高、Spotify 自己把那一行摆在哪，都不再影响收口落点；名字与三颗按钮一律落在平色上。
     private static let meltGap: CGFloat = 8
-    /// 化开那一段占页头高度的比例（520pt 的艺人页 ⇒ 104pt）。
-    private static let meltSpanRatio: CGFloat = 0.20
+    /// 化开那一段占页头高度的比例（520pt 的艺人页 ⇒ 156pt）。
+    ///
+    /// ★★ 2026-10-18 第三轮（用户：「**这有点难看了吧**」，照片 130）：0.20（104pt）那条化开太陡，
+    /// 照片的下缘看着像**被切断**。AM 那边收得慢（照片 118 的化开带约 60pt，但它的照片本来就只有
+    /// 330pt 高、下缘就是照片自己的边）⇒ 我们这边放宽到 0.30，让它像"化掉"而不是"切掉"。
+    private static let meltSpanRatio: CGFloat = 0.30
     /// 化开那一段的**下限**：页头矮的时候别把渐变整成一条硬边。
     private static let minMeltSpan: CGFloat = 90
     /// ★★ 2026-10-18（用户：「**现在的模糊艺人底会有看不清字的情况，做成往下渐变变灰/黑的吧，pw 的逻辑**」）
@@ -114,7 +118,20 @@ enum EntityPageAppearance {
     /// 后一条是最要紧的：**任何封面（哪怕一片白）都被压成一块很深的颜色** ⇒ 白字在上面读得清。
     /// 实测：`#F2F7FB`（Nanatsukaze 那张白猫）⇒ `#494B4C` 那一档；杰克逊那张 ⇒ 一块暗棕。
     private static let maxFieldSaturation: CGFloat = 0.55
+    /// ★★ 2026-10-18 第三轮（用户看真机：「**这有点难看了吧**」，照片 129/130）：pw 那个 0.07 是给
+    /// **纯黑 AMOLED 底**定的，一片白的封面被它压成 `#494B4C`（深板岩）—— 艺人页整片发暗、白照片像
+    /// 贴上去的。AM 自己的规则是 **"顶部 = 作品色压到中调，往下渐到黑"**：
+    ///
+    /// | | AM | 我们（0.07） | 我们（0.20） |
+    /// |---|---|---|---|
+    /// | 艺人页（照片 118，白猫） | 淡灰 `#96999B` | `#494B4C` | ≈ `#7B7D7F` |
+    /// | 专辑页（照片 123，浅封面） | 很深的灰 | 深 | 深 |
+    /// | 歌单页（照片 129） | 深（同 123） | `#344E5B` ✓ | 略浅 |
+    ///
+    /// ⇒ **艺人页用 0.20，专辑 / 歌单页留 pw 的 0.07**（129 那张用户没嫌难看，而且 AM 的专辑页
+    /// 本来就是深底）。要更亮/更暗就改这一个数。
     private static let maxFieldLuminance: CGFloat = 0.07
+    private static let artistFieldLuminance: CGFloat = 0.20
     /// ⚠️ 下面两条（Melox 模糊底的常数）与 `blurred()` / `ensureVeil()` / `hero` 一起**已停用**
     /// （2026-10-18 第二轮，三页都不再铺模糊底）—— 函数与常数留着没删，纯粹是为了让这一版
     /// 的改动面小一点；下一次清理时一起删。
@@ -645,7 +662,9 @@ enum EntityPageAppearance {
     /// 就是"深底 + 封面卡片 + 白字"**（照片 123：底色是暗灰、标题/艺人/元数据全是白字）⇒ 统一到 pw 这套。
     private static func pageColour(for target: Target) -> UIColor? {
         guard let colour = target.color else { return nil }
-        return fieldColourFor(colour)
+        // ★★ 2026-10-18 第三轮：**艺人页压得轻、专辑/歌单页压得重**（见 `artistFieldLuminance` 那张表）。
+        let ceiling = target.kind == .artist ? artistFieldLuminance : maxFieldLuminance
+        return fieldColourFor(colour, ceiling: ceiling)
     }
 
     /// **艺人页的底色** = pw 的 `SGRFieldColorFor`（`SGRPalette.m:76-97`）：保住色相，
@@ -658,7 +677,7 @@ enum EntityPageAppearance {
     ///
     /// ⚠️ 亮度在**线性空间**里算（sRGB 先解 gamma）—— 直接在 sRGB 数值上乘会偏亮，
     ///    那正是"看着还是发灰、字还是发虚"的来源。两个换算函数各自只此一份。
-    private static func fieldColourFor(_ colour: UIColor) -> UIColor {
+    private static func fieldColourFor(_ colour: UIColor, ceiling: CGFloat) -> UIColor {
         var red: CGFloat = 0
         var green: CGFloat = 0
         var blue: CGFloat = 0
@@ -694,8 +713,8 @@ enum EntityPageAppearance {
         var linearGreen = linearised(green)
         var linearBlue = linearised(blue)
         let luminance = 0.2126 * linearRed + 0.7152 * linearGreen + 0.0722 * linearBlue
-        if luminance > maxFieldLuminance {
-            let scale = maxFieldLuminance / luminance
+        if luminance > ceiling {
+            let scale = ceiling / luminance
             linearRed *= scale
             linearGreen *= scale
             linearBlue *= scale
@@ -1075,8 +1094,16 @@ enum EntityPageAppearance {
 
         // 高度 = **到过的最深处**，下限 `minHeroHeight`，**只增不减** ——
         // pw：页头还在加载时 block 的位置偏高，取"当前值"会让图够不到标题、中间留一条裸色带。
+        //
+        // ★★ 2026-10-18 第三轮（用户：「**这有点难看了吧**」，照片 130）：**铺满宿主那条改成"按图自己
+        // 的宽高比"** —— 原来一律拉到 520pt（`host.bounds.height`），而 Spotify 给艺人页的照片是**方图**
+        // ⇒ `scaleAspectFill` 为了填满 520pt 会把它**放大 1.26 倍、再从两侧各裁掉 53pt**（照片 130 里的
+        // 猫明显比 AM 参考 118 里大一圈，而且下半身被切了）。现在高度取 `宽 × 图的高宽比`
+        // （方图 = 414pt，正好与照片自己的下缘对齐）⇒ `scaleAspectFill` 既不放大也不裁 ✓。
+        let imageAspect = source.size.width > 1 ? max(0.4, source.size.height / source.size.width) : 1
+        let natural = host.bounds.width * imageAspect
         let reach = fillsHost
-            ? max(minHeroHeight, host.bounds.height)
+            ? max(minHeroHeight, min(host.bounds.height, natural))
             : max(minHeroHeight, coverFrame.maxY + EntityPageHeaderMetrics.titleRise)
         let previous = (objc_getAssociatedObject(host, &heroHeightKey) as? NSNumber)?.doubleValue ?? 0
         let height = max(previous, reach)

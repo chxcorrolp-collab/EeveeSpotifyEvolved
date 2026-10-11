@@ -219,6 +219,61 @@ func eeveeScrollPageDown(from view: UIView) -> Bool {
     return true
 }
 
+/// 把列表**扫一遍**，逼"关于艺人"那一段建出来，然后返回它。
+///
+/// ★★ 2026-10-18 第三轮（用户：「**按下 i 之后还是没有跳转到 艺人介绍**」；日志 98 逐字
+///    `leading MISSING` + `fired: NOTHING yet (the target is not built) — scrolled the page a screen`）：
+///    那一块是**懒加载的 section**（真机树里在列表深度 20），页面刚打开时整棵树只有 979~1678 个节点
+///    ⇒ 它压根还没建出来。一次只滚一屏的兜底要用户连点好几次。
+///
+/// 做法：**在同一个主线程回合里**把最外层 scroll view 逐屏（`animated: false`）往下翻，
+/// collection view 会为每一屏建 cell；那一段建出来时 `SPTArtistAboutBiographyView` 的 `layoutSubviews`
+/// 就会响（`ArtistBiographyViewHook`），我们当场拿到它。全程不动画、最后**回到原位**，用户看不到跳动。
+///
+/// ⚠️ 步数有上限（12 屏）；找不到就返回 nil，调用方照旧退回"滚一屏"那条老路。
+@discardableResult
+func eeveeMaterialiseBio(from view: UIView) -> UIView? {
+    guard let scroll = eeveeOutermostScroll(from: view), scroll.bounds.height > 1 else { return nil }
+    let origin = scroll.contentOffset
+    let bottom = max(0, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+    let step = max(120, scroll.bounds.height * 0.9)
+    var offset: CGFloat = 0
+    var passes = 0
+    var found: UIView?
+    while offset <= bottom + 1, passes < 12 {
+        passes += 1
+        scroll.setContentOffset(CGPoint(x: origin.x, y: offset), animated: false)
+        scroll.layoutIfNeeded()
+        if let bio = EntityPageHeaderManager.artistBioTarget {
+            found = bio
+            break
+        }
+        offset += step
+    }
+    if found == nil { found = EntityPageHeaderManager.artistBioTarget }
+    // 回到用户原来的位置（不管找没找到）—— 只有真找到时，调用方才把它滚进视野。
+    scroll.setContentOffset(origin, animated: false)
+    writeDebugLog(
+        "[EntityPageHeader] about-artist sweep — \(passes) step(s) over"
+            + " \(Int(scroll.contentSize.height))pt, "
+            + (found == nil ? "nothing built" : "found it")
+    )
+    return found
+}
+
+/// 往上找**最外层**的 `UIScrollView`（与 `eeveeScrollPageDown` 同一条，只是这里只取不滚）。
+private func eeveeOutermostScroll(from view: UIView) -> UIScrollView? {
+    var outermost: UIScrollView?
+    var node: UIView? = view.superview
+    var levels = 0
+    while let current = node, levels < 24 {
+        levels += 1
+        if let scroll = current as? UIScrollView { outermost = scroll }
+        node = current.superview
+    }
+    return outermost
+}
+
 /// 以"点一下"的方式触发 Spotify 自己的控件。**返回真正走通的那条路**（`nil` = 一条都没通）。
 ///
 /// ## 为什么返回值是"路"而不是 Bool（这是被真机打回来的第二次）
@@ -595,7 +650,13 @@ final class EntityPageHeaderButton: UIControl {
 
         // 转发目标：**优先 `fireTarget`**；只有没开"先滚进视野"这一档时才退回 `source`
         // （否则目标缺失时就会去点那颗只负责显示字形的 shuffle —— 见 `fireTarget` 的说明）。
-        let target = fireTarget ?? (scrollsSourceIntoView ? nil : source)
+        var target = fireTarget ?? (scrollsSourceIntoView ? nil : source)
+        if target == nil, scrollsSourceIntoView {
+            // ★★ 2026-10-18 第三轮（用户：「按下 i 之后还是没有跳转到 艺人介绍」）：
+            //    目标**还没建出来** ⇒ 先把列表扫一遍把它逼出来（见 `eeveeMaterialiseBio`），
+            //    不再只是"滚一屏"（那要用户连点好几次，而且滚过头就找不回来了）。
+            target = eeveeMaterialiseBio(from: self)
+        }
         var scrolled = false
         var path = "NOTHING (no target, no tap recogniser)"
         if let target {

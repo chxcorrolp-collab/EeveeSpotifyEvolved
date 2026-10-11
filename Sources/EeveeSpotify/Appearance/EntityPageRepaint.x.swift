@@ -220,6 +220,41 @@ enum EntityPageSectionDrop {
     /// ⚠️ 这个类**没有 accessibility id**（2026-10-18 的树），所以只能按类名认；
     /// 上面那条 id 判据是第五轮加的**第二顺位**。
     static let aboutArtistFragment = "SPTArtistAboutBiographyView"
+    /// ★★ 2026-10-18 第六轮：**类名那一段**（Swift mangled 名里真正稳定的模块名）。
+    ///
+    /// 与 `PlayerDeclutter.PlayerCard.markers` 的 `.aboutArtist: ["CreatorBiography"]`
+    /// **一字不差** —— 那一套在听歌页是实测可用的（上游 `PlayerDeclutter.x.swift:30` 同样这么写），
+    /// 而它在艺人页要认的是同一张卡。
+    ///
+    /// ⚠️ 这一条是**关键**：本仓库自己那条真机树的注释
+    /// （`EntityPageAppearance.x.swift:948-954`，逐字来自**艺人页**）写的是
+    ///
+    /// ```
+    /// 10.CreatorBiographyCardLayout@0,0,374,416,bg=#282828      ← 艺人简介卡
+    /// 11.OBJC_ONLY_Label id=Components.UI.CreatorBiographyCard.HeaderLabel
+    /// 14.ContainerView   id=Components.UI.CreatorBiographyCard.BiographyLabel
+    /// ```
+    ///
+    /// —— 类名里是 `CreatorBiography`，**没有** `SPTArtistAboutBiographyView` 这个词。
+    /// 也就是说 `aboutArtistFragment` 那条判据在**这一版艺人页**上永远不可能命中。
+    static let aboutArtistClassFragment = "CreatorBiography"
+
+    /// 艺人页那两族的**统一判据**：子树里任意**类名**或任意 **accessibility id**
+    /// 含其中之一 ⇒ 折。
+    ///
+    /// ★★ 2026-10-18 第六轮：判据统一成"子串"。这套写法本仓库已经有**两处实测可用**：
+    ///   · `PlayerDeclutter.PlayerCard.markers`（听歌页卡片，含 `.aboutArtist → "CreatorBiography"`）；
+    ///   · 上游 `PlaylistHides.isPills`（id 子串）。
+    /// 而之前漏掉的两个模块，各自的真实名字都只有这种写法认得出来：
+    ///   · 「你已点赞」→ id `Components.UI.LikedSongs.Row`（日志 99 逐字），类名却是 `ListRow`；
+    ///   · 「关于艺人」→ 类名 `CreatorBiographyCardLayout`，见上面那条。
+    static let artistDropMarkers = [
+        likedSongsFragment,
+        likedSongsIdentifier,
+        aboutArtistIdentifierFragment,
+        aboutArtistClassFragment,
+        aboutArtistFragment,
+    ]
 
     /// 每一格"是什么"与"已经决定不要的格子" —— pw 的 `kindsOf` / `droppedOf`
     /// （`ArtistSections.x:49-65`）；每段 = 间隔格 + 标题格 + 内容格。
@@ -268,12 +303,9 @@ enum EntityPageSectionDrop {
             return true
         }
 
-        var drop = containsIdentifier(cell, curationIdentifier)
+        var drop = containsMarker(cell, curationIdentifier)
         if !drop, root.accessibilityIdentifier == "creator-page" {
-            drop = containsIdentifier(cell, likedSongsIdentifier)
-                || containsIdentifierFragment(cell, aboutArtistIdentifierFragment)
-                || containsClassName(cell, likedSongsFragment)
-                || containsClassName(cell, aboutArtistFragment)
+            drop = artistDropMarkers.contains { containsMarker(cell, $0) }
         }
         if drop {
             if let path { dropPreceding(path) }
@@ -411,17 +443,23 @@ enum EntityPageSectionDrop {
         return nil
     }
 
-    /// 有界地往下找"**id 里含**这个片段"的视图。
+    /// 有界地往下找"**类名或 id 里含**这个片段"的视图 —— 折行判据的唯一入口。
     ///
-    /// 为什么要"含"而不是"等于"：有的 id 尾上带一串哈希
-    /// （真机树里 `Components.UI.ContextMenuButton-0D5pkUE6Uv8PXqonJZr2Fv` 就是），
-    /// 写死全名会在版本之间悄悄失配。片段取的是**不会漂的那一半**。
-    private static func containsIdentifierFragment(_ root: UIView, _ fragment: String) -> Bool {
+    /// 为什么是"含"而不是"等于"：
+    ///   · 有的 id 尾上带一串哈希（真机树里 `Components.UI.ContextMenuButton-0D5pkUE6Uv8PXqonJZr2Fv`），
+    ///     写死全名会在版本之间悄悄失配；
+    ///   · 类名是 Swift mangled 名，**只有模块名那一段稳定**
+    ///     （`_TtC22Lyrics_CardElementImpl19LyricsCardElementUI` 这类）。
+    ///
+    /// 这套写法与 `PlayerDeclutter.PlayerCard.markers` / 上游 `PlaylistHides.isPills` 一致
+    /// —— 那两处都是实测可用的。
+    private static func containsMarker(_ root: UIView, _ fragment: String) -> Bool {
         var queue: [UIView] = [root]
         var visited = 0
         while !queue.isEmpty, visited < 200 {
             let view = queue.removeFirst()
             visited += 1
+            if NSStringFromClass(type(of: view)).contains(fragment) { return true }
             if (view.accessibilityIdentifier ?? "").contains(fragment) { return true }
             queue.append(contentsOf: view.subviews)
         }
@@ -487,8 +525,8 @@ enum EntityPageSectionDrop {
             didDumpCells = true
             writeDebugLog(
                 "[PageRepaint] cell dump done — those are the artist page's rows;"
-                    + " if none of them carries LikedSongs / CreatorBiographyCard /"
-                    + " SPTArtistAboutBiographyView, the predicate needs the names above"
+                    + " the drop markers are \(artistDropMarkers.joined(separator: " / ")),"
+                    + " so any row carrying none of them is a row we cannot fold yet"
             )
         }
     }
@@ -518,19 +556,6 @@ enum EntityPageSectionDrop {
                 + " (\(seenCellCount) layout pass(es) seen) — so the class is right;"
                 + " if no `cell #` lines follow it, this page lays its rows out by fixed height"
         )
-    }
-
-    /// 有界地往下找"类名里含这个片段"的视图（Swift 泛型实参会出现在类名里）。
-    private static func containsClassName(_ root: UIView, _ fragment: String) -> Bool {
-        var queue: [UIView] = [root]
-        var visited = 0
-        while !queue.isEmpty, visited < 200 {
-            let view = queue.removeFirst()
-            visited += 1
-            if NSStringFromClass(type(of: view)).contains(fragment) { return true }
-            queue.append(contentsOf: view.subviews)
-        }
-        return false
     }
 
     /// 这棵子树里**一个 accessibility id 都没有**（pw 的间隔格判据）。

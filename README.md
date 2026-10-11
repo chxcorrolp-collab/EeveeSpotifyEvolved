@@ -2,7 +2,7 @@
 
 # EeveeSpotifyEvolved
 
-**An iOS plugin based on Spotify 9.1.88** — word-by-word karaoke, an Apple Music–style page, and a liquid-glass look.
+**An iOS plugin based on Spotify 9.1.88** — word-by-word karaoke, Apple Music–style page, and a liquid-glass look.
 
 [![iOS](https://img.shields.io/badge/iOS-16.1%2B-000000?style=for-the-badge&logo=ios&logoColor=white)](#system-requirements)
 [![Spotify](https://img.shields.io/badge/Spotify-9.1.88-1ED760?style=for-the-badge&logo=spotify&logoColor=white)](#versions)

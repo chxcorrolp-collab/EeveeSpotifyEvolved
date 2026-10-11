@@ -1268,7 +1268,7 @@ func activateEntityPageHeader() {
 
     let required = [
         EntityPageHeaderLayoutHook.targetName,
-        EntityPageHeaderPlayButtonHook.targetName,
+        EntityPagePlayButtonHook.targetName,
     ]
     let missing = required.filter { NSClassFromString($0) == nil }
     guard missing.isEmpty else {

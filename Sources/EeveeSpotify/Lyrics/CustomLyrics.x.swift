@@ -302,9 +302,19 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
 
         if amllPreferred {
             writeDebugLog("[Lyrics] AMLL preferred — trying AMLL first, fallback target: \(source.description)")
+
+            // ★★ 2026-10-16「实验 → PetitLyrics 回退 NetEase」（默认关）：
+            //    来源 = PetitLyrics、且「Genius 回退」开着时，在 PetitLyrics 与 Genius 之间
+            //    多插一跳网易云 ⇒ 链 = AMLL → PetitLyrics → NetEase → Genius。
+            //    ⚠️ 三个条件缺一不可；「AMLL 优先」是走到这一段的前提（所以这里不用再判它）。
+            let petitToNetEase = source == .petit
+                && options.geniusFallback
+                && UserDefaults.experimentsOptions.petitLyricsNetEaseFallback
+
             // 把**实际**会走的链写死在一行里（判读用）：Genius 只在"用户源也失败"时才兜一次。
             writeDebugLog(
                 "[Lyrics] chain: AMLL → \(source.description)"
+                    + (petitToNetEase ? " -> NetEase" : "")
                     + (options.geniusFallback && source != .genius ? " -> Genius (only if the user's source fails too)" : " (no Genius fallback)")
             )
 
@@ -363,6 +373,39 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
                     "[Lyrics] AMLL unavailable — falling back to \(source.description) with its own settings"
                 )
             }
+            // ★★ 2026-10-16「PetitLyrics 回退 NetEase」实验：PetitLyrics 与 Genius 之间多插一跳网易云。
+            if petitToNetEase {
+                // 第一跳：PetitLyrics，**不带** Genius 兜底（Genius 是整条链的最后一跳）。
+                do {
+                    let petit = try requestSingleSource(
+                        .petit,
+                        searchQuery: searchQuery,
+                        options: options,
+                        recordFallbackError: false,
+                        allowGeniusFallback: false
+                    )
+                    return makeLyrics(
+                        from: petit.dto,
+                        source: petit.source
+                    )
+                } catch {
+                    writeDebugLog("[Lyrics] PetitLyrics failed — falling back to NetEase (experiment)")
+                }
+                // 第二跳：NetEase —— 它那一跳按用户设置决定要不要最后兜一次 Genius
+                // （`options.geniusFallback` 在这个实验里本来就是开着的，见上面 `petitToNetEase`）。
+                let netEase = try requestSingleSource(
+                    .netease,
+                    searchQuery: searchQuery,
+                    options: options,
+                    recordFallbackError: false,
+                    allowGeniusFallback: true
+                )
+                return makeLyrics(
+                    from: netEase.dto,
+                    source: netEase.source
+                )
+            }
+
             // 用户设置的就是 Genius 时不必再走下面的 geniusFallback，否则会重复请求一次。
             let result = try requestSingleSource(
                 source,

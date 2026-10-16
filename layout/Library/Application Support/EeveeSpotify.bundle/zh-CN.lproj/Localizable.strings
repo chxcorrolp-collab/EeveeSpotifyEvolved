@@ -91,6 +91,15 @@ dark_popups = "深色弹窗";
 livecontainer_sharing = "分享到 LiveContainer";
 livecontainer_sharing_description = "如果不支持所选分享目标，则分享到 LiveContainer 并复制 URL。";
 
+show_instagram_destination = "显示 Instagram 分享位";
+show_instagram_destination_description = "在分享面板里显示 Instagram（快拍 / 私信 / Notes）目标。它强制三条服务端 flag，所以改完要重启 Spotify；如果服务端本来没下发某一条，则会补一条，效果未知。";
+
+petit_fallback_netease = "PetitLyrics 回退 NetEase";
+petit_fallback_netease_description = "选项生效需要歌词来源选择为 PetitLyrics。此选项开启且保持「AMLL 优先」和「Genius 回退」这两个功能开启后，歌词回退链会额外增加 NetEase，即：AMLL → PetitLyrics → NetEase → Genius。";
+
+amll_fuzzy_search = "AMLL 模糊搜索";
+amll_fuzzy_search_description = "选项生效需要开启「AMLL 优先」或歌词来源选择 AMLL。选项开启后，AMLL 的歌词搜索会从精确搜索转换为模糊搜索；原有的高质量逐词时间轴与「只接受逐词歌词」的特色不会改变。";
+
 /* MARK: Premium PopUps */
 
 have_premium_popup = "看来您有一个真实有效的 Premium 订阅，因此此插件不会修补数据或限制 Premium 服务器端功能的使用。可以在 EeveeSpotify 设置中管理此操作。";

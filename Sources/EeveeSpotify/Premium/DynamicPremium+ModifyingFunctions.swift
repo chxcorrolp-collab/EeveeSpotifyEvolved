@@ -733,10 +733,16 @@ private func modifyAssignedValues(_ values: inout [AssignedValue]) {
     // 用户自定义覆盖追加在**内置替换之后**：数组顺序即应用顺序，所以设置页里
     // 的 On/Off 能压过仓库自己的默认值（见 `FlagOverride+Replacement.swift`）。
     //
+    // ★★ 2026-10-16：「实验」页里靠 flag 落地的那些（目前只有 Instagram 分享位）插在
+    //    内置与用户覆盖**之间**：既是"我们自己的默认"，又允许用户用「Flag 覆盖」压过它。
+    //    关着实验时 `ExperimentFlagReplacements.active` 是空数组 ⇒ 这一段等于不存在。
+    //
     // ⚠️ 下面那条「歌词入口」flag 的跳过开关**只作用于内置项**：用户自己在设置页
     // 写了一条同名覆盖，那是他的明确意图，不该被我们的 A/B 开关吞掉。
     let builtInReplacementCount = propertyReplacements.count
-    let replacements = propertyReplacements + FlagOverrideStore.activeReplacements
+    let replacements = propertyReplacements
+        + ExperimentFlagReplacements.active
+        + FlagOverrideStore.activeReplacements
 
     for (index, replacement) in replacements.enumerated() {
         // 「歌词入口」flag 是**唯一**还能影响正在播放页卡片渲染的我们自家改动

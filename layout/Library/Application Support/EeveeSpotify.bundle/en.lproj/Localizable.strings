@@ -97,6 +97,15 @@ dark_popups = "Dark PopUps";
 livecontainer_sharing = "Share to LiveContainer";
 livecontainer_sharing_description = "Share to LiveContainer and copy the URL if the selected destination is not supported.";
 
+show_instagram_destination = "Show Instagram share destination";
+show_instagram_destination_description = "Adds Instagram (Stories, direct message, Notes) to the share sheet. It forces three server-side flags, so Spotify must be restarted after toggling; if the server never delivered one of them, an entry is appended instead and the effect is unknown.";
+
+petit_fallback_netease = "PetitLyrics → NetEase fallback";
+petit_fallback_netease_description = "Only applies when the lyrics source is PetitLyrics. With this on, and with \"AMLL preferred\" and \"Genius fallback\" both on, the fallback chain gains NetEase: AMLL → PetitLyrics → NetEase → Genius.";
+
+amll_fuzzy_search = "AMLL fuzzy search";
+amll_fuzzy_search_description = "Only applies when \"AMLL preferred\" is on or the lyrics source is AMLL. AMLL's lookup stops being an exact Spotify-ID match and falls back to a name search. The word-by-word timeline quality and the word-by-word-only rule are unchanged.";
+
 /* MARK: Premium PopUps */
 
 have_premium_popup = "It looks like you have an active Premium subscription, so the tweak won't patch the data or restrict the use of Premium server-sided features. You can manage this in the EeveeSpotify settings.";

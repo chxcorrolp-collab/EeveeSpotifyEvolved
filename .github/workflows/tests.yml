@@ -32,6 +32,34 @@ jobs:
       - name: Toolchain check
         run: swiftc --version
 
+      # ── 语法门（2026-10-16 加，实测 run #291 = 373 个文件 1m28s 全过）────────────
+      #
+      # `swiftc -parse` 只做**语法**分析、**不解析 import** ⇒ 它能把带 UIKit / Orion 的
+      # 视图文件也过一遍 —— 那几个文件本机编不了、CI 里那些 swiftc 步骤也编不了，
+      # 这里是它们**唯一**的语法检查。
+      #
+      # 它挡的正是历史上"白跑一轮"的那两类：**非法转义**（`\uXXXX`，Swift 只认 `\u{XXXX}`）
+      # 与**括号/引号不配** —— 两者都是纯语法错，`-parse` 一定报。
+      #
+      # ⚠️ **逐个文件**跑，不是一次传 370 个：一个文件的错不会掩盖别的，日志里也直接写明是哪个文件。
+      # ⚠️ 末尾 `total > 200` 是**防空跑**：`find` 要是因为路径写错返回空集，
+      #    这个脚本会"全过"（`fails` 恒为 0）—— 那种绿比红还坏。
+      - name: Syntax gate — swiftc -parse over every Swift source
+        run: |
+          fails=0
+          total=0
+          while IFS= read -r -d '' f; do
+            total=$((total+1))
+            if ! swiftc -parse -suppress-warnings "$f" > /tmp/one.out 2>&1; then
+              fails=$((fails+1))
+              echo "---- PARSE FAIL: $f"
+              head -6 /tmp/one.out
+            fi
+          done < <(find Sources Tests -name '*.swift' -print0)
+          echo "parsed $total file(s), failures: $fails"
+          test "$total" -gt 200
+          test "$fails" -eq 0
+
       # ── 守卫：五条"必然编译错"的纯文本检查（2026-10-16 接进来）────────────────────
       #
       # 这五个脚本从 2026-10-01 起就是"每轮改完手动跑一遍"的纪律，但它们**从来没进过任何

@@ -4,58 +4,38 @@ import UIKit
 import Orion
 import ObjectiveC.runtime
 
-// 「歌词进播放器」——**按 spoti.pw v0.21.1 的形状重做**（2026-10-05 第二轮）。
+// 「歌词进播放器」——**按 spoti.pw v0.21.1 的形状重做**
+//（`Redesigned/Player/PlayerLyrics.x`，GPL-3.0 隔离副本；来源与许可见「开源许可」页）。
 //
-// ## 上一版错在哪（真机日志 47 + 照片 46/48 的教训）
+// 形状（pw 文件头原话的意译）：**不是常驻** —— 点 footer 那枚歌词字形才来，再点还原；
+// 来的时候**封面让位**（Spotify 那条 `alpha 0`，我们自己画同一张图 —— 所以看不出换 ——
+// 用 `transform` 缩到 72pt 缩略图）、**标题行上移右移贴到缩略图旁边**、歌词填进
+// "标题之下、进度条之上"让出来的那块地方。
+// 上一版错在"在播放器中段**常驻**一块 414×240 的歌词层"：和封面抢同一块地方，还复用了内嵌档的
+// 模糊封面背景（`LyricsBackdropRepresentable`）⇒ 在取色底上又叠一层模糊。
 //
-// 上一版是"在播放器中段**常驻**一块 414×240 的歌词层"：
-//   · 它和**封面抢同一块地方** ⇒ 看着像"糊在上面的一层"；
-//   · 它复用了内嵌档的**模糊封面背景**（`LyricsBackdropRepresentable`，写死 `isBackdropOpaque`）
-//     ⇒ 在取色底上又叠一层模糊，更糊（那层今天已修，但形状本身还是错的）。
+// pw 的常量（原样抄，单位 pt）：缩略图 72 / 缩略图—标题 16 / 标题—控件 12 / 标题尾渐隐 20 /
+// 缩略图离封面区顶 8（我们上面那几条按自己的版式微调过）。
 //
-// ## pw 的形状（`Redesigned/Player/PlayerLyrics.x`，GPL-3.0 隔离副本；来源与许可见「开源许可」页）
-//
-// 它文件头原话：*"the footer's lyrics glyph is the only way to them: it **shrinks the cover into a
-// thumbnail** at the top of the artwork band, **lifts the track's title up beside it**, and fades the
-// lines into the room that frees between the title and the progress bar. Tapping it again puts the
-// cover back."*
-//
-// 关键三条（照抄思路）：
-//   1. **不是常驻**：点一下才来，再点还原；
-//   2. **封面让位**：Spotify 那条封面 → `alpha 0`，我们自己画一张（同一张图，所以看不出换），
-//      用 `transform` 缩到 **72pt 缩略图**；标题行用 `transform` 上移 + 右移贴到缩略图旁边
-//      （**transform 扛得住 stack view 的重排**，改约束会被写回）；
-//   3. **位置是量出来的**：缩略图贴"封面区"左上，歌词区 = 标题之下、进度条之上那块。
-//
-// 它的常量（原样抄，单位 pt）：缩略图 72 / 缩略图—标题 16 / 标题—控件 12 / 标题尾渐隐 20 /
-// 缩略图离封面区顶 8 / 歌词离标题 20、离进度条 8 / 换歌宽限 3s。
-// ⚠️ 上一版这里还写着"进场 0.3s（延迟 0.12）/ 退场 0.16"—— 那三个数在 2026-10-05 被
-// pw 的 `SGRMotionLayout`（0.45s 弹簧、阻尼 1）取代，见下一节。
-//
-// ## ★ 2026-10-05：「封面往左上变小跑」这个动画到底怎么做（照 pw `PlayerLyrics.x` 重写）
-//
-// 上一版是 **`UIView.animate` 动 `frame`** —— 那是**错的形状**，理由两条：
-//   1. `layoutAndMount` **每 0.3s 重跑一次**（`DeclutterChrome` 的复查节拍），
-//      每次都要重写封面的布局；动画画在 `frame` 上时，那一拍就会**打断/拽回**动画；
-//   2. 本仓库纪律：**`frame` 在 transform 非恒等时不可信**。
-//
-// pw 的形状（`place()` / `thumbTransform()` / `thumbRadius()` / `SGRMotionLayout`）：
+// ## 动画的形状（照 pw `place()` / `thumbTransform()` / `SGRMotionLayout`）
 //
 // | 环节 | 做法 |
 // |---|---|
-// | 布局 | 容器**永远**按"Spotify 封面那个大小与位置"布局，用 **`bounds` + `center`**（不是 `frame`）—— pw 原话：*"moved by its transform alone, so a pass that runs while it is up **leaves it exactly where the eye has it**"* |
-// | 位移 | **只写在容器的 `transform` 上**，且是 `CGAffineTransformConcat(Scale, Move)` = **先缩放、后平移**（关于自己的中心） |
-// | 圆角 | ★ **缩放会把圆角一起缩放** ⇒ 想让缩略图"看起来"是 8pt，模型值要写 **8 / scale**（pw：*"divided by the shrink"*） |
-// | 阴影 | 挂在**容器**上（容器不裁剪）⇒ 跟着 transform 一起走，*"instead of a shadow redrawn on every frame"* |
-// | 动画 | pw 的 `SGRMotionLayout`：`0.45s + usingSpringWithDamping 1 + velocity 0`（**临界阻尼、不回弹**），options **`AllowUserInteraction` + `BeginFromCurrentState`**（后者是**连点两次不跳**的关键） |
-// | 无障碍 | **Reduce Motion 打开时整段不做动画**（pw 也是 `performWithoutAnimation`） |
-// | 换图那一刻 | *"Spotify's cover goes **the moment** the redesign's own takes its place"* —— 早一步露空档、晚一步两张同屏（一大一小） |
-// | 拿不到图 | *"the cover stays and the lyrics wait"* ⇒ **不展开**（我们 `layoutAndMount` 返回 false 就是这条） |
+// | 布局 | 容器**永远**按"Spotify 封面那个大小与位置"布局，用 **`bounds` + `center`**（不是 `frame`），位移只写在 `transform` 上 ⇒ `layoutAndMount` 那趟 0.3s 复查**不会打断动画** |
+// | 位移 | `CGAffineTransformConcat(Scale, Move)` = **先缩放、后平移**（关于自己的中心） |
+// | 圆角 | ★ **缩放会把圆角一起缩放** ⇒ 想让缩略图"看起来"是 8pt，模型值要写 **8 / scale** |
+// | 阴影 | 挂在**容器**上（容器不裁剪）⇒ 跟着 transform 一起走，不用每帧重画 |
+// | 动画 | `0.45s + usingSpringWithDamping 1 + velocity 0`（**临界阻尼、不回弹**），options **`AllowUserInteraction` + `BeginFromCurrentState`**（后者是**连点两次不跳**的关键） |
+// | 无障碍 | **Reduce Motion 打开时整段不做动画** |
+// | 换图那一刻 | 早了露空档、晚了**两张同屏**（一大一小）⇒ 就在我们那张接上去的**那一刻**把 Spotify 那条撤掉 |
+// | 拿不到图 | 封面留着、歌词等着 ⇒ **不展开**（`layoutAndMount` 返回 false 就是这条） |
 //
-// 收起的收尾（撤掉我们那张 + 把 Spotify 那条写回）**必须挂在动画 completion 上**，
-// 而且要带一个令牌（`coverGeneration`）：动画没走完就又被点开时，这一次收尾要作废。
+// ⚠️ 本仓库纪律：**`frame` 在 transform 非恒等时不可信** —— 所以这套全程不碰 `frame`。
+//
+// 收起的收尾（撤掉我们那张 + 把 Spotify 那条写回）**必须挂在动画 completion 上**，并带一个令牌
+// （`coverGeneration`）：动画没走完又被点开时，这一次收尾要作废。
 // ⚠️ `completion` 在"已经在对的位置"与"Reduce Motion"两条路上**也必须被调用**，
-// 否则封面撤不掉、Spotify 那条永远停在 alpha 0。
+// 否则封面撤不掉、Spotify 那条永远停在 `alpha 0`。
 //
 // ## 与 pw 的两处不同（刻意的）
 //
@@ -66,31 +46,23 @@ import ObjectiveC.runtime
 //
 // 日志 tag：`[NPVLyrics]`。开关：扩展功能 → 听歌页 →「歌词进播放器」。
 //
-// ## ★ 2026-10-03 修（日志 48 判读）：那枚"歌词键"是**看不见的**，所以从来没人点到过
+// ## 那枚「歌词键」：**必须看得见**，而且点了才展开
 //
-// **日志 48 的判决**（13008 行，01:47:41–01:49:03）：`[NPVLyrics]` 只有**两行** ——
-// `不展开（找不到播放键…）`（第一次布局太早）与 `歌词键已就位 147,673,120,44`。
-// **一次 `展开` 都没有**，连一条 `不展开（这首歌没有可用的歌词）` 都没有
-// ⇒ `toggle()` 根本没被调用过 ⇒ 那枚键**从来没被点到**。
-//
-// **为什么**：上一版把它做成 `UIControl` + `.clear` 背景 + 无任何内容 —— 一块 120×44 的
-// **完全透明热区**，位于播放键正上方；而它顺便还压在**进度条**（`SPTNowPlayingSliderV2`）
-// 与**播放键上沿**上，会抢走拖动手势。用户找不到它，只能去点旁边那枚看得见的暂停键
-//（顺手报了"点暂停键会闪烁"，那是另一处缺陷，见 `NowPlayingControlsPlate` 的文件头）。
-//
-// **修法**（用户 2026-10-03 拍板："做成看得见的按钮，仍然点了才展开"）：
+// 曾经的做法是 `UIControl` + `.clear` 背景 + 无任何内容 —— 一块 120×44 的**完全透明热区**，
+// 压在进度条（`SPTNowPlayingSliderV2`）与播放键上沿、还会抢走拖动手势 ⇒ 用户找不到它。
+// 现在的形状：
 //   1. **看得见**：44pt 圆角键 + 半透明白底 + `quote.bubble.fill` 字形（展开时换成 `chevron.down`）；
-//   2. **让开**：挪到 `npv.bottomStackView` 的**最后一行（footer）**、水平居中 —— 那是 pw
-//      放歌词字形的地方，也与原生控件（Connect / 分享 / 队列）不重叠；找不到 footer 才退回
-//      "贴那一坨上面"（展开时靠右）再退回"由播放键反推同一条空带"。
+//   2. **让开**：贴在 `npv.bottomStackView` 的**最后一行（footer）**、水平居中 —— 那是 pw 放歌词字形
+//      的地方，也与原生控件（Connect / 分享 / 队列）不重叠；找不到 footer 才退回"贴那一坨上面"
+//      （展开时靠右），再退回"由播放键反推同一条空带"。
 //      ⚠️ **只借 footer 的 frame，键挂在 `page` 上** —— 塞进 Spotify 的 stack 会让它变成
-//      `stack.subviews.last`，把"认 footer"这件事本身弄坏（复核时点出来的）。
+//      `stack.subviews.last`，把"认 footer"这件事本身弄坏。
 //   3. **没词变灰**（pw：*"greyed out when the track has none"*）：`alpha = 0.35`，
-//      点下去仍然会打一行说明为什么没反应（不留"按了没反应"的入口）。
+//      点下去仍然会打一行说明为什么没反应 —— 不留"按了没反应"的入口。
 //
 // ⚠️ **顺序**：`apply` / `reconcile` 里必须先铺歌词（封面 / 标题 / 容器都会 `bringSubviewToFront`）
 // **再**摆那枚键 —— 后写的赢，否则键会被我们自己的容器压住。
-// ⚠️ 关掉开关 / 离开页面时那枚键**也要拿走**（上一版 `closeEverything` 的守卫会早退 ⇒ 键留在屏上）。
+// ⚠️ 关掉开关 / 离开页面时那枚键**也要拿走**（`closeEverything` 的守卫会早退，光靠它会把键留在屏上）。
 
 // MARK: - 宿主（只属于这一层，不抢全屏页/卡片那个单例）
 
@@ -505,74 +477,43 @@ enum NowPlayingLyricsPlate {
     /// （`UserDefaults.nowPlayingLyricsExpanded`），见 `rememberExpanded(_:)` / `reopenIfRemembered(in:)`。
     private static var isOpen = false
 
-    /// ★★ 2026-10-10（照片 66）：**「我们打算铺着」** —— 比 `isOpen` 宽一档。
+    /// ★ 2026-10-10：「**我们打算铺着**」——比 `isOpen` 宽一档。
     ///
-    /// 为什么必须有它：`isOpen` 只有在**铺成功**之后才为真，而进页面那一下
-    /// （`viewWillAppear` → `apply` → `reopenIfRemembered` → `openAndMount`）
-    /// **第一拍经常量不到**（日志 55 逐字：`not expanding (cannot find a visible artwork
-    /// wide enough (>=200pt) inside the player list)`），于是 `isOpen` 当场被回退，
-    /// 而"按住原生封面"那条路（`coverDidLayOut` / `keepNativeCoverHidden`）的门禁里
-    /// 写的正是 `isOpen || coverHost != nil || lastContainer != nil` ⇒ **那一整段窗口里
-    /// 没有人去按封面** ⇒ 进入播放器的转场里就是**原生大封面在动**（照片 66 的闪）。
-    ///
-    /// ⇒ 意图一立就置 `true`（点开、或记忆要展开），**只有用户收起 / 切开关 / 页面收尾才清**。
-    ///   门禁用它，于是"打算铺"的那一刻起，原生封面就已经被按住了。
+    /// 为什么必须有它：`isOpen` 只有在**铺成功**之后才为真，而进页面那一拍经常量不到（页面还没
+    /// 布局完）⇒ "按住原生封面"那条门禁（`coverDidLayOut` / `keepNativeCoverHidden`）整段窗口都
+    /// 不成立，进入播放器的转场里动的就是**原生大封面**。
+    /// 意图一立就置 `true`（点开、或记忆要展开），**只有用户收起 / 切开关 / 页面收尾才清**；
+    /// 门禁用它 ⇒ "打算铺"的那一刻起，原生封面就已经被按住了。
     private static var wantsOpen = false
 
-    /// ★★ 2026-10-04（用户：「用按键来切换歌曲的时候，会漏歌曲大封面」）：**意图要有寿命。**
+    /// ★ 2026-10-04：**意图要有寿命**（用户报「用按键来切换歌曲的时候，会漏歌曲大封面」）。
     ///
-    /// 现场（代码实证）：`openAndMount` 失败时**只回退 `isOpen`**（见 `openAndMount` 里那句
-    /// `isOpen = false`），`wantsOpen` **一个字都不动**；而 `reconcile` 关着那一支原来写的是
-    /// `if wantsOpen { keepNativeCoverHidden(in: page) }` ⇒ 从那一刻起**每一拍**都去按住原生封面，
-    /// 而 `coverHost` 一直是 nil（我们**什么都没画**）。
-    /// 于是换歌时，新封面**在它自己第一次 `layoutSubviews` 就被按成 `alpha = 0`**
-    /// （`coverDidLayOut` 那道门禁里也有 `wantsOpen`）—— 屏幕上就是"大封面漏了"，
-    /// 而且**是永久的**：唯一会清 `wantsOpen` 的地方是 `closeEverything`，而那时页面已经不在。
-    /// （"不许留永久空白态"是本仓库明文纪律，这条正好违反它。）
+    /// 现场：`openAndMount` 失败时只回退 `isOpen`，`wantsOpen` 一个字都不动 ⇒ 从那一刻起每一拍都
+    /// 去按住原生封面，而 `coverHost` 一直是 nil（我们**什么都没画**）。于是换歌时新封面在它自己
+    /// 第一次 `layoutSubviews` 就被按成 `alpha = 0`，而且是**永久的**（唯一会清 `wantsOpen` 的地方
+    /// 是 `closeEverything`，那时页面已经不在了）。「不许留永久空白态」是本仓库明文纪律。
     ///
-    /// 两道保险：
-    ///   ① 意图只在**进场那一小段**算数（`wantsOpenNow()`）—— 够覆盖照片 66 那个转场窗口，
-    ///      也就是它当初被加进来的唯一理由；
-    ///   ② 过期而我们还什么都没铺上 ⇒ `reconcile` **自己撤意图 + 把封面写回去**。
+    /// 两道保险：① 意图只在**进场那一小段**算数（`wantsOpenNow()`）；
+    /// ② 过期而我们什么都没铺上 ⇒ `reconcile` 自己撤意图 + 把封面写回去。
     private static var wantsOpenUntil: CFAbsoluteTime = 0
 
     /// 意图的寿命（秒）。取 1.0：`pendingOpenWindow`（2.5s ≈ 5 拍）的第一拍就足够量到，
     /// 而 1s 之内量不到就说明这一程本来就不该铺（没图 / 没词 / 页面没布局完）。
     private static let wantsOpenLifetime: CFAbsoluteTime = 1.0
 
-    /// ★★ 2026-10-10（照片 65）：`viewWillDisappear` 只把这一位置 `true`，**什么都不收**。
+    /// ★ 2026-10-10：`viewWillDisappear` 只把这一位置 `true`，**什么都不收**。
     ///
-    /// 退出转场里页面**还在屏幕上**（滑下去 / 缩回迷你条）。原来的写法是
-    /// `viewWillDisappear` 当场 `closeEverything(animated: false)` ⇒ 封面立刻 `alpha = 1`
-    /// ⇒ 整个退出动画里都是**原生那张大封面**（照片 65 的闪）。
-    /// 现在把收尾推迟到"**页面真的不在窗口里**"那一刻（`reconcile` 那条既有节拍负责），
-    /// 于是退出动画里页面一直是**我们的样子**；等它真的走了，才在屏幕外写回封面、摘掉我们的层。
-    /// （pw 的做法同源：它的 morph 在 `tearDown` 里才 `SGRPlayerSetCoverHidden(NO)`，
-    ///   见 `.spotify-ipa/spotipw-v0.21.1/.../PlayerMorph.x:215`。）
+    /// 退出转场里页面**还在屏幕上**（滑下去 / 缩回迷你条）；当场 `closeEverything` 会把封面立刻
+    /// 写回 `alpha = 1` ⇒ 整个退出动画里都是**原生那张大封面**。所以收尾推迟到
+    /// "**页面真的不在窗口里**"那一刻（`reconcile` 那条既有节拍负责）—— 那时才在屏幕外写回封面、
+    /// 摘掉我们的层。
     private static var pageLeaving = false
 
-    /// 「点开了但这一拍没铺上」的**重试窗口**。
+    /// 「点开了但这一拍没铺上」的**重试窗口**（2.5s ≈ 5 拍，**不新开定时器**，蹭既有那条节拍）。
     ///
-    /// ★★ 这就是日志 50「点歌词键没反应」的**根因**，而且它是**本轮新引入的回归**。
-    ///
-    /// 取证：`measure()` 在 `f906512`（日志 49 那个构建）与 HEAD 上**逐字节相同**
-    /// （`git diff f906512..HEAD` 里那段没有一行改动）。差别在**调用方**：
-    ///
-    /// | | 旧（`f906512`，日志 49） | 新（`4215e8e` 之后，日志 50） |
-    /// |---|---|---|
-    /// | `toggle()` | `isOpen = true; layoutAndMount(...)` —— **不看返回值** | `if !layoutAndMount(...) { isOpen = false }` |
-    /// | `reconcile()` | `if isOpen { layoutAndMount(...) }` —— **每拍都重试** | 同上，但失败后 `isOpen` 已经是 `false` ⇒ **再也不进这一支** |
-    ///
-    /// ⇒ 旧代码"这一拍量不到就下一拍再量"，所以日志 49 里用户点得晚一点就成了
-    /// （02:58:44 `展开 — 缩略图 72pt、歌词区 20,204,374,346`，而且 02:58:46 收起、
-    /// 02:58:47 又展开，两次都成）。新代码**第一次量不到就永久认死**：日志 50 里用户
-    /// 在页面出现后 **1 秒**（04:34:54 出现、04:34:55 点）就点了，那一拍量不到
-    /// ⇒ 这枚键在整个会话里再也没活过来。
-    ///
-    /// `4215e8e` 的**本意是对的**（别留"标题已经上移、歌词已经画出来、封面还整张露着"的半成品，
-    /// 照片 51 就是那个现场），它只是**少了另一半**：失败之后要接着试。
-    /// 这一段就是把那另一半补回来 —— 窗口很短（2.5s ≈ 5 拍），
-    /// 而且**不新开定时器**（蹭 `DeclutterChrome` 既有那条节拍）。
+    /// 为什么必须有：`openAndMount` 失败时会当场回退 `isOpen`，而 `reconcile` 里"接着铺"那一支是
+    /// `if isOpen` 开头的 ⇒ **第一次量不到就永久认死**，那枚键在整个会话里再也不会活过来。
+    /// ⚠️ 重试**也要过 `canShow`**：换歌之后"这一首有没有词"是会变的，别拿没词的歌空转五拍。
     private static var pendingOpenUntil: CFAbsoluteTime = 0
     private static let pendingOpenWindow: CFAbsoluteTime = 2.5
 
@@ -581,16 +522,9 @@ enum NowPlayingLyricsPlate {
 
     /// 这一层参不参与：**只看「歌词进播放器」**。
     ///
-    /// ★★ 2026-10-12（用户报「歌词按钮点不动」→ 追问「自己画的这套视图塞不进去单纯的逐词吗」）：
-    ///
-    /// 这里**一度**（就在今天上午）还挂了「更好的逐词歌词」，因为 `canShow()` 里本来也要它 ——
-    /// 那是**把门禁放错了地方**：这一层**本身就是** Apple Music 那套渲染（SwiftUI 页 + 逐词高亮），
-    /// 而「更好的逐词歌词」真正管的是 **Spotify 原生歌词页**用哪套渲染
-    /// （`AppleMusicLyricsOverlay` ↔ 旧 UIKit overlay `LyricsWordByWord`），
-    /// 跟"播放器这层要不要存在"没关系。挂在这里的后果很具体：
-    /// 只开「逐词歌词」时**整层退出** —— kumone 那套版式全没了（缩封面 / 标题左上 / 控件条 /
-    /// 单行歌词），而用户要的恰恰是"版式留着、歌词照画"。⇒ 恢复成只判这一颗。
-    ///
+    /// ⚠️ 这里**不许**再挂「更好的逐词歌词」：那颗开关管的是 **Spotify 原生歌词页**用哪套渲染，
+    /// 而这一层**本身就是** Apple Music 那套渲染 —— 挂上它的后果很具体：只开「逐词歌词」时
+    /// **整层退出**，用户要的"版式留着、歌词照画"（缩封面 / 标题左上 / 控件条 / 单行歌词）全没了。
     /// 渲染能力由 `canShow()` 里那条 **iOS 26** 判据兜着（这一整条链本就是 iOS 26 起的）。
     static var isEnabled: Bool { UserDefaults.nowPlayingLyricsInPlayer }
 
@@ -964,23 +898,12 @@ enum NowPlayingLyricsPlate {
 
     /// ★ 只要我们的层还在屏幕上，就**每一拍**把 Spotify 当前那张主封面按掉。
     ///
-    /// ## 为什么必须独立于 `layoutAndMount`（照片 57 的现场）
-    ///
-    /// 换歌时 Spotify 会把封面换成**新的那一个对象**，而我们之前藏的是**旧对象**
-    /// ⇒ 新封面整张露出来，而我们的缩略图 / 上移后的标题 / 歌词还挂在那儿
-    /// —— **照片 57 就是这个现场**（大封面正中，上面叠着旧缩略图、标题和一行歌词）。
-    ///
-    /// 以前 `ensureCover` 恰好在"这一首有没有词"那道门**之前**跑，顺手就把新封面按住了；
-    /// **2026-10-07 我把那道门提到最前面**（为了让失败"零副作用"，独立复核建议的），
-    /// 于是这个必需的副作用一起被拿掉了 —— **那是我引入的回归**。日志 52 的证据：
-    ///
-    /// ```
-    /// 07:00:46  [PLAYER] track changed — pos=0.0s dur=168.0s
-    /// 07:00:47  [NPVLyrics] not expanding (no lyric lines to draw right now (the line model is not ready))
-    /// ```
-    ///
-    /// 那道门一失败就**直接 return**，于是从这一刻起再也没有人藏封面 ⇒ 半成品一直挂着，
-    /// 直到用户再点一下。现在把它拆出来**无条件**每拍做。
+    /// 为什么必须独立于 `layoutAndMount`：换歌时 Spotify 会把封面换成**新的那一个对象**，
+    /// 而我们之前藏的是**旧对象** ⇒ 新封面整张露出来，而我们的缩略图 / 上移后的标题 / 歌词还挂着
+    /// （原生大封面正中，上面叠着旧缩略图、标题和一行歌词）。
+    /// 以前这一步是被 `ensureCover` 顺手做的，而它排在"这一首有没有词"那道门**前面**；
+    /// 后来那道门被提到最前（为了失败"零副作用"）⇒ 门一失败就 return，**再没有人藏封面**，
+    /// 半成品一直挂到用户再点一下。所以它必须**无条件**每拍做，不能挂在任何门后面。
     @discardableResult
     private static func keepNativeCoverHidden(in page: UIView) -> Bool {
         guard let list = findByIdentifier(listIdentifier, in: page),
@@ -989,56 +912,25 @@ enum NowPlayingLyricsPlate {
         return true
     }
 
-    // ★★ 2026-10-09：**`hideNativeLyricsAffordances` 整块已删**（照片 60 定案）。
-    //
-    // 它当初要藏的是「歌词 · 分享 · 全屏」那一行，理由是"那是 Spotify 的原生入口
-    // （`lyrics-expand-button` / `lyrics-share-button` / `lyrics-translations-button`）"。
-    // 日志 53 证明**这个判断是错的**，而且做法本身有害：
-    //
-    //   ① **屏幕上那一行是我们自己画的**（`AppleMusicLyricsOverlayView.previewHeader`）。
-    //      几何对得上：容器 20,210,374,378 + 内边距 14 + 两个 40×32 的按钮
-    //      ⇒ 分享键中心 319pt、全屏键中心 364pt；照片 60 量出来正是 319 / 364。
-    //      所以藏原生那一批**屏幕上什么都不会变**——日志里 `hid 1 native lyrics affordance(s)`
-    //      与"那一行还在"同时成立，就是这个原因。
-    //   ② 原生那三颗按钮所在的卡在**列表里**、而且被「一屏」折成了 0 高：
-    //      日志 53 的 `[NPVTree]` 是 `2.CollectionViewCell@20,838,374,0` →
-    //      `5.CardView@0,0,374,0,alpha=0.00,id=lyrics-card-view` → `7.CardHeaderView@0,0,342,38`。
-    //      它们本来就不在屏上，**根本不需要藏**。
-    //   ③ 而 `widestRowAncestor`（≥350pt 宽）从那三颗按钮往上走，第一个够宽的是
-    //      **`CardView` 本身**（374 宽）⇒ 我们实际藏的是**整张歌词卡的根**。
-    //      那张卡正是 `WordByWordHost` 内嵌预览的宿主
-    //      （日志里的 `[PreviewShell] card container (card)=Lyrics_CardElementImpl.CardView`）
-    //      ⇒ 一旦「一屏」没折它、或用户关掉「一屏」，我们就会把**自己的**预览歌词
-    //      一起 `alpha = 0` 掉。这是本轮**顺手拆掉的隐患**。
-    //
-    // 结论：不对别人的入口下手。真正要消失的那一行，去改**我们自己**的画法
-    // （`AppleMusicLyricsOverlayView.showsPreviewHeader`）。
+    // ⛔ **不许再对 Spotify 那几个"歌词入口"下手**（`lyrics-expand-button` / `lyrics-share-button` /
+    // `lyrics-translations-button`）。屏幕上的「歌词 · 分享 · 全屏」那一行是**我们自己画的**
+    // （`AppleMusicLyricsOverlayView.previewHeader`），藏原生那批屏幕上什么都不会变；而原生那三颗
+    // 所在的卡被「一屏」折成 0 高、本来就不在屏上。更糟的是从那儿往上找"够宽的祖先"会落到
+    // **整张歌词卡的根**，那一层正是我们自己预览歌词的宿主 ⇒ 会把我们自己的东西一起藏掉。
+    // 真正要消失的那一行，去改**我们自己**的画法（`AppleMusicLyricsOverlayView.showsPreviewHeader`）。
 
-    /// ★★ 2026-10-10（照片 64，pw 的手法）：**封面自己布局的那一刻，就地按住它自己的那张图。**
+    /// **封面自己布局的那一刻，就地按住它自己的那张图**（pw 的 `CoverArtTiltView.layoutSubviews` 路子）。
     ///
-    /// ## 为什么上一版还不够（照片 64 的现场）
+    /// 为什么不复用 `keepNativeCoverHidden`：那条要在整棵树里**再找一遍**哪张是当前封面
+    /// （`visibleCover` 的三条判据）。换歌那一瞬间这**必然失手** —— 新封面可能还在淡入
+    /// （`alpha` 还是 0）⇒ `visibleCover` 挑中的是**上一张**，`alpha = 0` 写在旧对象上、
+    /// **新封面整张露着**（原生大封面 + 我们的旧缩略图同屏）。
     ///
-    /// 上一版挂的是同一个 hook，但动作是 **`keepNativeCoverHidden`** —— 也就是"在整棵树里
-    /// **再找一遍**哪张是当前封面"（`visibleCover` 那三趟判据：`Encore.ImageView` + 在
-    /// `SPTNowPlayingView` 里 + 祖先没被折成 0 ……）。换歌那一瞬间这**必然失手**：
-    /// 新封面可能还在淡入（`alpha` 还是 0）、或被 tier 判据排除 ⇒ `visibleCover` 挑中的
-    /// 是**上一张（已经 alpha=0 的）** ⇒ `alpha = 0` 写在旧对象上，**新封面整张露着**。
-    /// 照片 64 就是这一帧：原生大封面（新歌的图）+ 我们的缩略图（上一首的图）同屏。
-    ///
-    /// ## pw 怎么做（`.spotify-ipa/spotipw-v0.21.1/.../PlayerArtwork.x`）
-    ///
-    /// 它**不搜索**：`%hook CoverArtTiltView` 的 `layoutSubviews` 里
-    /// ① `bounds.width >= 200` 且 ② `inCoverCell(tilt)`（祖先里有 `CoverArtCellImpl`），
-    /// 然后 `coverIn(tilt)` = **它自己那个和 tilt 等大的直接子视图**，对它下手。
-    /// 局部、无竞态、不依赖"哪一张现在可见"。
-    ///
-    /// ⇒ 这里沿用同一套（v0.21.1 是 GPL-3.0，与本仓库一致；来源、许可与改动见「开源许可」页）：
-    ///   · 门禁：开关开 + **我们确实铺着** + tilt 在窗口里且够大 + **祖先里有 `CoverArtCellImpl`**
-    ///     （这一条把迷你条/卡片里那些 tilt 一次滤掉 —— pw 同款）；
-    ///   · 动作：把"和 tilt 等大的那个直接子视图"写成 `alpha = 0`（**同一个 `hideSpotifyCover`
-    ///     的还原表**，关开关/离页时照旧写回）；
-    ///   · **不做节流**：动作是局部的（几次子视图比较），比走查便宜一个量级，
-    ///     而且节流正是"闪一下"的来源。
+    /// pw 的办法是**不搜索**：tilt 自己的 `layoutSubviews` 里，门禁过了就把
+    /// "**和 tilt 等大的那个直接子视图**"按掉。局部、无竞态、不依赖"哪一张现在可见"。
+    /// ⇒ 门禁：开关开 + **我们确实铺着** + tilt 在窗口里且够大 + 祖先里有 `CoverArtCellImpl`
+    /// （最后这条把迷你条 / 卡片里那些 tilt 一次滤掉）。**不做节流**：动作是局部的，
+    /// 比走查便宜一个量级，而节流正是"闪一下"的来源。
     static func coverDidLayOut(from tilt: UIView) {
         guard isEnabled, #available(iOS 26.0, *) else { return }
         // ★ `wantsOpen` 必须在门禁里（照片 66）：进页面第一拍 `isOpen` 还是 false，
@@ -1847,20 +1739,17 @@ enum NowPlayingLyricsPlate {
     /// （所以：容器**不裁剪**（否则阴影没了），裁剪与圆角放在里面那层 imageView 上。）
     // MARK: - 收起态的大封面尺寸（用户 2026-10-04：「把现在的大封面做小，不需要那么大」）
 
-    /// 收起态那张大封面的目标宽度（pt）—— **kumone 照片 41 逐像素量出来的 242pt**
-    /// （原图 591×1280px：x 122…467、y 291…639 ⇒ ×0.7005 = 242.1pt 见方，水平居中、顶边 ≈204pt）。
-    /// 我们原来是 **366pt**（Spotify 的 `24,146,366,366`），比它大 51%。
+    /// 收起态那张大封面的目标宽度（pt）。**kumone 照片 41 逐像素量出来的是 242pt**
+    /// （原图 591×1280px：x 122…467、y 291…639），而 Spotify 给的是 **366pt**，大 51%。
     ///
     /// 为什么只动 `transform`：收起态那张是 **Spotify 自己的**（我们那份只在展开时存在），
-    /// 所以尺寸只能这么收 —— 仓库规矩 14：改别人的视图**只做 transform / 透明度**，
-    /// 动完要能**完全还原**（原值记在 `scaledCoverBase`，离开页面 / 关开关时写回）。
+    /// 尺寸只能这么收 —— 仓库规矩：改别人的视图**只做 transform / 透明度**，动完要能**完全还原**
+    /// （原值记在 `scaledCoverBase`，离开页面 / 关开关时写回）。
     ///
-    /// 附带三件事：
-    ///   ① `measure()` 用的是 `convert`（**含 transform**）⇒ `geometry.cover` 自动变成 242pt，
-    ///      `thumbTransform` 的缩放比与动画起点跟着对（缩略图仍是 64pt，因为它按宽度比算）；
-    ///   ② 封面顶边落到 ≈208pt ⇒ 收起态标题行（98…149）离它有 59pt
-    ///      —— 用户报的「大封面压住歌手名字下半截」一并消失（`closedTitleCoverGap` 只是兜底）；
-    ///   ③ **展开 / 收起两个状态都摆**：换歌会换一个新的封面对象（`-5000 → -5001`）。
+    /// 附带：`measure()` 用 `convert`（**含 transform**）⇒ `geometry.cover` 自动变成 242pt，
+    /// 缩略图的缩放比与动画起点跟着对；封面顶边落到 ≈208pt ⇒ 收起态标题行离它 59pt
+    /// （用户报的「大封面压住歌手名字下半截」一并消失）。
+    /// ⚠️ **展开 / 收起两个状态都要摆**：换歌会换一个新的封面对象。
     private static let restingCoverSide: CGFloat = 242
 
     /// 我们缩过的那几张封面（**弱引用**：视图被回收就自动出册）+ 各自**自己的**原 transform。
@@ -2415,24 +2304,16 @@ enum NowPlayingLyricsPlate {
         let bounds = title.bounds
         guard bounds.width > 1, bounds.height > 1 else { return }
 
-        // ★ 2026-10-04：**坐标口径修好**（独立只读复核与 `HANDOFF_2` §6.4⑤ 都点过这一处）。
+        // ⚠️ **坐标口径**：`trailingControlX` 量的是**页面坐标**，而 `bounds` 与 `mask.frame` 是
+        // **元素自己的坐标**；元素自己已经右移了 `shift`（≈74pt）⇒ 直接拿页面坐标当宽度用会
+        // 整整差一个 `shift`。兜底那条"右边没有别的控件"尤其糟：`room = bounds.width`
+        // ⇒ 上面那条 guard 直接把 mask 清掉 ⇒ **一行 mask 都不贴**（标题尾巴永远不渐隐）。
+        // 所以两条路都换算到元素自己的坐标系，再兜一条"页面右沿 − 8"。
         //
-        // `trailingControlX` 量的是**页面坐标**，而 `bounds` 与 `mask.frame` 是**元素自己的坐标**；
-        // 原来把页面坐标直接当元素宽度用，而元素自己已经右移了 `shift`（现在 ≈74pt）
-        // ⇒ 该渐隐的位置**整整差一个 shift**。更糟的是"右边没有兄弟控件"那一支：
-        // `room = bounds.width` ⇒ `width == bounds.width` ⇒ 上面那条 `guard` 直接把 mask 清掉
-        // ⇒ **一行 mask 都不贴**（真机上多半走的正是这一支，因为标题与歌手是上下两行、不是左右）。
-        //
-        // 现在：① 两条路都换算到元素自己的坐标系；② 再兜一条"页面右沿 − 8"——
-        // 于是长标题**一定**会在屏幕边上渐隐，不再依赖"右边恰好有别的控件"这个前提。
-        // ⚠️ ★ 2026-10-12：这里**不能用 `untransformed`**。
-        //
-        // `untransformed` 会把元素**自己的** `tx` 减掉（它是给 `measure()` 算"位移前的起点"用的），
-        // 而 mask 挂在**这个元素的 layer** 上 ⇒ mask 的 x=0 对的就是元素**当前（位移后）**的左边。
-        // 用 `untransformed` 算出来的可用宽度会**多出整整一个 `shift`**（≈74pt），
-        // 于是 `width == bounds.width`、上面那条 `guard` 直接把 mask 删掉
-        // ⇒ 长标题尾巴**永远不会渐隐**（这正是用户报的第 1 条：晃动区一直顶到屏幕右边）。
-        // 现在用 `convert`（**含 transform**）= 元素此刻在页面上的真实左边。
+        // ⚠️ 这里**不能用 `untransformed`**：它会把元素**自己的** `tx` 减掉（那是给 `measure()`
+        // 算"位移前的起点"用的），而 mask 挂在**这个元素的 layer** 上 ⇒ mask 的 x=0 对的就是
+        // 元素**当前（位移后）**的左边。用它算会多出整整一个 `shift` ⇒ `width == bounds.width`
+        // ⇒ mask 被删掉。要用 `convert`（**含 transform**）。
         let titleLeft = title.convert(title.bounds, to: page).minX
         let pageLimit = (page.bounds.maxX - 8) - titleLeft
         let limitRoom = trailingControlX(in: title, page: page)

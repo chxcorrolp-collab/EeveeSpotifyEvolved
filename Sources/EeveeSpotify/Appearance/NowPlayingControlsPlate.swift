@@ -651,6 +651,34 @@ enum NowPlayingControlsPlate {
         return showing
     }
 
+    /// **中空的播放三角形**（只描边、不填充）—— 「播放页那个三角形能不能做成中空的」那条要求的画法。
+    ///
+    /// 为什么不直接用 SF Symbol：`play` 与 `play.fill` 都是**实心**的，系统没有描边版。
+    /// 这里用 `UIGraphicsImageRenderer` 画一个等边三角形再标成 **template**
+    /// ⇒ 颜色仍然由 `glyph.tintColor`（白）决定，与另外两颗字形同一套。
+    private static func hollowPlayImage(size: CGFloat) -> UIImage {
+        let lineWidth = max(1.5, size * 0.09)      // 30pt ⇒ 2.7pt
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
+        let image = renderer.image { _ in
+            let inset = lineWidth / 2
+            let side = size - inset * 2
+            let height = side * 0.866              // 等边三角形的高
+            let top = (size - height) / 2
+
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: inset, y: top))
+            path.addLine(to: CGPoint(x: inset + side, y: top + height / 2))
+            path.addLine(to: CGPoint(x: inset, y: top + height))
+            path.close()
+            path.lineWidth = lineWidth
+            path.lineJoin = .round
+
+            UIColor.white.setStroke()
+            path.stroke()
+        }
+        return image.withRenderingMode(.alwaysTemplate)
+    }
+
     /// 在**按钮的兄弟层**上叠一个我们自己的字形（**不吃触摸** —— 按钮的动作原样生效）。
     ///
     /// ★ **为什么不再是按钮的子视图**（2026-10-05 重做）：整颗按钮的 layer 被钉住了
@@ -667,7 +695,17 @@ enum NowPlayingControlsPlate {
         hidden: Bool = false
     ) {
         let configuration = UIImage.SymbolConfiguration(pointSize: size, weight: .medium)
-        guard let image = UIImage(systemName: systemName, withConfiguration: configuration) else { return }
+        // ★★ 2026-10-16（用户：「**播放页的那个三角形能不能做成中空的**」）：能。
+        //    SF Symbols 里 `play` 与 `play.fill` **都是实心**三角形（没有描边版）⇒ 自己画一个：
+        //    只描边、不填充。暂停（两条竖杠）与跳过键**不动** —— 它们本来就是实心形状，
+        //    用户只点名了那颗三角形。
+        let image: UIImage?
+        if systemName == "play" || systemName == "play.fill" {
+            image = hollowPlayImage(size: size)
+        } else {
+            image = UIImage(systemName: systemName, withConfiguration: configuration)
+        }
+        guard let image else { return }
         guard let host = button.superview else { return }
 
         let glyph: UIImageView

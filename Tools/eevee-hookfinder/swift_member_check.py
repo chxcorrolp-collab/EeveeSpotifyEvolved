@@ -12,7 +12,7 @@
   同一批还有一条纯语法错：`guard let target = f()`，而 `f()` 返回**非 Optional**。
   这两类都**不需要编译器**就能查出来 —— 本脚本就干这个，省一次 CI。
 
-它检查五件事：
+它检查六件事：
   1. **静态成员是否存在**：`Type.member` 这种写法里，`Type` 若是本仓库声明的类型，
      那 `member` 必须在它（或它的 extension）里声明过；
   2. **`guard let x = expr` 里 expr 是不是明显非 Optional**：只查"本地声明的函数
@@ -30,6 +30,12 @@
      `if let x` 是**简写**、并不声明 `x`，所以这类错只有编译器（或这条规则）会拦到。
      只扫 `body`（它没有参数 ⇒ 作用域可判定），且**同文件里任何 `let/var NAME` 都算已声明**
      ⇒ 宁可漏、不误报（与 ③/④ 同一条纪律）。
+
+  6. ★ 2026-10-16 新增：**类型名本身打错**。规则 ① 遇到"本仓库没声明过的类型"会静默跳过，
+     于是 `CMPBannerViewHok.targetName` 这种拼写错在检查里和在 CI 里**都是绿的**，
+     只有打包 IPA 那一轮才报 `cannot find 'CMPBannerViewHok' in scope`。
+     本规则只认两种零误报的形状（`<X>.targetName` / `<X>Hook|Group|Kill(`）——
+     两者都是本仓库自己的命名约定，SDK 里不存在；全仓实测 0 误报。
 
 用法：
     python Tools/eevee-hookfinder/swift_member_check.py            # 扫 Sources/EeveeSpotify
@@ -242,6 +248,37 @@ def main(argv: list[str]) -> int:
                 problems.append(
                     f"{f}:{line}: `{type_name}.{member}` —— 类型 `{type_name}` 里没有这个成员"
                     "（这类错编译期报 no member，通常是成员插错了作用域）"
+                )
+
+    # ①b **类型名本身打错** —— 规则 ① 只校验"本仓库声明过的类型"，`Type` 拼错一个字母时
+    #     `type_name not in declared_types` ⇒ **静默跳过**（2026-10-16 补的这一块）。
+    #
+    # 只认两种**零误报**的形状，判据都是本仓库自己的命名约定（SDK 里不存在这两个东西）：
+    #   · `<X>.targetName` —— `targetName` 是 Orion hook 的 DSL：每个 hook 类型都有
+    #     `static let targetName = "…"`，再被那张 `(targetName, 标签, activate)` 表引用；
+    #   · `<X>Hook()` / `<X>Group()` / `<X>Kill()` —— 构造我们自己的钩子 / 钩子组 / 拦截器。
+    #
+    # 为什么值得单列：打错类型名时编译期报 `cannot find 'X' in scope`，而它**只有真去打包
+    # IPA 那一轮才炸**（CI 默认不编带 Orion 的 `.x.swift`，本机又没有工具链）⇒ 一条 3 秒的
+    # 本地/CI 检查就能省掉一整轮打包。历史教训（2026-10-11）：hook 名笔误只能靠人工
+    # `grep '<Type>.targetName'` 核对。
+    #
+    # 保底实测（2026-10-16）：全仓 660 个已声明类型、上述两种形状 **0 条**报错 ⇒ 零误报。
+    TYPE_TYPO_SHAPES = (
+        (re.compile(r"\b([A-Z][A-Za-z0-9_]*)\.targetName\b"), "targetName"),
+        (re.compile(r"\b([A-Z][A-Za-z0-9_]*(?:Hook|Group|Kill))\s*\("), "构造"),
+    )
+    for f, src in per_file_src.items():
+        for shape_pattern, shape_name in TYPE_TYPO_SHAPES:
+            for m in shape_pattern.finditer(src):
+                type_name = m.group(1)
+                if type_name in BUILTIN_TYPES or type_name in declared_types:
+                    continue
+                line = src[:m.start()].count("\n") + 1
+                problems.append(
+                    f"{f}:{line}: `{type_name}`（{shape_name} 那一处）不是本仓库声明的任何类型"
+                    " —— 多半是**类型名打错了一个字**（编译期报 cannot find in scope，"
+                    "而只有打包 IPA 时才炸）。核对一下这个名字，或把它声明上"
                 )
 
     # ②b 局部变量上的成员：`let flag: KnownFlag = …` 之后写 `flag.id`

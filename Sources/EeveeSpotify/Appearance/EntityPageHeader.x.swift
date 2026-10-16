@@ -120,14 +120,7 @@ enum EntityPageHeaderManager {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak page] in
             guard let page, page.window != nil else { return }
-            let text = eeveeArtistBio(from: page)?.text
-            if let text, bioTexts[name] == nil {
-                bioTexts[name] = text
-                // ★★ 2026-10-11：折叠现在**排在读取之后**（见 `EntityPageSectionDrop` 的闸门），
-                //    而"这一格多高"只在布局时被问一次 ⇒ 读到之后必须**主动作废一次布局**，
-                //    否则折叠要等用户滚一下才生效（以前折叠在页面加载那一刻就做了，没有这个问题）。
-                relayoutAfterBioCapture(in: page)
-            }
+            let text = readBioWithoutScrolling(in: page, name: name)
             guard !didReportBioSweep else { return }
             didReportBioSweep = true
             let count = text?.count ?? 0
@@ -141,6 +134,46 @@ enum EntityPageHeaderManager {
                         : "; the section gets folded now that we have the text")
             )
         }
+
+        // ★★ 2026-10-16（**日志 103 的 AKIR 现场**）：上面那一次**不够**。
+        //
+        //    那一格是懒加载的，正文可能好几秒之后才到 —— AKIR 那次 1.5s 去读的时候，
+        //    "关于"那一段还是 `Components.UI.RetrievalRowLoadingElementUI` 占位行
+        //    （日志 103 的 cell dump 逐字：0-10 / 0-11 / 0-13 全是 h=92 的 Loading），
+        //    于是 `biography NOT READ; nothing to fold this time` **一锤定音**：
+        //    ⇒ ① 那一节**永远折不掉**（用户报的"关于艺人遮不住"）；
+        //    ⇒ ② 点 `i` 也永远说"没有可读的介绍"。
+        //
+        //    现在**每 1.5s 补读一次、最多 10 次（≈15s）**，一读到就停。全程**零滚动**
+        //    （滚动那一版会把列表滚一整趟再滚回来，用户看得见；见 `readBioWithoutScrolling`）。
+        for attempt in 2...11 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5 * Double(attempt)) { [weak page] in
+                guard let page, page.window != nil, bioTexts[name] == nil else { return }
+                guard let text = readBioWithoutScrolling(in: page, name: name) else { return }
+                writeDebugLog(
+                    "[EntityPageHeader] about-artist captured late — \(name), \(text.count) char"
+                )
+            }
+        }
+    }
+
+    /// **零滚动**地读一次「关于艺人」的正文（读到就存起来 + 作废一次布局）。
+    ///
+    /// 为什么不用 `eeveeArtistBio`（→ `eeveeMaterialiseBio`）那一版：
+    ///   · 它会**把列表一路滚到底再滚回来**（最多 12 步）—— 用户看得见（日志 100：连点四次 = 四次整页扫描）；
+    ///   · 而且日志 102/103 里它**一次都没真的滚过**：那两页从页面根找不到 scroll view，
+    ///     在 `guard let scroll …` 那句就静默 `return nil`（所以那两份日志里连
+    ///     `about-artist sweep` 这一行都没有）⇒ 那条路已经是死的，留着只会让人以为正文是它读到的。
+    ///
+    /// 判据仍然只是"页面上**已经建出来**的那张卡"（`eeveeArtistBioCard`：零滚动 + 有界搜索）。
+    @discardableResult
+    private static func readBioWithoutScrolling(in page: UIView, name: String) -> String? {
+        guard !name.isEmpty, page.window != nil else { return nil }
+        if let cached = bioTexts[name] { return cached }
+        guard let card = eeveeArtistBioCard(in: page) else { return nil }
+        // 这个入口内部会把正文读走 → 存进 `bioTexts` → 作废一次布局（折叠闸门这才打得开）。
+        artistBiographyAppeared(card)
+        return bioTexts[name]
     }
     /// 读到简介之后**主动让列表重排一次** —— 折叠的闸门是"读到了吗"（`EntityPageSectionDrop`），
     /// 而"这一格多高"只在布局时被问，所以读到那一刻不作废布局的话，折叠要等用户滚一下才生效。

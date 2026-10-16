@@ -825,8 +825,20 @@ final class EntityPageHeaderButton: UIControl {
             let name = EntityPageHeaderManager.currentArtistName
             // ★★ 2026-10-11（日志 100）：**读到过一次就不再扫列表** —— 扫列表会滚一遍、
             //    把沿途 cell 全建出来；用户连点四次就是四次整页扫描（日志 100 的 03:51:41-44）。
-            let text = EntityPageHeaderManager.cachedBioText(for: name)
-                ?? eeveeArtistBio(from: self)?.text
+            //
+            // ★★ 2026-10-16（用户：「如果是 Nana 这种正常的，需要往下划到原本的 艺人介绍 才有，
+            //    并且有很明显的卡顿」）：这里原来退到 `eeveeArtistBio(from: self)`，而它内部是
+            //    `eeveeMaterialiseBio` —— **会把列表一路滚到底再滚回来**（最多 12 步），
+            //    那一下卡顿就是这个。现在**零滚动**：先看缓存，再试"页面上已经建出来的那张卡"
+            //    （`eeveeArtistBioCard` 只做有界搜索），读到就存进 `bioTexts`
+            //    （`artistBiographyAppeared` 内部读走 + 作废一次布局 ⇒ 折叠闸门这才打开），
+            //    仍然读不到就照实弹"没有可读的介绍" —— 那张卡片自己还会盯 6 秒补看
+            //    （`ArtistBioSheet.watchForNativeText`），不再拿"滚一趟列表"去换它。
+            var text = EntityPageHeaderManager.cachedBioText(for: name)
+            if text == nil, let card = eeveeArtistBioCard(in: self) {
+                EntityPageHeaderManager.artistBiographyAppeared(card)
+                text = EntityPageHeaderManager.cachedBioText(for: name)
+            }
             ArtistBioSheet.present(
                 name: name,
                 text: text,

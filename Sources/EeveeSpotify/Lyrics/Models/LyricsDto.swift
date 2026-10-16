@@ -93,6 +93,19 @@ struct LyricsDto {
         // 那不是"某个源的时间轴"，而是"未找到歌词"这一行能不能显示出来的前提。
 
         // 有效行 = 原始行，或（空歌词 + 纯音乐占位时）那三行占位文案。
+        //
+        // ★ 2026-10-19：**空白行不进 payload** —— Spotify 原生歌词页 / 卡片照 payload 的行
+        //   逐行画，一行空内容在那里就是"一行空的"，与"漏了一句词"同形
+        //   （与 2026-10-18 用户在网易云 / Musixmatch 那两处拍板的间奏纪律同一条：
+        //    空行照样占一行高度，该丢就丢）。
+        //   判据与 `droppingBlankLinesForDisplay()` **同一份**（`LyricsLineDto.isBlankForDisplay`）。
+        //
+        //   ⚠️ 整份都是空白时**原样保留**：清成空数组会掉进下面 `lines.isEmpty` 那个
+        //   "纯音乐占位"分支，等于替源宣布"这首歌是纯音乐" —— 那正是 `isInstrumental`
+        //   那段注释明令禁止的事（"查无此歌"与"这是纯音乐"必须分开）。
+        //   `blankFreeLineIndices` 给下面的译文层用：`lines` 与 `translation.lines`
+        //   按下标一一对应，剔行必须**一起**剔。
+        var blankFreeLineIndices: [Int]? = nil
         let effectiveLines: [LyricsLineDto]
         if lines.isEmpty {
             effectiveLines = useInstrumentalPlaceholder
@@ -103,7 +116,13 @@ struct LyricsDto {
                 ]
                 : []
         } else {
-            effectiveLines = lines
+            let keep = lines.indices.filter { !lines[$0].isBlankForDisplay }
+            if keep.isEmpty || keep.count == lines.count {
+                effectiveLines = lines
+            } else {
+                effectiveLines = keep.map { lines[$0] }
+                blankFreeLineIndices = keep
+            }
         }
 
         var lyricsData = LyricsData.with {
@@ -176,9 +195,19 @@ struct LyricsDto {
         let suppliesTranslation = !hasUsableWordLevelData(self)
 
         if let translation = translation, suppliesTranslation {
+            // ★ 2026-10-19：上面若剔过空白行，译文必须按**同一批下标**剔 ——
+            //   `lyricsData.lines` 与 `translation.lines` 是按下标一一对应的
+            //   （渲染层那一侧同理，见 `LyricLinesAdapter.toAppleMusicLyricLines`）。
+            //   长度本来就没配对时不动它：那说明这份数据自己就没对齐，别替它猜。
+            let translatedLines: [String]
+            if let keep = blankFreeLineIndices, translation.lines.count == lines.count {
+                translatedLines = keep.map { translation.lines[$0] }
+            } else {
+                translatedLines = translation.lines
+            }
             lyricsData.translation = LyricsTranslation.with {
                 $0.languageCode = translation.languageCode
-                $0.lines = translation.lines
+                $0.lines = translatedLines
             }
         }
         
@@ -575,9 +604,53 @@ extension String {
     }
 }
 
-// MARK: - 主歌词的大小写显示约定（2026-10-12）
+// MARK: - DTO 落地时的显示规范化（空白行 + 大小写）
+//
+// ★ 2026-10-19：这个 extension 里是两个**落地**动作 —— 丢掉空白行、行首字母大写。
+//   `capitalizingFirstLettersForDisplay()` 是 `CustomLyrics.storeLyricsDto` 唯一的落地调用点
+//   （拿到的 dto 就在那一刻进 `currentLyricsDto`），所以两个动作都挂在它身上：
+//   七个仓库不可能各写一遍"筛空行"。
 
 extension LyricsDto {
+
+    /// ★ 2026-10-19：**丢掉空白行**（判据：`LyricsLineDto.isBlankForDisplay`）。
+    ///
+    /// 为什么要有这一处：七个歌词仓库里**只有三个**自己筛过空行
+    /// （`MusixmatchLyricsRepository` 的 `isMxmInterludeRow` 连带空行一起丢、
+    ///  `NeteaseLyricsRepository` 三条路各自 `.filter { !isInterludeRow(...) }`、
+    ///  `AmllTtmlParser` 的 `guard !line.primaryText.isEmpty`），
+    /// `GeniusLyricsRepository` 只丢**首尾**空行（`LyricsMarkerFilter.mapLyricsLines`），
+    /// 而 `PetitLyricsRepository` / `LrclibLyricsRepository` / `SpicyLyricsRepository`
+    /// 是**原样**把上游的行搬进 dto 的。用户看到的现象就是
+    /// 「PetitLyrics 返回的歌词里夹着空行」—— 与其在七个仓库里各写一遍，不如在 dto
+    /// **落地**这一处筛一次（调用点见下面的 `capitalizingFirstLettersForDisplay`）。
+    ///
+    /// ⚠️ 与 `lines` **同序同长**的两份副本必须**一起**剔 —— 渲染层是按**原数组下标**
+    /// 取译文与罗马字的（`LyricLinesAdapter.toAppleMusicLyricLines` 的
+    /// `translationLines[index]`、`romanizedContentsForDisplay()` 的
+    /// `officialRomanizedLines[i]`），只删 `lines` 会让整份译文/罗马字错位一行。
+    ///
+    /// ⚠️ 只认**真正的空白**，`♪` 那类占位符不动（理由见 `LyricsLineDto.isBlankForDisplay`）。
+    func droppingBlankLinesForDisplay() -> LyricsDto {
+        let keep = lines.indices.filter { !lines[$0].isBlankForDisplay }
+        // 没有空白行 ⇒ 原样返回（这是绝大多数歌的路径，别白拷一份数组）。
+        guard keep.count != lines.count else { return self }
+
+        var result = self
+        result.lines = keep.map { lines[$0] }
+
+        // 两份按下标对齐的副本：长度对不上就当它本来就没配对（渲染层同样会自己放弃）。
+        if officialRomanizedLines.count == lines.count {
+            result.officialRomanizedLines = keep.map { officialRomanizedLines[$0] }
+        }
+        if let translation, translation.lines.count == lines.count {
+            result.translation = LyricsTranslationDto(
+                languageCode: translation.languageCode,
+                lines: keep.map { translation.lines[$0] }
+            )
+        }
+        return result
+    }
 
     /// 显示约定：**每行第一个字母大写**（`「` `"` `・` 空格 这类装饰前缀会被跳过，
     /// 规则见 `String.capitalizingFirstLetterIfAlphabetic`）——逐词行**连第一个含字母的词一起**，
@@ -597,8 +670,11 @@ extension LyricsDto {
     /// 播放器那层 / 全屏页 / 旧 UIKit 层 / 静态歌词档读到的都是同一份。
     /// **幂等**：payload 与罗马字那两处会再做一次，结果不变（`…IfAlphabetic` 对已大写的串是恒等）。
     func capitalizingFirstLettersForDisplay() -> LyricsDto {
-        var result = self
-        result.lines = lines.map { line in
+        // ★ 2026-10-19：先丢掉空白行，再统一大小写 —— 这一步是 dto 的**落地**入口
+        //   （`CustomLyrics.storeLyricsDto` 只在这里调一次），所以"筛空行"也挂在这里。
+        //   两个动作都在本类型里，且都只动 dto 的**显示形态**，不碰任何仓库的取词逻辑。
+        var result = droppingBlankLinesForDisplay()
+        result.lines = result.lines.map { line in
             var line = line
             line.content = line.content.capitalizingFirstLetterIfAlphabetic()
 

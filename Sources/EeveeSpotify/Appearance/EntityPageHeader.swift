@@ -1061,8 +1061,12 @@ final class EntityPageHeaderView: UIView {
     private let creatorLabel = EntityPageHeaderView.makeLabel(
         style: .body, size: 17, weight: .regular, color: .secondaryLabel, lines: 1, alignment: .center
     )
+    /// ★★ 2026-10-16（用户：「现在的**每月有 x 名听众**可能看不清」）：原来这一行用的是
+    /// `.tertiaryLabel` —— 深色模式下就是 **白 30%**，压在我们那块灰底上几乎读不出来。
+    /// 抬到 `.secondaryLabel`（白 60%）：AM 的 meta 行也是"比标题弱一档、但看得清"，
+    /// 而 `.tertiaryLabel` 那一档是给**禁用态**用的。歌单/专辑页的"12 首歌曲 · 45 分钟"共用这颗。
     private let lengthLabel = EntityPageHeaderView.makeLabel(
-        style: .footnote, size: 13, weight: .regular, color: .tertiaryLabel, lines: 1, alignment: .center
+        style: .footnote, size: 13, weight: .regular, color: .secondaryLabel, lines: 1, alignment: .center
     )
     private let aboutLabel = EntityPageHeaderView.makeLabel(
         style: .footnote, size: 13, weight: .regular, color: .secondaryLabel, lines: 2, alignment: .natural

@@ -884,10 +884,26 @@ class NeteaseLyricsRepository: LyricsRepository {
             (song["duration"] as? NSNumber)?.intValue
         }
 
-        /// 候选的歌手名（网易是 `ar: [{id, name}, …]`）。
+        /// 候选的歌手名。
+        ///
+        /// ⚠️⚠️ 2026-10-16：**两个键都要认** —— 我们用的是 `/weapi/search/get`（老 weapi 接口），
+        /// 它返回的是 **`artists`**；**`ar` 是 eapi / 歌曲详情那一档的写法**。
+        /// 实测（同一族接口 `https://music.163.com/api/search/get?s=…&type=1`）：
+        /// `result.songs[]` 的键是 `id, name, artists, album, duration, alias, rtype, fee, …`
+        /// —— **根本没有 `ar`**。
+        ///
+        /// 历史：只读 `ar` 的那一版里，**每一条候选的歌手都是空的** ⇒ `artistMatches` 永远
+        /// 返回 `.none` ⇒ 上面那句"歌手 + 时长都要对得上"**从来没生效过**，实际等于
+        /// "取相关度排序里第一个时长在 ±5s 内的"。证据：**所有**日志里的
+        /// `[NetEase] Chosen[N]: <歌名> — ? <时长>` 那个 `?` 就是空歌手
+        /// （`48/49/50/52/62/89/94/99/102…` 全是）。
+        ///
+        /// 后果正是用户 2026-10-16 报的「海外 / 国内环境歌词完全不同」：网易的**搜索排序按地区不同**
+        /// ⇒ 换个网络环境就选中另一首歌。日志 102 里同一首 180s 的歌，一次
+        /// `Chosen[6]: TSUBAKI`、一次 `Chosen[0]: 桜葬` —— 而 `TSUBAKI` 是另一首歌。
         func candidateArtists(_ song: [String: Any]) -> [String] {
-            guard let list = song["ar"] as? [[String: Any]] else { return [] }
-            return list.compactMap { $0["name"] as? String }
+            let list = (song["ar"] ?? song["artists"]) as? [[String: Any]]
+            return (list ?? []).compactMap { $0["name"] as? String }
         }
 
         func artistMatches(_ song: [String: Any]) -> Bool? {
@@ -905,6 +921,8 @@ class NeteaseLyricsRepository: LyricsRepository {
         var chosen: [String: Any]?
         var chosenIndex = -1
         var fallbackByDurationOnly: Int?
+        /// 那个"最差可用"候选的时长差（毫秒）—— 越小越像同一版录音。
+        var fallbackDelta = Int.max
 
         for (index, song) in songs.enumerated() {
             let durationOK: Bool
@@ -920,13 +938,24 @@ class NeteaseLyricsRepository: LyricsRepository {
             case .some(true):
                 chosen = song
                 chosenIndex = index
-            case .some(false):
-                // 时长对、歌手不对 —— 记下来当"最差可用"，但**优先继续找歌手也对得上的**。
-                if fallbackByDurationOnly == nil { fallbackByDurationOnly = index }
-                continue
-            case .none:
-                // 网易没给歌手名（或我们没有艺人名可比）⇒ 只能按时长认。
-                if fallbackByDurationOnly == nil { fallbackByDurationOnly = index }
+            case .some(false), .none:
+                // 时长对、但**歌手对不上**（翻唱 / 同曲异名）或**网易没给歌手名** ——
+                // 记下来当"最差可用"，优先继续找歌手也对得上的。
+                //
+                // ★★ 2026-10-16：**按时长差取最近的那一个**，不再取"相关度排序里的第一个"。
+                //    排序是**按地区**变的（同一首歌 180s，日志 102 一次 Chosen[6]、一次 Chosen[0]），
+                //    而"哪一条和 Spotify 的时长最接近"跟地区无关 —— 同一个母带的时长是一样的。
+                //    这条兜底只在"歌手闸门也过不去"时才走（例如 Spotify 写 `Natsunose`、
+                //    网易写 `ナツノセ`，跨书写系统认不出来），所以它越确定越好。
+                if let spotifyDurationMs, let ms = candidateDuration(song) {
+                    let delta = abs(ms - spotifyDurationMs)
+                    if delta < fallbackDelta {
+                        fallbackDelta = delta
+                        fallbackByDurationOnly = index
+                    }
+                } else if fallbackByDurationOnly == nil {
+                    fallbackByDurationOnly = index
+                }
                 continue
             }
             if chosen != nil { break }
@@ -936,8 +965,9 @@ class NeteaseLyricsRepository: LyricsRepository {
             chosen = songs[index]
             chosenIndex = index
             writeDebugLog(
-                "[NetEase] no candidate matched both artist and duration, falling back to index \(index) (duration-only match)"
-                    + " (\(songs.count) results)"
+                "[NetEase] no candidate matched both artist and duration — closest duration wins"
+                    + " (index \(index), Δ\(fallbackDelta == Int.max ? -1 : fallbackDelta)ms,"
+                    + " \(songs.count) results)"
             )
         }
 

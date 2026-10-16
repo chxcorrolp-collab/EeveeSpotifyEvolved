@@ -599,20 +599,14 @@ enum NowPlayingLyricsPlate {
         pageLeaving = true
     }
 
-    /// ★★ 2026-10-10（用户提的「页面记忆」）：进页面时若记得"上次是展开的"，就把它铺回去。
+    /// ★★ 页面记忆：进页面时若记得"上次是展开的"，就把它铺回去。
     ///
-    /// 用户原话：
-    /// > 是不是没有那种页面记忆的功能。就是假如说我当时正在打开歌词的这个页面（照片 63），
-    /// > 退出之后再重进也还是在这个页面，不是那个大封面
+    /// 为什么需要：展开状态只活在 `isOpen` 里，而 `viewWillDisappear` 会走 `closeEverything`
+    /// 把它清掉 ⇒ 不另记一笔的话，重进必然是大封面。
     ///
-    /// 改动前的实证：展开状态只活在 `isOpen` 里，而 `remove(reason:)`（`viewWillDisappear`）
-    /// 会走 `closeEverything` 把它清掉 ⇒ 重进必然是大封面。
-    ///
-    /// 门禁（缺一不可）：
-    ///   · 开关开着（`apply` 已经判过，这里再判一次是为了 `reapply()` 那条路）；
-    ///   · 记的是"展开"；
-    ///   · **这一首有能画的东西**（`canShow`）—— 没词就保持大封面，只打一行日志，
-    ///     别把 `openAndMount` 的重试窗口浪费在一首没词的歌上（与 `toggle()` 同一条纪律）。
+    /// 门禁（缺一不可）：开关开着（`apply` 已判过，这里再判一次是为了 `reapply()` 那条路）；
+    /// 记的是"展开"；**这一首有能画的东西**（`canShow`）—— 没词就保持大封面，只打一行日志，
+    /// 别把 `openAndMount` 的重试窗口浪费在一首没词的歌上（与 `toggle()` 同一条纪律）。
     private static func reopenIfRemembered(in page: UIView) {
         guard isEnabled, UserDefaults.nowPlayingLyricsExpanded else { return }
         guard canShow(for: page) else {
@@ -1367,22 +1361,10 @@ enum NowPlayingLyricsPlate {
 
         // 标题行：`now-playing-title-label` 所在的那个 element 视图 + 它的父行。
         //
-        // ★ 2026-10-06：改从 **`page`** 找（以前只从 `list` 找）。
-        //
-        // ⚠️ **先纠正一条我读错过、差点写进文档的结论**：
-        //    「那一行在 `npv.bottomStackView` 里，而那一坨是列表的兄弟 ⇒ 从 `list` 永远找不到」
-        //    —— **这是错的**。日志 49（旧代码）明明展开成功过：
-        //    `歌词区 20,204,374,346` ⇒ `barTop = 346 + 8 + 204 = 558`，
-        //    正好等于 `npv.bottomStackView` 的顶边 ⇒ `bottomStackTop(in: list)` 当时**找得到**它
-        //    ⇒ 那一坨**就在列表子树里**，标题行自然也找得到。
-        //    真正让日志 50 点不开的是 `isOpen` 被一次失败清掉之后**再也不重试**
-        //    （见 `openAndMount` 与 `pendingOpenUntil`）—— 那是一个**本轮新引入的回归**。
-        //
-        // 那为什么还是改？因为从 `page` 找是**严格超集**……**但只在预算够的时候才是**：
-        // `findByIdentifier` 有 `maxNodes = 800`，而 BFS 是**先宽后深** —— 从 `page` 起走
-        // 要先趟过整页的宽度（那些卡片）才轮到这一行的深度。所以顺序是
-        // **先 `list`（日志 49 已证明走得通、子树小得多），再 `page` 兜底**。
-        // （独立只读复核抓到的：反过来写有可能因为预算耗尽而**比原来更差**。）
+        // ⚠️ 顺序**必须"先 `list`，再 `page` 兜底"**：这一行本来就在列表子树里（子树小得多），
+        // 而 `findByIdentifier` 有 `maxNodes = 800`、BFS 是**先宽后深** —— 从 `page` 起走要
+        // 先趟过整页的宽度（那些卡片）才轮到这一行的深度，预算有可能在到那儿之前就用完
+        // ⇒ 反过来写会比只搜 `list` 更差。
         let titleLabel = findByIdentifier(titleLabelIdentifier, in: list)
             ?? findByIdentifier(titleLabelIdentifier, in: page)
         let titleElement = titleLabel?.superview
@@ -1462,19 +1444,15 @@ enum NowPlayingLyricsPlate {
         guard stage.height > livingHeight / 2 else {
             return .failed("the lyrics area would be too short (\(Int(stage.height))pt)")
         }
-        // ⚠️ ★ `lift` **只有量到标题行时**才配当判据。
+        // ⚠️ ★ `lift` **只有量到标题行时**才配当判据：量不到时上面那句
+        // `let lift = top - (rowFrame?.minY ?? top)` 恒等于 **0** —— 一个 nil 合并表达式
+        // 会悄悄变成一条"永远失败"的判据。量不到标题行 = 这一页没有要上移的东西
+        // ⇒ **照常展开**，只是不做标题位移。
         //
-        // 量不到标题行时，上面那句 `let lift = top - (rowFrame?.minY ?? top)` 恒等于 **0**
-        // —— 旧代码写的是 `guard …, lift < 0`，于是这条判据**自己把自己否掉**，
-        // 报出来的还是"量不到封面/标题行"那句更含糊的话：一个 nil 合并表达式
-        // 悄悄变成了一条"永远失败"的判据。
-        // 量不到标题行 = 这一页没有要上移的东西 ⇒ **照常展开**，只是不做标题位移。
-        //
-        // ⚠️ 反过来，`rowFrame != nil && lift >= 0` 这条**必须留着**：日志 50 那次失败
-        // 极可能就是它 —— 那一拍 `npv.bottomStackView` **已经在树里但还没落位**
-        // （frame 还在 (0,0)）⇒ `rowFrame.minY ≈ 0` 而 `top ≈ 缩略图中线` > 0
-        // ⇒ `lift > 0` ⇒ 拒绝。这一条**不能放宽**（把一个还没落位的标题行"上移"到
-        // 错的地方比不展开更糟），要治的是"下一秒再试一次"—— 那正是 `openAndMount` 的窗口。
+        // ⚠️ `rowFrame != nil && lift >= 0` 这条**必须留着**：标题行已经在树里但还没落位时
+        // （frame 还在 (0,0)）`rowFrame.minY ≈ 0` ⇒ `lift` 假性 > 0 ⇒ 拒绝。这一条
+        // **不能放宽** —— 把一个还没落位的标题行"上移"到错的地方比不展开更糟；
+        // 要治的是"下一秒再试一次"—— 那正是 `openAndMount` 的窗口。
         if rowFrame != nil, lift >= 0 {
             return .failed("the title row has not settled yet (lift=\(Int(lift))pt) - will retry next tick")
         }
@@ -1521,17 +1499,13 @@ enum NowPlayingLyricsPlate {
     /// 一趟有界 BFS。`skippingCollapsedAncestors = true` 时跳过"祖先里被折成 0 的"那些；
     /// `inside` 非空时只认它的后代。
     ///
-    /// ★ 2026-10-04（用户：「按键换歌漏大封面」+「封面有时候加载失败」）：
-    ///   **优先挑"这一趟里真的落在页面范围内"的那一张。**
+    /// ★ **优先挑"这一趟里真的落在页面范围内"的那一张**：页面里会同时存在两个同尺寸的
+    /// `Encore.ImageView`，另一个可能 `window != nil`（所以老判据认它）却**整张在屏幕外** ——
+    /// `hideSpotifyCover` 把 `alpha = 0` 写在它身上，屏幕上那张封面一点没变
+    /// （"漏了/还在"两种说法都是这个），而且 `measure()` 也会拿它的 frame 当地理。
     ///
-    ///   现场（真机日志逐字）：`artwork picked … 366×366 at -369264,147,366,366` ——
-    ///   页面里同时存在两个同尺寸的 `Encore.ImageView`，BFS 挑中的那个 x 是 **-369264**：
-    ///   它 `window != nil`（所以老判据认它），可它**整张在屏幕外**。
-    ///   `hideSpotifyCover` 于是把 `alpha = 0` 写在它身上 ⇒ **屏幕上那张封面一点没变**
-    ///   （"漏了/还在"两种说法都是这个），而且 `measure()` 也会拿它的 frame 当地理。
-    ///
-    ///   ⚠️ 只用来**挑**，不做硬门禁：一趟走完只有离屏那一张 ⇒ 照旧用它
-    ///   （转场中途真封面也可能暂时飞到页面外 —— 宁可漏，不误判）。
+    /// ⚠️ 只用来**挑**，不做硬门禁：一趟走完只有离屏那一张 ⇒ 照旧用它
+    /// （转场中途真封面也可能暂时飞到页面外 —— 宁可漏，不误判）。
     private static func firstVisibleCover(
         in list: UIView,
         skippingCollapsedAncestors: Bool,
@@ -1708,23 +1682,15 @@ enum NowPlayingLyricsPlate {
     ///
     /// ## ★ 动画的关键：容器永远按"Spotify 封面那个大小与位置"布局，位移只写在 `transform` 上
     ///
-    /// 这是照 pw `PlayerLyrics.x` 的 `place()` 与 `thumbTransform()` 的做法（GPL-3.0）：
+    /// 照 pw `PlayerLyrics.x` 的 `place()` / `thumbTransform()`（GPL-3.0）：
+    /// > *"…laid out **at the size and place Spotify draws its cover at** and moved by its transform
+    /// > alone … **Bounds and a centre, not a frame**."*
     ///
-    /// > *"The thumbnail is laid out **at the size and place Spotify draws its cover at** and moved by
-    /// > its transform alone, so a pass that runs while it is up **leaves it exactly where the eye has
-    /// > it** … **Bounds and a centre, not a frame**, since both views can be under a transform."*
-    ///
-    /// 为什么不能像上一版那样动画 `frame`（上一版就是这么写的、而且**一次都没跑起来**）：
-    ///   · `layoutAndMount` **每 0.3s 会重跑一次**（`DeclutterChrome` 的复查节拍），它要重写封面布局
-    ///     —— 动画画在 `frame` 上时那一拍就会**打断/拽回**动画；画在 `transform` 上则改
-    ///     `bounds`/`center` **完全不打扰动画**；
-    ///   · 本仓库纪律：**`frame` 在 transform 非恒等时不可信** ⇒ 一律 `bounds` + `center`。
-    ///
-    /// ## 阴影放在**容器**上
-    ///
-    /// pw 原话：*"the **shadow and the corners travel with it** that way, instead of a shadow redrawn
-    /// on every frame."* —— 容器带着 transform 走，阴影与圆角自动跟着，不用每帧重画。
-    /// （所以：容器**不裁剪**（否则阴影没了），裁剪与圆角放在里面那层 imageView 上。）
+    /// ⚠️ **不能动画 `frame`**：`layoutAndMount` **每 0.3s 重跑一次**（`DeclutterChrome` 的复查
+    /// 节拍）要重写封面布局 —— 画在 `frame` 上会被那一拍**打断/拽回**，画在 `transform` 上则改
+    /// `bounds`/`center` **完全不打扰动画**（本仓库纪律：`frame` 在 transform 非恒等时不可信）。
+    /// 阴影同理挂在**容器**上（pw：*"the shadow and the corners travel with it"*）：容器带着
+    /// transform 走就不用每帧重画 ⇒ 容器**不裁剪**，裁剪与圆角放在里面那层 imageView 上。
     // MARK: - 收起态的大封面尺寸（用户 2026-10-04：「把现在的大封面做小，不需要那么大」）
 
     /// 收起态那张大封面的目标宽度（pt）。**kumone 照片 41 逐像素量出来的是 242pt**
@@ -1976,21 +1942,15 @@ enum NowPlayingLyricsPlate {
 
     /// 我们按曲目 id 认下来的封面图（最多留 `artworkCacheLimit` 张）。
     ///
-    /// **为什么要它**：`ensureCover` 原来是在**点"歌词"那一刻**才去 Spotify 的视图树里抓
-    /// `UIImageView.image`；而真机树里那张图常常是 `alpha=0.00` 的壳 + `PlaceholderView`
-    /// （日志 42/48 的 `[NPVTree]`：`15.ImageView@0,0,366,366,id=Encore.ImageView` 下面是
-    /// `16.UIImageView@0,0,366,366,alpha=0.00` + `16.PlaceholderView`），那一刻 `image`
-    /// 可能还是 nil ⇒ 我们只能**拒绝展开**（有日志、不留半成品，但功能会"有时候点了没反应"）。
-    ///
-    /// 现在改成：**页面开着的时候**每次复查（`DeclutterChrome` 的 0.3s 节拍，本来就在跑）
-    /// 顺手把当前这首的封面认下来、按曲目 id 存住；点的时候**先用缓存**，树只当兜底。
+    /// **为什么要它**：真机树里真正画图的那张常常是 `alpha=0.00` 的壳 + `PlaceholderView`，
+    /// 点"歌词"那一刻 `image` 可能还是 nil ⇒ 我们只能**拒绝展开**（有日志、不留半成品，
+    /// 但功能会"有时候点了没反应"）。所以改成：**页面开着的时候**每次复查（本来就在跑的 0.3s
+    /// 节拍）顺手把当前这首的封面按曲目 id 存住，点的时候**先用缓存**、树只当兜底 ——
     /// **不新增定时器、不新增取景时机。**
     ///
-    /// ⚠️ 与 pw 还有距离：pw 是**完全自己持有**那张图（`SGRNowPlayingArtwork`：按 metadata 里的
-    /// URL 下载 + 让屏幕把自己画的那张发布给它 + `…ArtworkDidChangeNotification` 通知重画）。
-    /// 要再稳一档就复用仓库既有的 `LyricsArtworkResolver`（它已经把
-    /// `spotify:image:<hex>` → `https://i.scdn.co/image/<hex>` 这条链走通了），
-    /// 但那是**异步**的，要塞进一个同步返回 `Bool` 的 `layoutAndMount` 得先改结构 —— 本轮没做。
+    /// ⚠️ 与 pw 还有距离：pw 是**完全自己持有**那张图。要再稳一档就复用仓库既有的
+    /// `LyricsArtworkResolver`（`spotify:image:<hex>` → `https://i.scdn.co/image/<hex>` 这条链
+    /// 它已经走通），但它是**异步**的，要塞进一个同步返回 `Bool` 的 `layoutAndMount` 得先改结构。
     private static let artworkCacheLimit = 8
     private static var artworkCache: [String: UIImage] = [:]
     private static var artworkCacheOrder: [String] = []
@@ -2015,20 +1975,12 @@ enum NowPlayingLyricsPlate {
             }
         }
 
-        // ★ 2026-10-07（日志 52 的现场）：**换歌那一拍先不信视图树。**
+        // ★ **换歌那一拍先不信视图树**：`currentTrackId()` 是**立刻**变的，而 Spotify 的
+        // 封面要**晚一点**才换过来 ⇒ 那一拍抓到的还是上一首的图，写进缓存就**永久错**下去
+        // （缓存按曲目 id 存，而 `ensureCover` 优先吃缓存）。
         //
-        // `currentTrackId()` 是**立刻**变的，而 Spotify 的封面要**晚一点**才换过来。
-        // 日志 52 里这两行是**同一秒**：
-        // ```
-        // 07:00:46  [NPVLyrics] remembered this track's artwork 366×366 (cache 2/8)
-        // 07:00:46  [PLAYER] track changed — pos=0.0s dur=168.0s
-        // ```
-        // ⇒ **上一首的图被当成新那一首的图存进了缓存**，而 `ensureCover` 优先吃缓存
-        // ⇒ 于是"封面显示上一首歌的歌曲"，而且**这一首会一直错下去**。
-        //
-        // 所以：曲目 id 刚变的那一拍**只记 id、不认图**，下一拍（≤0.5s）再认 ——
-        // 那时图也换过来了。这一拍 `ensureCover` 会退回 `firstImage(in: source)`，
-        // 也就是**当前树里真实那张**，不会比原来差。
+        // 所以：曲目 id 刚变的那一拍**只记 id、不认图**，下一拍（≤0.5s）再认 —— 那时图也换
+        // 过来了。这一拍 `ensureCover` 退回 `firstImage(in: source)`，也就是**当前树里真实那张**。
         if lastArtworkTrackId != trackId {
             // ★ 2026-10-09：把**上一首**那张图记下来 —— 下一次真的去抓树时要用它判"树换过来了没有"。
             previousArtworkImage = artworkCache[lastArtworkTrackId]
@@ -2046,26 +1998,17 @@ enum NowPlayingLyricsPlate {
               let source = visibleCover(in: list, page: page),
               let image = firstImage(in: source) ?? anyCoverImage(in: list) else { return nil }
 
-        // ★ 2026-10-09（照片 61）：**"下一拍树就换过来了"这个假设不成立。**
-        //
-        // 日志 53 的换歌现场（同一秒）：
-        // ```
-        // 08:08:35  [NPVLyrics] artwork picked … ImageView 366×366 at 24,163,366,366
-        // 08:08:35  [PLAYER] track changed — pos=0.3s dur=225.0s
-        // 08:08:36  [NPVLyrics] remembered this track's artwork 366×366 (cache 2/8)   ← 抓到的还是旧那张
-        // ```
-        // 于是**上一首的图被写进新曲目的缓存**，而 `ensureCover` 优先吃缓存 ⇒ 缩略图一直显示上一首
-        // （照片 61 的缩略图就是上一首那张橙色封面，标题却已经是新歌）。
+        // ★ **"下一拍树就换过来了"这个假设不成立**：抓到的图可能还是上一首那张，
+        // 写进新曲目的缓存后 `ensureCover` 优先吃缓存 ⇒ 缩略图一直显示上一首。
         //
         // 判据：抓到的图**和上一首缓存里那张是同一个对象** ⇒ 树还没换过来 ⇒ 这一拍不写缓存。
-        // 这一拍 `ensureCover` 会退回 `firstImage(in: source)`（同一张，画面对齐）；
-        // 树真的换过来之后，对象不同 ⇒ 正常写缓存。
+        // 这一拍 `ensureCover` 退回 `firstImage(in: source)`（同一张，画面对齐）；
+        // 树真的换过来之后对象不同 ⇒ 正常写缓存。
         //
-        // ⚠️ **只在换歌那一小段窗口里判**（独立复核指出的死角）：同一个对象也可能是
-        //    Spotify 自己的图缓存把**同一张专辑**的图复用了（连听两首同专辑），
-        //    那时这条判据会**永久**不让缓存写进去 —— 画面不会错（兜底拿的是同一张真图），
-        //    但"点开之前就先认下这张图"这个收益没了。所以给它一个 1.5s 的窗口：
-        //    够覆盖"树晚一拍到一秒"（日志 53 是 ≤1s），之后照常缓存。
+        // ⚠️ **只在换歌那一小段窗口里判**：同一个对象也可能是 Spotify 自己的图缓存把
+        // **同一张专辑**的图复用了（连听两首同专辑），那时这条判据会**永久**不让缓存写进去 ——
+        // 画面不会错（兜底拿的是同一张真图），但"点开之前就先认下这张图"这个收益没了。
+        // 所以给它一个 1.5s 的窗口：够覆盖"树晚一拍到一秒"，之后照常缓存。
         if let previous = previousArtworkImage,
            image === previous,
            CFAbsoluteTimeGetCurrent() - artworkTrackChangedAt < staleArtworkWindow {
@@ -2141,15 +2084,11 @@ enum NowPlayingLyricsPlate {
 
     /// 在壳里找真正的 `UIImageView`（`Encore.ImageView` 自己不画图）。
     ///
-    /// ★★ 2026-10-04（用户：「歌曲封面有时候会加载失败」）：**图也要看尺寸。**
+    /// ★ **图也要看尺寸**：那个壳里除了真正画图的 `UIImageView`，还挂着一个 `PlaceholderView`
+    /// （占位图很小，例如 4×4）。小图一旦被当成封面缓存下来，`ensureCover` **每一拍都优先吃缓存**
+    /// ⇒ 缩略图永远是那块灰方块，而且**这一首永久错下去**（缓存按曲目 id 存，LRU 到 8 张才挤掉）。
     ///
-    /// 现场（同一份真机日志）：`remembered this track's artwork 4×4 (cache 1/8)` ——
-    /// 这一版以前**只认"有没有 `image`"**，而那个壳里除了真正画图的 `UIImageView`，
-    /// 还挂着一个 `PlaceholderView`（它的占位图就是 4×4）。4×4 被当成封面缓存下来之后
-    /// `ensureCover` **每一拍都优先吃缓存** ⇒ 缩略图永远是那块灰方块（照片 76 的左上角就是它），
-    /// 而且**这一首永久错下去**（缓存按曲目 id 存，只在 LRU 到 8 张时才被挤掉）。
-    ///
-    /// 所以这里改成"**够大才算**"：太小的**跳过、继续往下走**（不是直接返回 nil ——
+    /// 所以"**够大才算**"：太小的**跳过、继续往下走**（不是直接返回 nil ——
     /// 真图可能挂在这个小图的兄弟节点上）。
     private static func firstImage(in view: UIView) -> UIImage? {
         if let imageView = view as? UIImageView, let image = imageView.image {
@@ -2353,24 +2292,20 @@ enum NowPlayingLyricsPlate {
 
     /// 把 Spotify 自己的**分享键**搬进"控件条"（进度条上方那一条空带 —— 绿色 ✓ 本来就在那儿）。
     ///
-    /// ## 用户 2026-10-11 的第二版方案（照片 71/72/73）
     /// 那一条放 **[分享 58] [我们的歌词键 215] [绿色 ✓ 371（不动）]**，于是底部那两排
-    /// 一颗都不用改；**收藏键不搬**（用户原话：「那个绿色勾就让它呆在那里」）。
-    /// 开头那段常量注释里有原话与逐条坐标。
+    /// 一颗都不用改；**收藏键不搬**（绿色 ✓ 留在原处）。
     ///
-    /// ## ⚠️ 这是**视觉**搬运：搬过去之后**点不到**（用户已知并选了这一档）
-    /// UIKit 的 hit-test 在祖先那一层就问 `point(inside:)`：分享键被抬到 626pt 之后，已经在它
+    /// ## ⚠️ 这是**视觉**搬运：搬过去之后**点不到**（已知并刻意选这一档）
+    /// UIKit 的 hit-test 在祖先那一层就问 `point(inside:)`：分享键被抬到 626pt 之后已经在它
     /// **父视图（footer 那一行，≈792…836）的边界之外** ⇒ 触摸到不了它，要分享得走右上角
-    /// `⋯` 菜单里的 Share。`bandNote` 会把"到底是不是点不到、被谁挡住"写进日志。
+    /// `⋯` 菜单里的 Share（`bandNote` 会把"到底是不是点不到、被谁挡住"写进日志）。
     ///
-    /// ## 两个状态都摆，和 `isOpen` 无关
-    /// 这一条在**开着**和**关着**歌词时都是空的（关着时标题/歌手已被
-    /// `applyClosedTitleTransform` 挪去左上角）⇒ 每拍都摆。
+    /// ## 两个状态都摆，和 `isOpen` 无关：这一条在**开着**和**关着**歌词时都是空的
+    /// （关着时标题/歌手已被 `applyClosedTitleTransform` 挪去左上角）⇒ 每拍都摆。
     ///
-    /// ## 为什么位移只写 `transform`
-    /// 位置由父视图的 Auto Layout 决定，改 `frame` 会被下一拍写回（本仓库老教训 ——
-    /// 见 `applyTitleTransform` 那句"改约束会被 stack view 布局写回"）。只写平移分量，
-    /// `a,b,c,d` 原样保留；每拍用 `untransformed` 重算平移量，父视图重排也能跟上。
+    /// ## 位移只写 `transform`：位置由父视图的 Auto Layout 决定，改 `frame` 会被下一拍写回
+    /// （本仓库老教训 —— 见 `applyTitleTransform` 那句"改约束会被 stack view 布局写回"）；
+    /// 只写平移分量，`a,b,c,d` 原样保留，每拍用 `untransformed` 重算，父视图重排也能跟上。
     @discardableResult
     private static func applyControlBand(in page: UIView) -> Bool {
         guard let button = visibleShareButton(in: page) else {
@@ -2462,19 +2397,14 @@ enum NowPlayingLyricsPlate {
         page.bringSubviewToFront(relay)
     }
 
-    /// 关着歌词时：把**标题行**搬到左上角（照片 73 的 kumone 位）—— 给控件条腾地方。
+    /// 关着歌词时：把**标题行**搬到左上角（kumone 的位）—— 给控件条腾地方。
     ///
-    /// ## 为什么必须搬（照片 72 那个"会挡住"）
-    /// 控件条的**第 ① 处**（分享键 58pt）正好压在**原生歌名/歌手**上：照片 72 里歌名在 618、
-    /// 歌手在 640，而分享键要去 626。用户给的解法就是照片 73：
-    /// **不展开歌词**时歌名/歌手贴左上角；**展开歌词以后**封面占左上角、歌名/歌手往右让位
-    /// （后者正是现在的做法，见 `applyTitleTransform`）。
+    /// ## 为什么必须搬：控件条的**第 ① 处**（分享键 58pt）正好压在**原生歌名/歌手**上
+    /// ⇒ **不展开歌词**时歌名/歌手要贴左上角；**展开歌词以后**封面占左上角、歌名/歌手往右
+    /// 让位（后者正是现在的做法，见 `applyTitleTransform`）。
     ///
-    /// ## 落点
-    /// `navBarBottom + closedTitleTopInset` ⇒ 照片 72 上是 **98**（行高 46 ⇒ 98…144），
-    /// 而**原生大封面顶边 = 145** —— 正好卡在导航条与封面之间，一行都不压。
-    /// **x 不动**：照片 72 的原生歌名本来就在 34pt（和 kumone 照片 73 的 34 一样），
-    /// 只有 y 要抬（618 → 98，约 −520pt）。
+    /// ## 落点：`navBarBottom + closedTitleTopInset` —— 正好卡在导航条与**原生大封面顶边**
+    /// 之间，一行都不压。**x 不动**（原生歌名本来就在 34pt），只有 y 要抬。
     ///
     /// 返回"这一拍有没有找到标题行"。
     @discardableResult
@@ -2580,22 +2510,16 @@ enum NowPlayingLyricsPlate {
 
     /// 把「歌词提供商」写到**歌手那一行的右边**：`歌手（提供商）`。
     ///
-    /// ## 用户 2026-10-11 的想法（原话）
-    /// > 就是在歌手的右边，写上歌词提供商。即 **歌手名字（歌词提供商）** 这种。而这两行是等高的。
-    /// > 这个就不需要写 eveespotify 的水印了
-    ///
     /// ## 为什么用"复查"而不是只写一次
     /// 这一行是 **Spotify 自己的标签**（`now-playing-subtitle-label`），它的 binder 会在绑定/
     /// 换歌时把文本写回 ⇒ 只写一次就是"过一会儿又变回去"。本仓库对"改原生标签"的既有手法
-    /// 就是**常驻复查节拍**（见 `LibraryAppearance` 那段：写一次、每拍比一次、被写回时留一行日志）。
-    /// 我们这条 0.3s 的节拍现成，直接蹭。
+    /// 就是**常驻复查节拍**（写一次、每拍比一次、被写回时留一行日志），我们这条 0.3s 的节拍现成。
     ///
-    /// ⚠️ **展开与收起都贴**（用户 2026-10-04 选的那一档：「两个状态都显示」）；
-    /// 只有**离开页面 / 关开关**才由 `restoreArtistLine` 精确摘掉
-    /// （记住贴上去的那一段，不靠猜括号；见 `settleAfterClosing`）。
+    /// ⚠️ **展开与收起都贴**（两个状态都显示）；只有**离开页面 / 关开关**才由 `restoreArtistLine`
+    /// 精确摘掉（记住贴上去的那一段，不靠猜括号；见 `settleAfterClosing`）。
     ///
     /// ⚠️ 两行的高度**不动**：标题与歌手各是 Spotify 自己的字号（真机树 24 / 22pt），
-    /// 我们只往歌手那行**追加文本**，不换行、不改字体 —— 用户要的"两行等高"就是"别把第二行撑高"。
+    /// 我们只往歌手那行**追加文本**，不换行、不改字体 —— "两行等高"就是"别把第二行撑高"。
     private static func applyProviderToArtistLine(in page: UIView) {
         guard let label = artistLabel(in: page) else { return }
         guard let suffix = providerSuffix() else { return }
@@ -2661,27 +2585,17 @@ enum NowPlayingLyricsPlate {
 
     /// 歌手那一行到底是哪一个 `UILabel`。判据**从硬到软**三条：
     ///
-    ///   ① **id**：`now-playing-subtitle-label`（9.1.76 那份树里是它；9.1.88 上这份日志证明**已经不在**）；
-    ///   ② ★ 2026-10-12（日志 58）：**按文本认** —— 页面里那个写着**当前歌手名**的标签。
-    ///      歌手名从曲目元数据取（口径与 `LyricsWordByWord` 的壳、`AppleMusicLyricsOverlay` 的页头一致）。
-    ///      这是**确定性**判据，不是位置猜；
+    ///   ① **id**：`now-playing-subtitle-label`（Spotify 不是每份树都给它这个 id，不能只靠它）；
+    ///   ② **按文本认** —— 页面里那个写着**当前歌手名**的标签。歌手名从曲目元数据取（口径与
+    ///      `LyricsWordByWord` 的壳、`AppleMusicLyricsOverlay` 的页头一致）。**确定性**判据；
     ///   ③ 位置兜底：标题那一行里、标题**正下方**、且与标题左边缘对齐的标签。
     ///
-    /// ## 为什么必须重做（日志 58 逐字）
+    /// ⚠️ **位置兜底会误中**一个 `text = "直播"` 的徽章 —— 提供商被贴到 LIVE 徽章上，用户看到的
+    /// 仍然是"提供商没写在歌手后面"（而且我们还改坏了别人的一个标签）⇒ ①② 必须先走。
     ///
-    /// ```
-    /// [NPVLyrics] the artist line was found by position, not by id — class UILabel
-    /// [NPVLyrics] lyrics provider written next to the artist — "直播" + "（NetEase）"
-    /// ```
-    ///
-    /// ⇒ 旧的"位置兜底"挑中了一个 **`text = "直播"` 的徽章**：提供商被贴到 LIVE 徽章上，
-    /// 用户看到的仍然是"提供商没写在歌手后面"（而且我们还改坏了别人的一个标签）。
-    ///
-    /// ## 另一半（同样致命）
-    ///
-    /// 三条判据都改用 `effectiveLabelText`：Spotify 的标签**未必把文字放在 `text` 里**
+    /// ⚠️ 三条判据都改用 `effectiveLabelText`：Spotify 的标签**未必把文字放在 `text` 里**
     /// （`attributedText` 是常态）—— 只认 `text` 会把真正的歌手行**整行跳过**，
-    /// 于是兜底才轮得到那个徽章。这正是"直播"能中选的原因。
+    /// 于是兜底才轮得到那个徽章。
     private static func artistLabel(in page: UIView) -> UILabel? {
         let list = findByIdentifier(listIdentifier, in: page)
         let byId = (list.flatMap { findByIdentifier(subtitleLabelIdentifier, in: $0) })
@@ -2855,15 +2769,12 @@ enum NowPlayingLyricsPlate {
     /// 页里**看得见、而且在屏上**的那一份分享键。
     ///
     /// ⚠️ 不能用 `findByIdentifier`：它返回 BFS 里**第一份**，而页里有**两份**分享键
-    /// （日志 54 逐字：`12.EncoreButton@0,0,44,44,alpha=0.50,id=ShareButtonNowPlayingView`
-    /// 与 `12.EncoreButton@0,0,44,44,id=ShareButtonNowPlayingView`）
-    /// ⇒ 位移会写在一份看不见（或不在屏上）的按钮上，屏幕上一点变化都没有，
-    /// 而日志还会说"成了"（规矩 1/11 的老坑）。
+    /// （一份 `alpha=0.50`、一份全亮）⇒ 位移会写在一份看不见（或不在屏上）的按钮上，
+    /// 屏幕上一点变化都没有，而日志还会说"成了"（规矩 1/11 的老坑）。
     ///
     /// 走查**起点从小到大**（同 `progressUnitTop` 的思路；整页 BFS 会被列表里那些格子吃掉预算）：
     ///   ① `npv.bottomStackView`（分享键的家 —— 底部那一坨的 footer 行）；
-    ///   ② `SPTNowPlayingView`（播放器自己那一份，几百个节点）；
-    ///   ③ `page` 兜底。
+    ///   ② `SPTNowPlayingView`（播放器自己那一份，几百个节点）；③ `page` 兜底。
     private static func visibleShareButton(in page: UIView) -> UIView? {
         if let cached = bandShareButton,
            cached.window != nil,
@@ -3004,12 +2915,11 @@ enum NowPlayingLyricsPlate {
         )
     }
 
-    /// 老的三级判据（2026-10-03 起用的）。**只在控件条量不出来时兜底**。
+    /// 老的三级判据。**只在控件条量不出来时兜底**。
     ///
-    /// * **①**：`npv.bottomStackView` 的**最后一行**（footer）的 frame、水平居中。
-    ///   真机树（日志 42/48）里那一坨的子视图依次是「标题 / 进度 / 控件 / footer」，footer 恒为
-    ///   **最后一个**（`UIView@0,231,406,44`；那一行只有两侧原生控件 —— Connect / 分享 / 队列 ——
-    ///   中间是空的）。pw 也是把歌词字形放 footer 那一排。
+    /// * **①**：`npv.bottomStackView` 的**最后一行**（footer）的 frame、水平居中。那一坨的子视图
+    ///   依次是「标题 / 进度 / 控件 / footer」，footer 恒为**最后一个**（那一行只有两侧原生控件
+    ///   —— Connect / 分享 / 队列 —— 中间是空的）。pw 也是把歌词字形放 footer 那一排。
     ///   ⚠️ 我们只**借它的 frame**，键本身挂在 `page` 上（不塞进 Spotify 的 stack ——
     ///   塞进去它会变成 `stack.subviews.last`，把"认 footer"这件事本身弄坏）。
     ///   ⇒ 代价：那一行自己重排时要等下一拍（≤0.3s）才跟上。
@@ -3017,7 +2927,7 @@ enum NowPlayingLyricsPlate {
     ///   （歌词正文是居中排的，靠右能把"挡住歌词区、抢走点行跳转"的面积压到最小）。
     /// * **③ 那一坨都找不到**（进页面极早期）：由播放键反推同一条空带（`playToBandTop`）。
     ///
-    /// ⚠️ **绝不放在"播放键正上方 44pt"**（上一版的落点）：那里是**标题行与进度条**，
+    /// ⚠️ **绝不放在"播放键正上方 44pt"**：那里是**标题行与进度条**，
     /// 既压住 Spotify 的内容（进度条的拖动会被抢），也看不出是个按钮。
     private static func fallbackToggleFrame(in page: UIView) -> CGRect? {
         let side = toggleSide
@@ -3154,19 +3064,16 @@ enum NowPlayingLyricsPlate {
 
     // MARK: - ★ 2026-10-04：封面与歌词键之间的**一行居中歌词**（用户建议的第二条）
 
-    /// 用户原话：
-    /// > 把现在的大封面做小，不需要那么大（图片 41 的大小差不多）。然后，在**封面和歌词按钮中间**
-    /// > 做一行居中的歌词（**类似于 Spotify 的单行歌词，但这行歌词现在是我们自己做**）
+    /// 封面与歌词键之间的**一行居中歌词**（我们自己的 `UILabel`）。
     ///
     /// ## 落点
-    /// **封面底边与控件条上沿的中点**（用户从照片里挑的那一档：封面 242pt 之后底 ≈450、
-    /// 控件条上沿 604 ⇒ 中点 ≈527，与他看着照片要的 525 一致）。宽度与歌词块同宽
-    /// （两侧各 `stageSideInset`）。所以这一行**自己会跟着封面走**：封面没缩成（兜底那一路）时，
-    /// 它就自动往下落到 512 与 604 的中点 —— 不会压到封面上。
+    /// **封面底边与控件条上沿的中点**，宽度与歌词块同宽（两侧各 `stageSideInset`）。
+    /// 所以这一行**自己会跟着封面走**：封面没缩成（兜底那一路）时它会自动往下落，
+    /// 不会压到封面上。
     ///
     /// ## 判据**一处都不新写**
-    ///   · 行模型：`currentLines()`（就是展开时那份，含罗马化缓存）—— 这里再按
-    ///     「歌词版本 + 曲目 id」缓存一层，因为这条节拍每 0.3s 就问它一次；
+    ///   · 行模型：`currentLines()`（就是展开时那份，含罗马化缓存）—— 按「歌词版本 + 曲目 id」
+    ///     再缓存一层，因为这条节拍每 0.3s 就问它一次；
     ///   · "唱到哪一行"：`LyricPlaybackTimeline.position(at:in:)` —— 本仓库**唯一**的判定入口
     ///     （`AppleMusicLyricsPage` 用的也是它）。**不许**在这里再写一份 `time <= playback`：
     ///     「同一个判据抄两份、只修一份」在 `seekToTappedLyricLine` 上刚踩过（HANDOFF_2 §4.9）；
@@ -3177,7 +3084,7 @@ enum NowPlayingLyricsPlate {
     /// ## 什么时候**不**显示
     /// 开关关 / 歌词展开着（整页歌词都在，再来一行就是重复）/ 页面要走 / 还没词 /
     /// **一行带时间轴的都没有**（那就没有"当前行"这回事 —— 静态歌词那一档不适用）。
-    /// ⚠️ `weak`（独立复核）：页面归它所有；万一有哪条路没走到 `removeSingleLyric`，
+    /// ⚠️ `weak`：页面归它所有；万一有哪条路没走到 `removeSingleLyric`，
     ///   也不该由这个静态变量**钉住上一页的标签**。
     private static weak var singleLyric: UILabel?
     private static var singleLyricShownText = ""
@@ -3445,27 +3352,24 @@ enum NowPlayingLyricsPlate {
     /// 歌词区**底沿**那条小字署名：`上传者 X · 制作者 Y`（没有社区署名时是彩蛋
     /// `Thx,Spicy Lyrics!`），**可点**。
     ///
-    /// ★ 2026-10-13（用户拍板「方案 1」）：**不再重复提供商** —— 提供商在歌手那一行，
-    /// 这一行只承担条款里"可链接的上传者/制作者"那半。拼接规则见
-    /// `currentLyricsPlateCreditText()`。
+    /// ★ **不重复提供商** —— 提供商在歌手那一行，这一行只承担条款里"可链接的上传者/制作者"
+    /// 那半。拼接规则见 `currentLyricsPlateCreditText()`。
     ///
-    /// ## 为什么要有它（用户 2026-10-13 拍板「放 ①」）
+    /// ## 为什么要有它
     ///
     /// Spicy Lyrics 的服务条款把 `/docs/attribution` 定为**条款的一部分**（§6）：
     /// *"Always name the provider… When `source` is `spicy_lyrics`, credit **and link** the
     /// uploader, and the maker… Attribution goes wherever the lyrics are."*
     ///
-    /// 于是我们分三处摆：
-    ///   · **歌手那一行**只放**短名**（`providerSuffix()` → `歌手（Spicy Lyrics）`）——
-    ///     那里塞不下"制作者 / 上传者"，长了会把歌手名挤掉；
-    ///   · **注入 payload 的 `providedBy`** 放**完整纯文本**（Spotify 原生歌词页/卡片底部那一行，
-    ///     点不动，但位置够）；
-    ///   · **这里**放**可点的那一份** —— 条款要的"link"落在这。
+    /// 于是三处分工：**歌手那一行**只放**短名**（`providerSuffix()` → `歌手（Spicy Lyrics）`
+    /// —— 那里塞不下"制作者 / 上传者"，长了会把歌手名挤掉）；**注入 payload 的 `providedBy`**
+    /// 放**完整纯文本**（Spotify 原生歌词页/卡片底部那一行，点不动，但位置够）；**这里**放
+    /// **可点的那一份** —— 条款要的"link"落在这。
     ///
     /// ## 位置的两条硬约束
     ///
     /// 1. **必须在控制条上沿之上**（`controlBandMidY − controlBandHalfHeight` ≈ 604）。
-    ///    那一条（604…648）是 Spotify 自己的键（收藏 / 分享……），我们的容器在那一带
+    ///    那一条是 Spotify 自己的键（收藏 / 分享……），我们的容器在那一带
     ///    是**放行触摸**的（`applyContainerPassThrough`）；署名若压上去，它会实心吃掉那些键的点击。
     ///    所以贴着 604 往上摆 —— 正好落在歌词区自己的底部渐隐带里（"底沿"就是那里）。
     /// 2. **跟着歌词一起出现/收起**：只在展开态的 `layoutAndMount` 里摆，收起与离页由
@@ -3899,7 +3803,7 @@ enum NowPlayingLyricsPlate {
     /// 最近一次 `measure()` 量到的三个锚点（**只给日志用**，避免为了打印再走查一遍）。
     private static var lastAnchorText = ""
 
-    /// ★★ 2026-10-16：**`findByIdentifier` 的结果按"哪个 root + 哪个 id"缓存一次。**
+    /// ★★ **`findByIdentifier` 的结果按"哪个 root + 哪个 id"缓存一次。**
     ///
     /// 为什么值得：那趟 BFS 的预算 `maxNodes = 800`，而一次 `reconcile` / `apply` 里能问
     /// 三十来次，绝大多数问的还是**同一对**（`listIdentifier` / `titleLabelIdentifier` …）；
@@ -3908,8 +3812,7 @@ enum NowPlayingLyricsPlate {
     ///
     /// 三条纪律（少一条就会变成"缓存住了一个错答案"）：
     ///   · **只缓存命中**：查不到**不许**缓存 —— 进页面头几拍树上还没有那些元素，
-    ///     缓存一个 nil 会把 `pendingOpenUntil` 那条"下一拍再试"的整条窗口掐死
-    ///     （日志 50 那个"点了没反应"就是这么来的）。
+    ///     缓存一个 nil 会把 `pendingOpenUntil` 那条"下一拍再试"的整条窗口掐死。
     ///   · 命中也要**验一次还活着**（在窗口里、仍是这个 root 的子孙）—— 换歌 / 重建元素后
     ///     旧的那个已经被摘掉了，这里清掉重查。
     ///   · 换页面 / 收层时 `invalidateNodeLookups()` **整块作废**。
@@ -3977,14 +3880,11 @@ enum NowPlayingLyricsPlate {
 
 /// 被我们**移走**的标题行的触摸替身 —— 让"点歌名 / 歌手跳专辑 / 歌手页"这个原生功能活下来。
 ///
-/// ## 为什么需要它（用户 2026-10-12 报的）
+/// ## 为什么需要它
 ///
-/// > spotify 点击歌手 / 歌曲名字那里是可以点击然后跳往专辑或者歌手主页的。但是现在没这个功能。
-///
-/// 我们把标题行用 `transform` 抬到了左上角（照片 72/73 的 kumone 位），但**行还在它原来的
-/// cell 里** —— UIKit 的命中测试是从窗口往下走的：点落在 cell 的 frame **之外**时，
-/// 那一整棵子树根本不会被问 ⇒ 抬上去的那一行**看着在、点不到**（这是"移动别人的子视图"
-/// 的固有代价，pw 也踩过）。
+/// 我们把标题行用 `transform` 抬到了左上角，但**行还在它原来的 cell 里** —— UIKit 的命中
+/// 测试是从窗口往下走的：点落在 cell 的 frame **之外**时，那一整棵子树根本不会被问
+/// ⇒ 抬上去的那一行**看着在、点不到**（这是"移动别人的子视图"的固有代价，pw 也踩过）。
 ///
 /// ## 做法（照 pw `PlayerLyrics.x` 的 `hitTest:`）
 ///
@@ -4023,11 +3923,9 @@ final class NowPlayingTitleRelayView: UIView {
 ///
 /// **唯一特殊之处**：控件条那一条（底部 ≈40pt）**放行触摸**。
 ///
-/// 为什么需要它（用户 2026-10-11 报的「为什么分享按键和收藏按键用不了」）：
-/// 这个容器铺满整个歌词区（日志 56：`lyrics area 20,242,374,399` ⇒ y 242…641）、
-/// `isUserInteractionEnabled = true`（歌词行要靠它收点击去跳转）、而且被
-/// `bringSubviewToFront` 顶到最上面 ⇒ **它把这一片的触摸全吃掉了** ——
-/// 包括 Spotify 自己的收藏键（＋/绿色 ✓，就坐在 371,626）。
+/// 为什么需要它：这个容器铺满整个歌词区、`isUserInteractionEnabled = true`（歌词行要靠它
+/// 收点击去跳转）、而且被 `bringSubviewToFront` 顶到最上面 ⇒ **它把这一片的触摸全吃掉了**，
+/// 包括 Spotify 自己的收藏键（＋/绿色 ✓）。
 ///
 /// 只让**那一条**（那一段本来就被上下渐隐遮着，少一点行点击没关系），
 /// 歌词正文那一片照旧吃触摸。

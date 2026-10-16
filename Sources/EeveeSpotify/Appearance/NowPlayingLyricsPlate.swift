@@ -605,6 +605,8 @@ enum NowPlayingLyricsPlate {
     // MARK: - 对外入口
 
     static func apply(in pageView: UIView) {
+        // ★ 换页面 ⇒ 这一棵树里的元素全变了，`findByIdentifier` 那份缓存整块作废。
+        if lastPage !== pageView { invalidateNodeLookups() }
         lastPage = pageView
         // 进页面 = 这一程开始（上一次的"要走了"作废）。
         pageLeaving = false
@@ -1340,6 +1342,8 @@ enum NowPlayingLyricsPlate {
         wantsOpenUntil = 0
         pendingOpenUntil = 0
         pageLeaving = false
+        // 这一程结束了 ⇒ 树也马上要换 / 已经换了，缓存整块作废（下次真查一遍）。
+        invalidateNodeLookups()
         // ★★ 2026-10-11 第二轮（修用户报的「短暂重合」，照片 74 就是那一帧）：
         //   "关着的样子"（控件条 + 标题行贴左上角）**必须最后摆**。
         //
@@ -4029,14 +4033,77 @@ enum NowPlayingLyricsPlate {
     /// 最近一次 `measure()` 量到的三个锚点（**只给日志用**，避免为了打印再走查一遍）。
     private static var lastAnchorText = ""
 
+    /// ★★ 2026-10-16：**`findByIdentifier` 的结果按"哪个 root + 哪个 id"缓存一次。**
+    ///
+    /// 为什么值得：那趟 BFS 的预算 `maxNodes = 800`，而一次 `reconcile` / `apply` 里能问
+    /// 三十来次，绝大多数问的还是**同一对**（`listIdentifier` / `titleLabelIdentifier` …）；
+    /// `DeclutterChrome` 那条 0.3s 节拍于是每拍把同一棵树重走十几遍。
+    /// 这些答案在"这一页 + 这一程"里是稳定的 —— 页面换了才需要重新认。
+    ///
+    /// 三条纪律（少一条就会变成"缓存住了一个错答案"）：
+    ///   · **只缓存命中**：查不到**不许**缓存 —— 进页面头几拍树上还没有那些元素，
+    ///     缓存一个 nil 会把 `pendingOpenUntil` 那条"下一拍再试"的整条窗口掐死
+    ///     （日志 50 那个"点了没反应"就是这么来的）。
+    ///   · 命中也要**验一次还活着**（在窗口里、仍是这个 root 的子孙）—— 换歌 / 重建元素后
+    ///     旧的那个已经被摘掉了，这里清掉重查。
+    ///   · 换页面 / 收层时 `invalidateNodeLookups()` **整块作废**。
+    private struct NodeLookupKey: Hashable {
+        let root: ObjectIdentifier
+        let identifier: String
+    }
+
+    /// ⚠️ 两个都是**弱引用**：缓存不该把一棵已经被摘掉的子树钉在内存里
+    /// （而且 root 也弱引用之后，`ObjectIdentifier` 地址被复用的情况能被 `root === root` 挡掉）。
+    private struct NodeLookup {
+        weak var root: UIView?
+        weak var view: UIView?
+    }
+
+    private static var nodeLookups: [NodeLookupKey: NodeLookup] = [:]
+    /// 上限封死（按 root + id 计，一页也就十来对；满了整块重来，不做 LRU）。
+    private static let nodeLookupLimit = 64
+    /// 这份缓存是**为哪一首歌**认的 —— 换歌就作废（见 `noteTrackForLookups`）。
+    private static var lookupTrackId = ""
+
+    /// 换歌 ⇒ 缓存作废。
+    ///
+    /// 光验"还活着"不够：换歌时 Spotify 会**重建**那些元素，而同一个 id 可能**新旧两份同时在树上**
+    /// （旧的那一份还没被摘掉）—— 缓存里存的是 BFS 里第一份，那就会一直认到旧的那一份。
+    /// 代价只有两次属性读 + 一次字符串比较（`findByIdentifier` 一次 BFS 预算是 800 个节点）。
+    private static func noteTrackForLookups() {
+        let track = currentTrackId() ?? ""
+        guard track != lookupTrackId else { return }
+        lookupTrackId = track
+        invalidateNodeLookups()
+    }
+
+    private static func invalidateNodeLookups() {
+        guard !nodeLookups.isEmpty else { return }
+        nodeLookups.removeAll(keepingCapacity: true)
+    }
+
     private static func findByIdentifier(_ identifier: String, in root: UIView) -> UIView? {
+        noteTrackForLookups()
+        let key = NodeLookupKey(root: ObjectIdentifier(root), identifier: identifier)
+        if let entry = nodeLookups[key] {
+            if let cached = entry.view, let entryRoot = entry.root, entryRoot === root,
+               cached.window != nil, cached.isDescendant(of: root) {
+                return cached
+            }
+            nodeLookups[key] = nil
+        }
+
         var visited = 0
         var queue: [UIView] = [root]
 
         while !queue.isEmpty, visited < maxNodes {
             let view = queue.removeFirst()
             visited += 1
-            if view.accessibilityIdentifier == identifier { return view }
+            if view.accessibilityIdentifier == identifier {
+                if nodeLookups.count >= nodeLookupLimit { nodeLookups.removeAll(keepingCapacity: true) }
+                nodeLookups[key] = NodeLookup(root: root, view: view)
+                return view
+            }
             queue.append(contentsOf: view.subviews)
         }
         return nil

@@ -89,11 +89,21 @@ enum EntityPageAppearance {
     private static let meltStartRatio: CGFloat = 0.66
     /// 化开那一段的**下限**：页头矮的时候别把渐变整成一条硬边。
     private static let minMeltSpan: CGFloat = 90
-    /// 化开那一段的缓动采样（`1 − p²` 在前 7 个等分点上的值）：**前半段掉得慢、末端收得快**。
+    /// 化开那一段的缓动采样：**两端都要平**（`1 − smoothstep(p)`，9 个等分点）。
     ///
     /// 用户诊断（照片 130）：「线性斜坡两端的折角才是'被切断'感的主要来源，和长短关系不大」。
-    /// `CAGradientLayer` 只在档位之间线性插值，所以用多档逼近 smoothstep 形状。
-    private static let meltEasing: [CGFloat] = [1, 0.972, 0.889, 0.75, 0.556, 0.306, 0]
+    /// `CAGradientLayer` 只在档位之间线性插值，所以用多档逼近一条 S 形曲线。
+    ///
+    /// ★★ 2026-10-16（**照片 135：「渐变太刻意了」**）：上一版取的是 `1 − p²` ——
+    ///    它**每一档掉得比上一档多**（相邻差 0.028 → 0.083 → 0.139 → 0.194 → 0.25 → 0.306），
+    ///    最后一段在 **17pt** 里从 0.306 掉到 0 ⇒ 照片底沿留下一条**肉眼可见的横边**，
+    ///    读起来就是"贴了一条渐变"，而不是照片化进底色。
+    ///    实测量化（照片 135 的像素采样）：那道边在 ~399pt 处 20px 内掉 53 级灰度。
+    ///
+    ///    现在换成 **1 − smoothstep**（对称 S 形）：首尾两段的落差从 **0.306 降到 0.043**（≈1/7），
+    ///    同一段距离内那道边从 **53 级灰度降到 ~8 级** —— 肉眼不再能看出"这里贴了一条渐变"。
+    ///    中段仍在跨度一半处落到 0.5（"多快吃掉主体"的观感没动）。
+    private static let meltEasing: [CGFloat] = [1, 0.957, 0.844, 0.684, 0.5, 0.316, 0.156, 0.043, 0]
     /// ★★ 2026-10-18（用户：「**现在的模糊艺人底会有看不清字的情况，做成往下渐变变灰/黑的吧，pw 的逻辑**」）
     /// —— **页面的底整个换成 pw 的 `SGRArtworkField`**（`Redesigned/Kit/SGRField.m`，GPL 的 v0.21.1）：
     ///
@@ -261,6 +271,19 @@ enum EntityPageAppearance {
             objc_setAssociatedObject(layout, &layoutCoverKey, cover, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         }
         guard let cover else { return }
+
+        // ★★ 2026-10-16（**照片 134 的"黑色页面"**）：**我们那张满幅照片还没有图的时候，什么都别藏**。
+        //
+        //    这一句以前是每帧无条件跑的（2026-10-13 为了治"歌单页刚进会闪现小封面"，
+        //    见上面那段）。可艺人页那 1~2 秒里：Spotify 自己那张封面**已经被我们藏了**，
+        //    而我们的满幅照片要等 `coverImage(in:)` 拿到图才建得出来（`ensureHero` 的
+        //    `guard let source = coverImage(in: cover)`）⇒ 那一小段整页只剩 `#121212`
+        //    底 + 白字标题，就是用户报的"进去先黑一下"。
+        //
+        //    ⇒ 判据改成"**我们那张图真的有 image、而且就挂在这一页里**"才藏。图没到的那几帧
+        //    让 Spotify 自己那张照常显示（比黑屏自然得多），图一到、`ensureSharpHero` 会把
+        //    藏 + 铺在同一拍里做完。
+        guard let hero = sharpHero, hero.image != nil, hero.isDescendant(of: layout) else { return }
         concealNativeCover(cover)
     }
 
@@ -874,10 +897,12 @@ enum EntityPageAppearance {
         guard let cover = target.cover else { return }
 
         if sharpCover {
-            // ★ 2026-10-13：**图还没到也要先把 Spotify 那张小封面藏掉**
-            //   （`layoutPass` 每帧补的那一次能盖住大部分，这里是第二道保险）——
-            //   它让位给我们那张满幅照片。
-            concealNativeCover(cover)
+            // ⚠️ 原来这里有一句"图还没到也要先把 Spotify 那张小封面藏掉"的
+            //    `concealNativeCover(cover)`（2026-10-13 加的）。**2026-10-16 删掉**：
+            //    它正是照片 134 那一下黑屏的另一半 —— 藏了却还没建出我们的图，页头就是空的。
+            //    现在藏的动作只留在两处，两处都要求"**我们真有图**"：
+            //      · `ensureSharpHero`（宿主认出来之后，藏 + 铺同一拍）；
+            //      · `layoutPass`（每帧补的那道保险，判据是 `sharpHero.image != nil`）。
             guard let source = coverImage(in: cover) else { return }
             ensureSharpHero(cover: cover, source: source, page: target.page)
             return

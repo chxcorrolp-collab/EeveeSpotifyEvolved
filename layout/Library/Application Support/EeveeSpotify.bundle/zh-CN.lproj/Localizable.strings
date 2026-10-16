@@ -91,8 +91,8 @@ dark_popups = "深色弹窗";
 livecontainer_sharing = "分享到 LiveContainer";
 livecontainer_sharing_description = "如果不支持所选分享目标，则分享到 LiveContainer 并复制 URL。";
 
-show_instagram_destination = "显示 Instagram 分享位";
-show_instagram_destination_description = "在分享面板里显示 Instagram（快拍 / 私信 / Notes）目标。它强制三条服务端 flag，所以改完要重启 Spotify；如果服务端本来没下发某一条，则会补一条，效果未知。";
+show_instagram_destination = "显示 Instagram 分享目标";
+show_instagram_destination_description = "始终把 Instagram 作为分享目标。%@";
 
 petit_fallback_netease = "PetitLyrics 回退 NetEase";
 petit_fallback_netease_description = "选项生效需要歌词来源选择为 PetitLyrics。此选项开启且保持「AMLL 优先」和「Genius 回退」这两个功能开启后，歌词回退链会额外增加 NetEase，即：AMLL → PetitLyrics → NetEase → Genius。";

@@ -782,12 +782,19 @@ struct EeveeSpotify: Tweak {
             NSLog("[EeveeSpotify] Initialization complete for 9.1.x")
             TrueShuffleHook.install()
             activateSponsorBlock()
+            // 「实验 → 显示 Instagram 分享位」：**两条腿一起上** ——
+            // ① `ExperimentFlagReplacements` 强制那三条服务端 flag（在任何版本都跑）；
+            // ② 这里按 9.1.88 的真实形态 hook 那个 init（类/方法对不上就只打一行日志）。
+            InstagramShareDestination.activateIfNeeded()
             return
         }
 
         // For other versions, activate all features normally
-        // （Instagram 分享位那个实验已于 2026-10-02 删除：目标类 `SPTSharingSDK` /
-        //   `SPTShare_FoundationImplProperties` 只在 Spotify 9.1.0 上存在。）
+        // ⚠️ 2026-10-02 删掉的 Instagram 分享位实验挂的是 `SPTSharingSDK` /
+        //    `SPTShare_FoundationImplProperties` —— **只在 Spotify 9.1.0 上存在**。
+        //    2026-10-16 按 9.1.88 的形态重做（`Share_FoundationSwiftImpl…Properties` 的 init），
+        //    见 `Experiments/Instagram/ShowInstagramDestination.x.swift`。
+        InstagramShareDestination.activateIfNeeded()
         
         if UserDefaults.darkPopUps {
             DarkPopUps().activate()

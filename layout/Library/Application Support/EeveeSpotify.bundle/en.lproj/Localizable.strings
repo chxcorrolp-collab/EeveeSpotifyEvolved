@@ -97,8 +97,8 @@ dark_popups = "Dark PopUps";
 livecontainer_sharing = "Share to LiveContainer";
 livecontainer_sharing_description = "Share to LiveContainer and copy the URL if the selected destination is not supported.";
 
-show_instagram_destination = "Show Instagram share destination";
-show_instagram_destination_description = "Adds Instagram (Stories, direct message, Notes) to the share sheet. It forces three server-side flags, so Spotify must be restarted after toggling; if the server never delivered one of them, an entry is appended instead and the effect is unknown.";
+show_instagram_destination = "Show Instagram Destination";
+show_instagram_destination_description = "Always show the Instagram share destination. %@";
 
 petit_fallback_netease = "PetitLyrics → NetEase fallback";
 petit_fallback_netease_description = "Only applies when the lyrics source is PetitLyrics. With this on, and with \"AMLL preferred\" and \"Genius fallback\" both on, the fallback chain gains NetEase: AMLL → PetitLyrics → NetEase → Genius.";

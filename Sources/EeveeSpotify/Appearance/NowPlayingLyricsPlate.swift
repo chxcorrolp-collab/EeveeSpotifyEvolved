@@ -411,9 +411,7 @@ enum NowPlayingLyricsPlate {
     /// 不需要每帧重画。
     private static weak var coverHost: UIView?
     private static weak var coverImage: UIImageView?
-    /// 收/开交叉时的令牌：**关闭动画走完才做收尾**（撤封面、把 Spotify 那条写回），
-    /// 免得把紧接着又展开的那一次踢掉。
-    private static var coverGeneration = 0
+    /// ⚠️ 封面 morph 的**取消令牌**现在在 `door.coverGeneration`（它不是"状态"，见 `LyricsDoor`）。
     private static weak var lastToggleZone: UIControl?
     private static weak var lastUnit: UIView?
     private static weak var lastTitleElement: UIView?
@@ -445,49 +443,24 @@ enum NowPlayingLyricsPlate {
     private static var host: AnyObject?
     private static weak var hostPage: UIView?
 
-    /// 歌词是否展开（pw 的 `sg_open`）。
+    /// 「展开到哪一步」的**唯一存储** —— 那六个旗标（`isOpen` / `wantsOpen` / `wantsOpenUntil` /
+    /// `pendingOpenUntil` / `pageLeaving` / `coverGeneration`）现在都在这一个对象里，
+    /// 状态机与两条窗口的寿命写在 `Appearance/LyricsDoor.swift`（纯逻辑、有单测、
+    /// CI 每次 push 都编，见 `.github/workflows/tests.yml` 的 `Tests/LyricsDoor`）。
     ///
-    /// ⚠️ 这是**当前这一页实例的实时状态**，页面一走就被 `closeEverything` 清成 `false`。
-    /// "离开再回来还是展开的"那件事**不靠它** —— 靠下面那条**落盘的意图**
-    /// （`UserDefaults.nowPlayingLyricsExpanded`），见 `rememberExpanded(_:)` / `reopenIfRemembered(in:)`。
-    private static var isOpen = false
+    /// ⚠️ 下面保留三个**只读**转发（`isOpen` / `wantsOpen` / `pageLeaving`），
+    /// 好让几十处读取点不必一次性改名；**写入一律走 `door.x` 或它的整组方法**
+    /// （`openIntent` / `expireIntent` / `clearRetryWindow` / `armRetryWindowIfNeeded` /
+    /// `close` / `pageDidAppear` / `pageWillLeave` / `nextCoverGeneration`）。
+    private static var door = LyricsDoor()
 
-    /// ★ 2026-10-10：「**我们打算铺着**」——比 `isOpen` 宽一档。
-    ///
-    /// 为什么必须有它：`isOpen` 只有在**铺成功**之后才为真，而进页面那一拍经常量不到（页面还没
-    /// 布局完）⇒ "按住原生封面"那条门禁（`coverDidLayOut` / `keepNativeCoverHidden`）整段窗口都
-    /// 不成立，进入播放器的转场里动的就是**原生大封面**。
-    /// 意图一立就置 `true`（点开、或记忆要展开），**只有用户收起 / 切开关 / 页面收尾才清**；
-    /// 门禁用它 ⇒ "打算铺"的那一刻起，原生封面就已经被按住了。
-    private static var wantsOpen = false
-
-    /// **意图要有寿命**：`openAndMount` 失败时会回退 `isOpen`，若 `wantsOpen` 却永远为真，门禁就
-    /// 每一拍去按住原生封面，而 `coverHost` 一直是 nil（我们**什么都没画**）⇒ 换歌时新封面在它自己
-    /// 第一次 `layoutSubviews` 就被按成 `alpha = 0`，而且是**永久的**（唯一会清 `wantsOpen` 的地方
-    /// 是 `closeEverything`，那时页面已经不在了）。「不许留永久空白态」是本仓库明文纪律。
-    /// 两道保险：① 意图只在**进场那一小段**算数（`wantsOpenNow()`）；
-    /// ② 过期而我们什么都没铺上 ⇒ `reconcile` 自己撤意图 + 把封面写回去。
-    private static var wantsOpenUntil: CFAbsoluteTime = 0
-
-    /// 意图的寿命（秒）。取 1.0：`pendingOpenWindow`（2.5s ≈ 5 拍）的第一拍就足够量到，
-    /// 而 1s 之内量不到就说明这一程本来就不该铺（没图 / 没词 / 页面没布局完）。
-    private static let wantsOpenLifetime: CFAbsoluteTime = 1.0
-
-    /// ★ 2026-10-10：`viewWillDisappear` 只把这一位置 `true`，**什么都不收**。
-    ///
-    /// 退出转场里页面**还在屏幕上**（滑下去 / 缩回迷你条）；当场 `closeEverything` 会把封面立刻
-    /// 写回 `alpha = 1` ⇒ 整个退出动画里都是**原生那张大封面**。所以收尾推迟到
-    /// "**页面真的不在窗口里**"那一刻（`reconcile` 那条既有节拍负责）—— 那时才在屏幕外写回封面、
-    /// 摘掉我们的层。
-    private static var pageLeaving = false
-
-    /// 「点开了但这一拍没铺上」的**重试窗口**（2.5s ≈ 5 拍，**不新开定时器**，蹭既有那条节拍）。
-    ///
-    /// 为什么必须有：`openAndMount` 失败时会当场回退 `isOpen`，而 `reconcile` 里"接着铺"那一支是
-    /// `if isOpen` 开头的 ⇒ **第一次量不到就永久认死**，那枚键在整个会话里再也不会活过来。
-    /// ⚠️ 重试**也要过 `canShow`**：换歌之后"这一首有没有词"是会变的，别拿没词的歌空转五拍。
-    private static var pendingOpenUntil: CFAbsoluteTime = 0
-    private static let pendingOpenWindow: CFAbsoluteTime = 2.5
+    /// 歌词是否展开（pw 的 `sg_open`）。⚠️ 它在"**尝试**铺"的那一瞬间就置 true、铺失败才回退，
+    /// 所以**不等于**"屏幕上真有东西" —— 后者是 `doorPhase == .open`。
+    private static var isOpen: Bool { door.isOpen }
+    /// 「我们打算铺着」：比 `isOpen` 宽一档，进播放器的转场里靠它按住原生封面。
+    private static var wantsOpen: Bool { door.wantsOpen }
+    /// 页面还在屏上、但正在离开（退出转场里**什么都不收**）。
+    private static var pageLeaving: Bool { door.pageLeaving }
 
     private static var didLogInstall = false
     private static var lastSkipReason = ""
@@ -509,7 +482,7 @@ enum NowPlayingLyricsPlate {
         noteTrackForLookups()
         lastPage = pageView
         // 进页面 = 这一程开始（上一次的"要走了"作废）。
-        pageLeaving = false
+        door.pageDidAppear()
 
         guard isEnabled else {
             // 关掉功能 = **页面回到 Spotify 原样**：一次回滚（见 `restoreAll`）。
@@ -568,7 +541,7 @@ enum NowPlayingLyricsPlate {
     /// 收尾（撤销几何、把原生封面写回、摘掉我们的层与那枚键）交给 `reconcile` 在
     /// **"页面真的不在窗口里"**那一刻做 —— 这样整个退出转场里页面都是我们的样子。
     static func pageWillLeave() {
-        pageLeaving = true
+        door.pageWillLeave()
     }
 
     /// 页面记忆：进页面时若记得"上次是展开的"，就把它铺回去 —— 展开状态只活在 `isOpen` 里，
@@ -591,9 +564,8 @@ enum NowPlayingLyricsPlate {
         writeDebugLog("[\(logTag)] re-entering the player expanded (remembered choice)")
         // ★ 意图立刻立起来：这样从**这一帧**起，`coverDidLayOut` / `reconcile` 就会按住原生封面
         //   （照片 66 的闪：进页面的第一拍量不到，但封面已经被按住了）。
-        // ★ 2026-10-04：连带**寿命**一起立（见 `wantsOpenUntil`）—— 意图不许再永久挂着。
-        wantsOpen = true
-        wantsOpenUntil = CFAbsoluteTimeGetCurrent() + wantsOpenLifetime
+        // ★ 2026-10-04：连带**寿命**一起立（见 `LyricsDoor.intentLifetime`）—— 意图不许再永久挂着。
+        door.openIntent(at: CFAbsoluteTimeGetCurrent())
         openAndMount(in: page)
     }
 
@@ -706,8 +678,7 @@ enum NowPlayingLyricsPlate {
         if wantsOpenNow() {
             keepNativeCoverHidden(in: page)
         } else if wantsOpen {
-            wantsOpen = false
-            wantsOpenUntil = 0
+            door.expireIntent()
             restoreSpotifyCover()
             noteSkip("the open intent expired with nothing drawn - Spotify's cover is back")
         }
@@ -720,7 +691,7 @@ enum NowPlayingLyricsPlate {
         //   没有这一段，日志 50 里那一次点击就是这枚键的**最后一次**机会。
         //   ⚠️ 重试**也要过门禁**：`openAndMount` 里没有 `canShow`，而换歌之后
         //   "这一首有没有词"是会变的 —— 没词了就把窗口清掉，别拿一首没词的歌空转五拍。
-        if LyricsDoorRules.retryWindowOpen(now: CFAbsoluteTimeGetCurrent(), retryUntil: pendingOpenUntil) {
+        if door.retryWindowOpen(now: CFAbsoluteTimeGetCurrent()) {
             // ★ 2026-10-11：`noticeText()` 也算"有东西可画"（用户要的是键随时能按）——
             //   否则一首没词的歌在"第一拍量不到封面"之后就再也没人重试了。
             //   ⚠️ 同一天又加了"没有时间轴 ⇒ 静态歌词"那一档 ⇒ 判据换成 `hasSomethingToShow()`
@@ -733,7 +704,7 @@ enum NowPlayingLyricsPlate {
                 //   ⚠️ 铺成功那一拍 `coverHost` 已经在 ⇒ `wantsOpenNow()` 仍为真，不受影响。
                 if wantsOpenNow() { keepNativeCoverHidden(in: page) }
             } else {
-                pendingOpenUntil = 0
+                door.clearRetryWindow()
             }
             ensureToggleZone(in: page)
             return isOpen
@@ -811,7 +782,7 @@ enum NowPlayingLyricsPlate {
             noteSkip("the lyrics button was tapped but our layer cannot open (see the reason above)")
             // ⚠️ 用户刚被告知"这首没词" ⇒ 把可能还挂着的重试窗口**清掉**，
             //    别让下一拍拿同一首歌再空转五回。
-            pendingOpenUntil = 0
+            door.clearRetryWindow()
             ensureToggleZone(in: page)
             return
         }
@@ -821,10 +792,9 @@ enum NowPlayingLyricsPlate {
         //   下次进页面也还是"记得要展开"——记忆跟的是**用户的意图**，不是这一拍的成功与否。
         //   `wantsOpen` 同时把"按住原生封面"提前到这一帧（照片 66 的闪就是这么来的）。
         rememberExpanded(true)
-        wantsOpen = true
-        // ★ 2026-10-04：意图带寿命（见 `wantsOpenUntil`）—— 铺不上就让它过期，
+        // ★ 2026-10-04：意图带寿命（见 `LyricsDoor.intentLifetime`）—— 铺不上就让它过期，
         //   别让"大封面被永久按住"变成用户看到的那件事。
-        wantsOpenUntil = CFAbsoluteTimeGetCurrent() + wantsOpenLifetime
+        door.openIntent(at: CFAbsoluteTimeGetCurrent())
         openAndMount(in: page)
         // ⚠️ 必须在铺完之后再摆一次：容器会 `bringSubviewToFront`，键会被压到它下面。
         ensureToggleZone(in: page)
@@ -842,7 +812,7 @@ enum NowPlayingLyricsPlate {
     /// 规则全在 `LyricsDoorRules` 里（**纯逻辑、有单测、CI 每次 push 都跑**，见
     /// `Appearance/LyricsDoorPhase.swift` 与 `Tests/LyricsDoorPhase`）；本文件只负责把 UI 事实喂进去。
     private static var doorPhase: LyricsDoorPhase {
-        LyricsDoorRules.phase(isLive: isAnythingLive, wantsOpen: wantsOpen, pageLeaving: pageLeaving)
+        door.phase(isLive: isAnythingLive)
     }
 
     /// 「我们打算铺着」这个意图**现在还作数吗**（见 `wantsOpenUntil`）。
@@ -850,12 +820,7 @@ enum NowPlayingLyricsPlate {
     /// 过了窗口又什么都没铺上 ⇒ `false`，**调用方负责撤意图并把封面写回去**（别在这里写状态，
     /// 因为 `coverDidLayOut` 也会问它，而那个回调是别人的 `layoutSubviews`）。
     private static func wantsOpenNow() -> Bool {
-        LyricsDoorRules.intentStillValid(
-            wantsOpen: wantsOpen,
-            isLive: isAnythingLive,
-            now: CFAbsoluteTimeGetCurrent(),
-            intentUntil: wantsOpenUntil
-        )
+        door.intentStillValid(now: CFAbsoluteTimeGetCurrent(), isLive: isAnythingLive)
     }
 
     /// 只要我们的层还在屏幕上，就**每一拍**把 Spotify 当前那张主封面按掉。
@@ -985,25 +950,23 @@ enum NowPlayingLyricsPlate {
         //   这种情况下保持 `isOpen = true`，让 `reconcile` 的 `isOpen` 那一支每拍接着试。
         let wasLive = isAnythingLive
 
-        isOpen = true
+        door.isOpen = true
         if layoutAndMount(in: page) {
-            pendingOpenUntil = 0
+            door.clearRetryWindow()
             return true
         }
         if wasLive {
-            pendingOpenUntil = 0
+            door.clearRetryWindow()
             return false
         }
-        isOpen = false
+        door.isOpen = false
 
-        // ⚠️ **只武装一次**，不往后推。
+        // ⚠️ **只武装一次**，不往后推（`armRetryWindowIfNeeded` 自己就是这条纪律）。
         //
-        // 第一版这里是 `pendingOpenUntil = now + window` 无条件重写，而 `reconcile`
-        // 每 ~0.5s 就会再进来一次 ⇒ 每次失败都把 deadline 推远 ⇒ 这个"2.5s 窗口"
-        // **永远不会到期**，等于在听歌页上无限轮询（独立只读复核抓到的）。
+        // 第一版这里是无条件 `retryUntil = now + window`，而 `reconcile` 每 ~0.5s 就会再进来一次
+        // ⇒ 每次失败都把 deadline 推远 ⇒ 这个"2.5s 窗口"**永远不会到期**，等于在听歌页上无限轮询。
         // 真正想要的是"**从第一次失败起** 2.5s ≈ 5 拍"。
-        let now = CFAbsoluteTimeGetCurrent()
-        if now >= pendingOpenUntil { pendingOpenUntil = now + pendingOpenWindow }
+        door.armRetryWindowIfNeeded(at: CFAbsoluteTimeGetCurrent())
         return false
     }
 
@@ -1179,11 +1142,8 @@ enum NowPlayingLyricsPlate {
         // ⚠️ 这三行必须在那个 `guard` **之前**：重试窗口要在"关掉 / 离开页面"时**无条件**清掉，
         //    否则页面都走了它还挂着一个 deadline（虽然 `page.window` 会挡住，但账要算清）。
         let hadSomethingVisible = isOpen || isAnythingLive
-        isOpen = false
-        wantsOpen = false
-        wantsOpenUntil = 0
-        pendingOpenUntil = 0
-        pageLeaving = false
+        // 五个旗标**一次归位**（少清一项就会在下一程留残迹，`Tests/LyricsDoor` 有一条逐项断言）。
+        door.close()
         // 这一程结束了 ⇒ 树也马上要换 / 已经换了，缓存整块作废（下次真查一遍）。
         invalidateNodeLookups()
         // ⚠️ "关着的样子"（控件条 + 标题行贴左上角）**必须最后摆**：这个函数中段还有撤销展开位移
@@ -1200,14 +1160,13 @@ enum NowPlayingLyricsPlate {
 
         // 封面：先让它**动回原位**（同图，所以这就是"飞回去"），动画走完再撤 + 把 Spotify 那条写回。
         if let host = coverHost, let imageView = coverImage {
-            coverGeneration += 1
-            let token = coverGeneration
+            let token = door.nextCoverGeneration()
 
             let cleanup = {
                 // ⚠️ 收尾里要碰 `@MainActor` 的静态成员 ⇒ 走 `onMainThreadSync`（仓库成文规矩）。
                 onMainThreadSync {
                     // 这中间用户又点开了 ⇒ 这一次的收尾作废（别把刚摆好的封面撤掉）。
-                    guard token == coverGeneration else { return }
+                    guard token == door.coverGeneration else { return }
                     host.removeFromSuperview()
                     coverHost = nil
                     coverImage = nil
@@ -1819,7 +1778,7 @@ enum NowPlayingLyricsPlate {
         geometry: Geometry?,
         completion: (() -> Void)? = nil
     ) {
-        if open { coverGeneration += 1 }
+        if open { _ = door.nextCoverGeneration() }
 
         let target: CGAffineTransform
         let radius: CGFloat

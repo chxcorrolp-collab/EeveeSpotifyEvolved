@@ -143,6 +143,16 @@ jobs:
                  -o lyrics-notice-policy-tests
           ./lyrics-notice-policy-tests
 
+      # 2026-10-16：「歌词进播放器」的**状态机**（`LyricsDoor`）—— 那六个旗标的唯一存储，
+      # 以及整组操作（点开 / 失败 / 重试 / 过期 / 收尾 / 离开页面）。它和相位规则一起编。
+      - name: Lyrics door state machine (player lyrics layer)
+        run: |
+          swiftc Sources/EeveeSpotify/Appearance/LyricsDoorPhase.swift \
+                 Sources/EeveeSpotify/Appearance/LyricsDoor.swift \
+                 Tests/LyricsDoor/main.swift \
+                 -o lyrics-door-tests
+          ./lyrics-door-tests
+
       # 唯一一个**不是** swiftc 的测试（纯 Python，不需要工具链）。
       - name: Resolve-configuration snapshot
         run: python3 Tests/ResolveConfigurationSnapshot/test.py

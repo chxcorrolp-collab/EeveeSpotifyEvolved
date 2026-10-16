@@ -21,11 +21,41 @@ jobs:
   logic:
     runs-on: macos-latest
 
+    # 守卫脚本的提示是中文 ⇒ 固定 stdout 编码，免得 runner 的 locale 是 C 时
+    # Python 抛 UnicodeEncodeError，把"代码有问题"变成"环境有问题"的假红。
+    env:
+      PYTHONIOENCODING: utf-8
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Toolchain check
         run: swiftc --version
+
+      # ── 守卫：五条"必然编译错"的纯文本检查（2026-10-16 接进来）────────────────────
+      #
+      # 这五个脚本从 2026-10-01 起就是"每轮改完手动跑一遍"的纪律，但它们**从来没进过任何
+      # workflow**（全仓 grep 只有注释提到它们）⇒ 一次普通 push 之后没人拦这五类错，
+      # 只有等你真去打包 IPA 那一轮才炸 —— 而本机（Windows）**没有 Swift 工具链**，
+      # 带 UIKit / Orion 的视图文件在本机永远编不了，这几个脚本是那批文件**唯一的自动反馈**。
+      #
+      # 放进来的代价约 8 秒（实测：brace 1.1s / string 0.6s / member 3.3s / orion 2.3s /
+      # l10n 0.4s），收益是**每一次 push 都跑**，而不是靠人记得。
+      #
+      # ⚠️ 五个脚本**都不扫 `Tests/`**（那里的 `main.swift` 是断言程序，不是被注入的源码）
+      #    —— 所以最后单独给 `Tests/` 补一条括号/字符串检查。
+      - name: Guard — balanced braces / strings (Sources)
+        run: python3 Tools/eevee-hookfinder/swift_brace_check.py
+      - name: Guard — string literal escapes (Sources)
+        run: python3 Tools/eevee-hookfinder/swift_string_check.py
+      - name: Guard — static member scopes (Sources)
+        run: python3 Tools/eevee-hookfinder/swift_member_check.py
+      - name: Guard — Orion hooks (import / orig / Group / final)
+        run: python3 Tools/eevee-hookfinder/orion_hook_guard.py
+      - name: Guard — l10n keys
+        run: python3 Tools/l10n_lint.py --quiet
+      - name: Guard — balanced braces / strings (Tests)
+        run: python3 Tools/eevee-hookfinder/swift_brace_check.py Tests
 
       - name: Telemetry classification
         run: |

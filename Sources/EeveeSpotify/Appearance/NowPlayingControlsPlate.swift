@@ -671,7 +671,10 @@ enum NowPlayingControlsPlate {
             path.addLine(to: CGPoint(x: inset, y: top + height))
             path.close()
             path.lineWidth = lineWidth
-            path.lineJoin = .round
+            // ⚠️ `UIBezierPath` 没有 `lineJoin`，这个属性叫 `lineJoinStyle`（`CGLineJoin`）——
+            //    写成 `lineJoin` 会让编译器连累下一句（`image` 类型推不出来 ⇒ 报
+            //    "cannot infer contextual base in reference to member 'alwaysTemplate'"）。
+            path.lineJoinStyle = .round
 
             UIColor.white.setStroke()
             path.stroke()

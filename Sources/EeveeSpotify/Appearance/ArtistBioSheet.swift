@@ -375,17 +375,18 @@ final class ArtistBioSheet: UIView {
             }
         )
     }
-}
 
-/// 下滑关闭那条手势的"让位"规则。
-extension ArtistBioSheet: UIGestureRecognizerDelegate {
-
-    /// **只在"下拉卡片"这一种情况下开始**，其余全让给正文那层滚动：
+    /// **下拉关闭那条手势**：只在"下拉卡片"这一种情况下开始，其余全让给正文那层滚动 ——
     ///   · 方向必须是**向下**（横向 / 向上都不抢）；
     ///   · 手指落在正文里、而正文**还没滚到顶** ⇒ 那是用户在滚正文，不是在下拉卡片。
     ///
     /// 为什么不做"同时识别"：那样拖正文会一边滚一边把卡片往下拽，手感是坏的。
-    func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+    ///
+    /// ⚠️ **必须写在类体里、并且带 `override`**：`gestureRecognizerShouldBegin(_:)` 是 `UIView`
+    /// 自己就有的方法（`UIKit.UIView.gestureRecognizerShouldBegin`）。写在 `extension` 里
+    /// 既不能加 `override`（Swift 不允许在扩展里重写），不加又会被编译器判成"漏了 override"
+    /// —— 2026-10-17 那次 IPA build 就是这么红的。
+    override func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
         guard let pan = gesture as? UIPanGestureRecognizer else { return true }
 
         let translation = pan.translation(in: self)
@@ -396,3 +397,7 @@ extension ArtistBioSheet: UIGestureRecognizerDelegate {
         return true
     }
 }
+
+/// 下拉关闭那条手势的 delegate —— 协议声明放这儿，**实现写在类体里**
+/// （`gestureRecognizerShouldBegin(_:)` 是 `UIView` 的方法，扩展里不能重写，见那里的 ⚠️）。
+extension ArtistBioSheet: UIGestureRecognizerDelegate {}

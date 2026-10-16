@@ -28,7 +28,10 @@ enum AmllLyricsMapper {
 
     private static let japaneseRomanizationKey = "ngzhwm_japaneseRomanization"
 
-    static func makeDto(_ parsed: AmllTtmlResult) -> LyricsDto {
+    /// - Parameter authorUsername: `AmllSongItem.primaryAuthorUsername`（歌词主要贡献者的 GitHub
+    ///   用户名）。★ 2026-10-16：**AMLL 仓库 README 明确希望下游展示歌词作者**，而这一路
+    ///   以前**只把它打进日志**、从来没进过署名 —— 用户看到的署名永远是裸的源名。
+    static func makeDto(_ parsed: AmllTtmlResult, authorUsername: String? = nil) -> LyricsDto {
         var lines: [LyricsLineDto] = []
         var translations: [String] = []
 
@@ -51,8 +54,15 @@ enum AmllLyricsMapper {
                 continue
             }
 
+            // ★ 2026-10-16：把 AMLL 自己给的**行结束时间**也带上（`<p end>`）。
+            //   以前它只用来算 `lastLineEndMs` 打日志、进 DTO 就丢了。
             lines.append(
-                LyricsLineDto(content: trimmed, offsetMs: line.offsetMs, words: nil)
+                LyricsLineDto(
+                    content: trimmed,
+                    offsetMs: line.offsetMs,
+                    endOffsetMs: line.endMs,
+                    words: nil
+                )
             )
             translations.append(line.translation ?? "")
             wordLines.append(tokens)
@@ -112,12 +122,25 @@ enum AmllLyricsMapper {
             "[AMLL] mapped \(lines.count) line(s), translation=\(translation == nil ? "none" : "yes"), romanization=\(romanization)"
         )
 
+        // ── 署名 ──────────────────────────────────────────────────────────
+        // ★★ 2026-10-16（Q6 清点里的第 ① 条）：AMLL 的 README 明确希望下游**展示歌词作者**，
+        //    而 `AmllSongItem.primaryAuthorUsername` 这一路**只进过日志** —— 显示出来的署名
+        //    永远是裸的源名。这里的口径与 Spicy Lyrics 那条一致：
+        //      · `providerName`（短）留给听歌页歌手行 —— 仍是 "AMLL"（默认由 `CustomLyrics` 填源名）；
+        //      · `providerCredit`（长）进注入 payload 的 `providedBy` / 页脚 —— 带上作者。
+        var credit = ""
+        if let author = authorUsername?.trimmingCharacters(in: .whitespacesAndNewlines), !author.isEmpty {
+            credit = "AMLL · @\(author)"
+            writeDebugLog("[AMLL] credited to community author @\(author)")
+        }
+
         return LyricsDto(
             lines: lines,
             timeSynced: true,
             romanization: romanization,
             translation: translation,
-            languageCode: languageCode
+            languageCode: languageCode,
+            providerCredit: credit
         )
     }
 

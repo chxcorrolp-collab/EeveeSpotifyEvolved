@@ -104,7 +104,19 @@ enum AmllTtmlParser {
         }
 
         var parsed: [AmllTtmlLine] = []
+        var skippedTrackParagraphs = 0
         for node in paragraphNodes {
+            // ★★ 2026-10-16（Q6 清点第 ③ 条）：**整轨的译文/罗马音不能当主歌词**。
+            //
+            //    TTML 允许把译文放在**另一个 `<div>`** 里，那时每一个 `<p>` 自己就带
+            //    `ttm:role="x-translation"` / `"x-roman"`；而这里原本把文档里**所有** `<p>`
+            //    摊平、按时间排序后当主歌词 ⇒ 那种文档会被**重复一遍**（原文轨 + 译文轨交替出现）。
+            //    译文/罗马音的收集本来就走 `parseLine` 里的 role 扫描与 `<iTunesMetadata>` 旁挂，
+            //    不依赖这一条 —— 所以这里跳过它们不会丢译文。
+            if node.hasRole("x-translation") || node.hasRole("x-roman") {
+                skippedTrackParagraphs += 1
+                continue
+            }
             guard let line = parseLine(
                 node,
                 translations: sidecarTranslations,
@@ -114,6 +126,11 @@ enum AmllTtmlParser {
             guard !line.primaryText.isEmpty else { continue }
             guard !LyricsMarkerFilter.isNonLyricLine(line.primaryText) else { continue }
             parsed.append(line)
+        }
+        if skippedTrackParagraphs > 0 {
+            writeDebugLog(
+                "[AMLL] skipped \(skippedTrackParagraphs) <p> node(s) from a translation/romanization track"
+            )
         }
 
         guard !parsed.isEmpty else {

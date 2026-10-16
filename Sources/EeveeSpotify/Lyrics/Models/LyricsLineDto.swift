@@ -3,6 +3,17 @@ import Foundation
 struct LyricsLineDto {
     var content: String
     var offsetMs: Int?
+    /// ★★ 2026-10-16（Q6 清点里的第 ② 条）：**这一行唱完的时刻**（AMLL 的 `<p end>`）。
+    ///
+    /// 以前只在解析层用来算 `lastLineEndMs`/打日志，进了 DTO 就丢 ⇒ 显示层只能拿
+    /// **下一行的起点**当这一行的结束（`LyricLinesAdapter` 的 `nextStartTime`）——
+    /// 于是"这一句拖得很长"和"这里没人唱"在数据上**长得一模一样**（慢歌/间奏会偏）。
+    ///
+    /// ⚠️ **目前只是把它收下来，显示层还没用它**：真机 `LyricLinesAdapter` 现在把
+    /// `nextStartTime - startTime` 当整行的时长（高亮会一直亮到下一行开始），
+    /// 改成"唱完就收"会连带改观感与间奏判定 ⇒ 那一步要有一次真机 A/B 才动。
+    /// 只有 AMLL 会给这个字段（别的源一律 nil）。
+    var endOffsetMs: Int? = nil
     var words: [LyricsWordDto]? = nil
     /// 背景人声/副唱（目前只有 AMLL 会给出）。
     ///

@@ -146,7 +146,9 @@ class AmllTtmlLyricsRepository: LyricsRepository {
             throw LyricsError.noSuchSong
         }
 
-        let dto = AmllLyricsMapper.makeDto(parsed)
+        // ★★ 2026-10-16（Q6 清点第 ① 条）：把**歌词作者**（AMLL 的 `authorUsernames.first`）交给
+        //    mapper 去写署名 —— 这一路以前只进日志，用户看到的署名永远是裸的源名。
+        let dto = AmllLyricsMapper.makeDto(parsed, authorUsername: item.primaryAuthorUsername)
 
         guard !dto.lines.isEmpty else {
             writeDebugLog("[AMLL] mapped to zero line — noSuchSong")

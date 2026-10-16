@@ -3403,13 +3403,12 @@ enum NowPlayingLyricsPlate {
 
     /// 把"控件条那一条要放行触摸"告诉容器（见 `NowPlayingLyricsContainerView`）。
     ///
-    /// 放行的范围：从 `controlBandMidY − 22`（≈604）起**到底边**。
-    /// 照片 71 + 日志 56 的实测：收藏键（＋/✓）在 604…648、我们搬过去的分享键同样在 604…648，
-    /// 而歌词容器的底边是 641（`lyrics area 20,242,374,399`）⇒ 那一片必须让开。
+    /// 放行的范围：从 `controlBandMidY − 22`（≈604）起**到底边** —— 收藏键（＋/✓）与搬过去的分享键
+    /// 都落在 604…648，而歌词容器的底边原来是 641 ⇒ 那一片必须让开。
     ///
-    /// ★ 2026-10-13：容器底边现在被 `stageBottomReserve` 抬到 ≈579（署名顶边之上），
-    /// **已经不再压住那一条**，所以这里的值通常是 0。留着它是因为这个函数还有别的调用点：
-    /// 版式变了（进度条量不到、走了 `lyricsBottom` 那条退路）时容器仍可能伸进控制条。
+    /// ⚠️ 现在容器底边被 `stageBottomReserve` 抬到 ≈579（署名顶边之上），**已经不再压住那一条**，
+    /// 所以这里的值通常是 0；留着它是因为这个函数还有别的调用点：版式变了（进度条量不到、走了
+    /// `lyricsBottom` 那条退路）时容器仍可能伸进控制条。
     private static func applyContainerPassThrough(to container: UIView, frame: CGRect) {
         guard let plate = container as? NowPlayingLyricsContainerView else { return }
         plate.passThroughBottom = max(0, frame.maxY - (controlBandMidY - controlBandHalfHeight))
@@ -3467,23 +3466,20 @@ enum NowPlayingLyricsPlate {
     ///   （以前这里直接 false ⇒ 键看得见、点下去什么都不会发生，用户报的就是这个。）
     private static func canShow(for page: UIView) -> Bool {
         if #available(iOS 26.0, *) {} else { return false }
-        // ★★ 2026-10-12（用户：「那怎么办，自己画的这套视图塞不进去单纯的逐词吗」）：
-        //   **这里不再要求「更好的逐词歌词」。** 这一层画的就是那套渲染（iOS 26 起），
-        //   在这一层里**没有第二种渲染可选**，所以那颗开关不该在这里当闸门 ——
-        //   它管的是 Spotify **原生歌词页**用哪套渲染（`AppleMusicLyricsOverlay` ↔ 旧
-        //   `LyricsWordByWord`）。以前在这里 guard 的后果就是用户报的那条：
-        //   只开「逐词歌词」时**键摆着、点下去这里 false ⇒ 点不动**（而"整层退出"又会让
-        //   kumone 那套版式消失，同样不对）。
-        // ★ 用户要求「键随意能按」⇒ 这里**永远为真**：有词就画词，没词就写一句说明
-        //   （见 `noticeText()`），画不出来的异常也照样给一句话，绝不留下"点了没反应"的键。
+        // ★★ **这里不再要求「更好的逐词歌词」。** 这一层画的就是那套渲染（iOS 26 起），在这一层里
+        //   **没有第二种渲染可选** ⇒ 那颗开关不该在这里当闸门：它管的是 Spotify **原生歌词页**用哪套
+        //   渲染（`AppleMusicLyricsOverlay` ↔ 旧 `LyricsWordByWord`）。在这里 guard 的后果很具体：
+        //   只开「逐词歌词」时**键摆着、点下去这里 false ⇒ 点不动**（而"整层退出"又会让 kumone 那套
+        //   版式消失，同样不对）。
+        // ★ 用户要求「键随意能按」⇒ 这里**永远为真**：有词就画词，没词就写一句说明（见 `noticeText()`），
+        //   画不出来的异常也照样给一句话，绝不留下"点了没反应"的键。
         return true
     }
 
     /// 打开之后写在歌词**正中间**的那句话。`nil` = 有歌词可画（不写）。
     ///
-    /// **选哪一档**全在 `LyricsNoticePolicy`（纯逻辑、有单测、CI 每次 push 都跑）；
-    /// 这里只负责把当前数据喂进去、再把那一档翻成中文文案。
-    /// 四种"没词"必须分开说，混档就是用户能看见的误报：
+    /// **选哪一档**全在 `LyricsNoticePolicy`（纯逻辑、有单测、CI 每次 push 都跑）；这里只负责把当前
+    /// 数据喂进去、再把那一档翻成中文文案。四种"没词"必须分开说，混档就是用户能看见的误报：
     ///   · 源**明确**说是纯音乐 ⇒ `song_is_instrumental`（不许拿"查无此歌"冒充它）；
     ///   · **有行、但一行时间都没有**、连文本都提不出来 ⇒ `lyrics_no_timeline`；
     ///   · 查完了没有 / 转换异常 ⇒ `ngzhwm_lyrics_unavailable`；
@@ -3574,15 +3570,12 @@ enum NowPlayingLyricsPlate {
 
     /// 把"没有时间轴的文本行"包成渲染层吃的 `LyricLine`（时间一律 0、无音节）。
     ///
-    /// ★ 2026-10-11（用户：「这个没有时间轴的歌词的滚动，展示大小什么的**不是复用有时间轴的逻辑吗**」）——
-    /// 复用就是对的做法：**同一套**渲染层 + `AppleMusicLyricsPage.isStatic` 接管三件事
-    /// （不高亮、不跟随、点行不跳）。字号 / 行距 / 左右内边距 / 滚动容器 / 底部 120pt 留白
+    /// ★ **复用**就是对的做法：**同一套**渲染层 + `AppleMusicLyricsPage.isStatic` 接管三件事
+    /// （不高亮、不跟随、点行不跳）；字号 / 行距 / 左右内边距 / 滚动容器 / 底部 120pt 留白
     /// （正好让最后一行躲开控件条）全部自动一致。
-    ///
+    /// ★ 这一档也**照样带译文与罗马字**，都按**原数组下标**配对（所以入参带下标）；罗马字仍走仓库
+    /// 那条既有罗马化管线。
     /// ⚠️ `time: 0` 只是**占位**：`isStatic` 那一档不读它。
-    ///
-    /// ★★ 2026-10-11（用户：「把罗马字和歌词翻译接上去吧」）：这一档也**照样带译文与罗马字**，
-    /// 都按**原数组下标**配对（所以入参带下标）；罗马字仍走仓库那条既有罗马化管线。
     private static func staticLines(from items: [(index: Int, text: String)]) -> [LyricLine] {
         let translationLines = currentLyricsDto?.translation?.lines ?? []
         // ⚠️ 走带缓存的 `romanizedContentsForDisplay()`（这个函数也在 0.3s 那条节拍上）。
@@ -3618,15 +3611,13 @@ enum NowPlayingLyricsPlate {
 
     /// 这一首"**没有时间轴、但有行**"的歌词文本（`nil` = 这一档不适用）。
     ///
-    /// ★ 2026-10-11（用户问的「**歌词呢**」）：加载到没有时间轴的歌词时，
-    /// 以前只写一句「这首歌的歌词没有时间轴」—— 数据明明在（Spotify 自己那张卡列得出全文）。
-    /// 现在把文本提出来**静态列出来**（见 `staticLines(from:)` + `isStatic`），这一档才算真的有内容。
+    /// 为什么要它：这一档数据明明在（Spotify 自己那张卡列得出全文）⇒ 把文本提出来**静态列出来**
+    /// （见 `staticLines(from:)` + `isStatic`），否则用户看到的就是"歌词呢"。
     ///
     /// ⚠️ 只认"**一行时间都没有**"这一档；只要有一行带 `offsetMs`，就交给时间轴那条路
     /// （`LyricLinesAdapter` 会把带时间的挑出来渲染）。
-    ///
-    /// ★ 2026-10-11：返回的是 `(原数组下标, 文本)` —— 下标要**一直带着**，因为译文与罗马字
-    /// 都按同一个下标配对（空行被滤掉之后下标会错位，这正是本函数不返回 `[String]` 的原因）。
+    /// ★ 返回的是 `(原数组下标, 文本)` —— 下标要**一直带着**，因为译文与罗马字都按同一个下标配对
+    /// （空行被滤掉之后下标会错位，这正是本函数不返回 `[String]` 的原因）。
     private static func currentUntimedLines() -> [(index: Int, text: String)]? {
         guard let dto = currentLyricsDto, !dto.lines.isEmpty else { return nil }
         guard !dto.lines.contains(where: { $0.offsetMs != nil }) else { return nil }
@@ -3702,16 +3693,16 @@ enum NowPlayingLyricsPlate {
 
     /// ★★ **`findByIdentifier` 的结果按"哪个 root + 哪个 id"缓存一次。**
     ///
-    /// 为什么值得：那趟 BFS 的预算 `maxNodes = 800`，而一次 `reconcile` / `apply` 里能问
-    /// 三十来次，绝大多数问的还是**同一对**（`listIdentifier` / `titleLabelIdentifier` …）；
-    /// `DeclutterChrome` 那条 0.3s 节拍于是每拍把同一棵树重走十几遍。
-    /// 这些答案在"这一页 + 这一程"里是稳定的 —— 页面换了才需要重新认。
+    /// 为什么值得：那趟 BFS 的预算 `maxNodes = 800`，而一次 `reconcile` / `apply` 里能问三十来次，
+    /// 绝大多数问的还是**同一对**（`listIdentifier` / `titleLabelIdentifier` …）；`DeclutterChrome`
+    /// 那条 0.3s 节拍于是每拍把同一棵树重走十几遍。这些答案在"这一页 + 这一程"里是稳定的 ——
+    /// 页面换了才需要重新认。
     ///
     /// 三条纪律（少一条就会变成"缓存住了一个错答案"）：
-    ///   · **只缓存命中**：查不到**不许**缓存 —— 进页面头几拍树上还没有那些元素，
-    ///     缓存一个 nil 会把 `pendingOpenUntil` 那条"下一拍再试"的整条窗口掐死。
-    ///   · 命中也要**验一次还活着**（在窗口里、仍是这个 root 的子孙）—— 换歌 / 重建元素后
-    ///     旧的那个已经被摘掉了，这里清掉重查。
+    ///   · **只缓存命中**：查不到**不许**缓存 —— 进页面头几拍树上还没有那些元素，缓存一个 nil 会把
+    ///     `pendingOpenUntil` 那条"下一拍再试"的整条窗口掐死。
+    ///   · 命中也要**验一次还活着**（在窗口里、仍是这个 root 的子孙）—— 换歌 / 重建元素后旧的那个
+    ///     已经被摘掉了，这里清掉重查。
     ///   · 换页面 / 收层时 `invalidateNodeLookups()` **整块作废**。
     private struct NodeLookupKey: Hashable {
         let root: ObjectIdentifier
@@ -3777,19 +3768,15 @@ enum NowPlayingLyricsPlate {
 
 /// 被我们**移走**的标题行的触摸替身 —— 让"点歌名 / 歌手跳专辑 / 歌手页"这个原生功能活下来。
 ///
-/// ## 为什么需要它
+/// 为什么需要它：我们把标题行用 `transform` 抬到了左上角，但**行还在它原来的 cell 里** —— UIKit 的
+/// 命中测试从窗口往下走：点落在 cell 的 frame **之外**时，那一整棵子树根本不会被问 ⇒ 抬上去的那一行
+/// **看着在、点不到**（"移动别人的子视图"的固有代价，pw 也踩过）。
 ///
-/// 我们把标题行用 `transform` 抬到了左上角，但**行还在它原来的 cell 里** —— UIKit 的命中
-/// 测试是从窗口往下走的：点落在 cell 的 frame **之外**时，那一整棵子树根本不会被问
-/// ⇒ 抬上去的那一行**看着在、点不到**（这是"移动别人的子视图"的固有代价，pw 也踩过）。
-///
-/// ## 做法（照 pw `PlayerLyrics.x` 的 `hitTest:`）
-///
-/// pw 在同一处境下的解法是：在**自己**这一层重写 `hitTest:`，把点**换算**进那一行，
-/// 问它要一个命中视图并返回（`PlayerLyrics.x:100-104`）。这里照做：
+/// 做法（照 pw `PlayerLyrics.x` 的 `hitTest:`）：在**自己**这一层重写 `hitTest:`，把点**换算**进那一行，
+/// 问它要一个命中视图并返回 ——
 ///   · 本层铺满页面，但 `point(inside:)` 只认**那一行当前的视觉 frame**；
-///   · `hitTest` 里先问那一行；命中就把那个视图返回 ⇒ 触摸照常走到 Spotify 的控件
-///     （它的祖先手势 / 选中机制也都还能收到这次触摸）。
+///   · `hitTest` 里先问那一行；命中就把那个视图返回 ⇒ 触摸照常走到 Spotify 的控件（它的祖先手势 /
+///     选中机制也都还能收到这次触摸）。
 /// 范围之外一律返回 nil，触摸穿透给下面原有的视图。
 final class NowPlayingTitleRelayView: UIView {
 
@@ -3820,11 +3807,9 @@ final class NowPlayingTitleRelayView: UIView {
 ///
 /// **唯一特殊之处**：控件条那一条（底部 ≈40pt）**放行触摸**。
 ///
-/// 为什么需要它：这个容器铺满整个歌词区、`isUserInteractionEnabled = true`（歌词行要靠它
-/// 收点击去跳转）、而且被 `bringSubviewToFront` 顶到最上面 ⇒ **它把这一片的触摸全吃掉了**，
-/// 包括 Spotify 自己的收藏键（＋/绿色 ✓）。
-///
-/// 只让**那一条**（那一段本来就被上下渐隐遮着，少一点行点击没关系），
+/// 为什么需要它：这个容器铺满整个歌词区、`isUserInteractionEnabled = true`（歌词行要靠它收点击去
+/// 跳转）、而且被 `bringSubviewToFront` 顶到最上面 ⇒ **它把这一片的触摸全吃掉了**，包括 Spotify
+/// 自己的收藏键（＋/绿色 ✓）。只让**那一条**（那一段本来就被上下渐隐遮着，少一点行点击没关系），
 /// 歌词正文那一片照旧吃触摸。
 final class NowPlayingLyricsContainerView: UIView {
 

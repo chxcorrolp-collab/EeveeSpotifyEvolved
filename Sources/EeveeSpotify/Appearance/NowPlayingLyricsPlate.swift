@@ -540,21 +540,9 @@ enum NowPlayingLyricsPlate {
         pageLeaving = false
 
         guard isEnabled else {
-            // 关开关：**不动画**（用户多半在设置页，而且页面上可能正有转场）。
-            closeEverything(reason: "switch off", animated: false)
-            removeToggle()
-            // ★ 关掉功能 = **页面回到 Spotify 原样**：控件条与"标题行去左上角"都要撤。
-            clearControlBand()
-            clearClosedTitleTransform()
-            // ★ 2026-10-04：大封面那个缩放也是我们写的，一起还回去。
-            restoreCoverScale()
-            // ★ 2026-10-04：单行歌词也是我们的东西。
-            removeSingleLyric()
-            // ★ 2026-10-12：触摸替身也一样（它的 `row` 是别人的视图，不能留着乱转发）。
-            removeTitleRelay()
-            // ★ 2026-10-13：署名（挂在页面上的我们自己的 label）同样要摘干净。
-            removeCreditLabel()
-            // ★ 2026-10-12：**为什么没参与**要留在日志里（否则"歌词键不见了"没法判）。
+            // 关掉功能 = **页面回到 Spotify 原样**：一次回滚（见 `restoreAll`）。
+            restoreAll(reason: "switch off", animated: false)
+            // ★ **为什么没参与**要留在日志里（否则"歌词键不见了"没法判）——
             //   一次一页只报一行（`lastEnabledSkipReason`）。
             noteDisabledReason()
             return
@@ -691,19 +679,9 @@ enum NowPlayingLyricsPlate {
                 || !scaledCoverBase.isEmpty || lastArtistSuffix != nil || singleLyric != nil
                 || titleRelay != nil
             else { return false }
-            // 页面已经不在屏幕上了 ⇒ 现在写回封面 / 撤销几何 / 摘掉我们的层与那枚键，什么都看不见。
-            closeEverything(reason: "page disappeared", animated: false)
-            removeToggle()
-            // ★ 2026-10-11 第二轮：写在**别人的控件**上的那两处位移也要还回去
-            //   （分享键的平移、标题行的左上角）。
-            clearControlBand()
-            clearClosedTitleTransform()
-            // ★ 2026-10-04：大封面那个缩放同样是我们写的 ⇒ 一起还回原值。
-            restoreCoverScale()
-            // ★ 2026-10-04：单行歌词也要拿走（页面都走了，别把它留在树上）。
-            removeSingleLyric()
-            // ★ 2026-10-12：触摸替身一起拿走（页面没了，它转发给谁都不知道）。
-            removeTitleRelay()
+            // 页面已经不在屏幕上了 ⇒ 一次回滚（写回封面 / 撤销几何 / 摘掉我们的层与那枚键），
+            // 而且什么都看不见。
+            restoreAll(reason: "page disappeared", animated: false)
             return false
         }
 
@@ -808,6 +786,29 @@ enum NowPlayingLyricsPlate {
         return false
     }
 
+    /// **一次回滚**：把我们写在这个页面上的每一处都撤干净（别人的视图 + 我们自己的层）。
+    ///
+    /// 为什么要有它：三条"当场收尾"的路（关开关 / 页面走掉 / 设置页关功能）原来**各抄了一份
+    /// 7 行的收尾**，而且两份**抄漏了 `removeCreditLabel`** —— 那两条路上署名会留在树上。
+    /// 合成一处之后，"我们写过什么"与"怎么还"只有一张账要对。
+    ///
+    /// ⚠️ 顺序与原来逐字一致：先收层（`closeEverything` 管封面 morph / 容器 / 标题 mask），
+    /// 再把写在**别人**视图上的位移逐个还回去。`closeEverything` 自带空守卫
+    /// （没铺过东西时不打日志），所以这里不需要再判一次。
+    private static func restoreAll(reason: String, animated: Bool) {
+        closeEverything(reason: reason, animated: animated)
+        // 我们自己的层与控件
+        removeToggle()
+        // 写在别人的视图 / 控件上的位移（撤销）
+        clearControlBand()
+        clearClosedTitleTransform()
+        restoreCoverScale()
+        // 我们自己的层与控件（续）
+        removeSingleLyric()
+        removeTitleRelay()
+        removeCreditLabel()
+    }
+
     /// 立刻收掉（**页面离开的那条路已经不用它了** —— 见 `pageWillLeave()`：退出转场里页面
     /// 还在屏幕上，当场收尾会闪出原生大封面，照片 65）。
     ///
@@ -821,20 +822,7 @@ enum NowPlayingLyricsPlate {
     /// 那枚键也要一起拿走 —— 否则下次进来会叠一枚在上面。
     static func remove(reason: String) {
         // 页面要走了 ⇒ **不动画**：拖着 0.45s 才把 Spotify 那条封面写回去，会在转场里露一个空档。
-        closeEverything(reason: reason, animated: false)
-        removeToggle()
-        // ★ 2026-10-11 第二轮：这条路现在只服务"设置页把开关关掉" ⇒ 关掉功能 = **页面回到
-        //   Spotify 原样**：分享键还回 footer、标题行还回它的位置。
-        //   （上面那句 `closeEverything` 里的"摆回关着的样子"会被 `isEnabled` 挡掉，所以这里必须
-        //    显式清 —— 否则关掉开关之后，分享键还留在控件条上、标题行还贴在左上角。）
-        clearControlBand()
-        clearClosedTitleTransform()
-        // ★ 2026-10-04：大封面的缩放也是我们写上去的，关掉功能 = 连它一起还回去。
-        restoreCoverScale()
-        // ★ 2026-10-04：单行歌词同样是我们摆上去的。
-        removeSingleLyric()
-        // ★ 2026-10-12：标题行的触摸替身也是我们的。
-        removeTitleRelay()
+        restoreAll(reason: reason, animated: false)
     }
 
     /// 那枚"歌词键"被点了。

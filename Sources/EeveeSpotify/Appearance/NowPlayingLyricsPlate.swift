@@ -555,7 +555,7 @@ enum NowPlayingLyricsPlate {
         // 万一那一拍没赶上（比如 Spotify 把这一页留在窗口里、只是不再显示），残留就会跟着进来：
         // 我们的缩略图 + 被按住的封面 —— 而这一次**没有**要求展开（用户上次是收起的）
         // ⇒ 屏幕上是一个"大封面没了、歌词也没有"的半成品（照片 57 那一类）。
-        if !isOpen, coverHost != nil || lastContainer != nil || wantsOpen {
+        if !isOpen, doorPhase != .closed {
             closeEverything(reason: "left over from the previous visit", animated: false)
         }
 
@@ -668,11 +668,16 @@ enum NowPlayingLyricsPlate {
             //   漏掉它们的后果很具体：页面走掉时该跑的那次收尾**整段被跳过**
             //   ⇒ 封面缩着不回、歌手行永远挂着「（NetEase）」、我们的标签留在树上
             //   （而 `singleLyric` 若还是强引用，连那一页的标签都一起钉住）。
-            guard pageLeaving || isOpen || coverHost != nil || lastContainer != nil
-                || bandShareButton != nil || closedTitleRow != nil || wantsOpen
+            // 判据的**等价**写法见 `LyricsDoorRules.needsPageTeardown`
+            // （`.closing` 覆盖 `pageLeaving`，`.open` / `.opening` 覆盖 `isLive || wantsOpen`）。
+            let hasPendingEdits = bandShareButton != nil || closedTitleRow != nil
                 || !scaledCoverBase.isEmpty || lastArtistSuffix != nil || singleLyric != nil
                 || titleRelay != nil
-            else { return false }
+            guard LyricsDoorRules.needsPageTeardown(
+                phase: doorPhase,
+                isOpen: isOpen,
+                hasPendingEdits: hasPendingEdits
+            ) else { return false }
             // 页面已经不在屏幕上了 ⇒ 一次回滚（写回封面 / 撤销几何 / 摘掉我们的层与那枚键），
             // 而且什么都看不见。
             restoreAll(reason: "page disappeared", animated: false)
@@ -746,7 +751,7 @@ enum NowPlayingLyricsPlate {
         //   没有这一段，日志 50 里那一次点击就是这枚键的**最后一次**机会。
         //   ⚠️ 重试**也要过门禁**：`openAndMount` 里没有 `canShow`，而换歌之后
         //   "这一首有没有词"是会变的 —— 没词了就把窗口清掉，别拿一首没词的歌空转五拍。
-        if CFAbsoluteTimeGetCurrent() < pendingOpenUntil {
+        if LyricsDoorRules.retryWindowOpen(now: CFAbsoluteTimeGetCurrent(), retryUntil: pendingOpenUntil) {
             // ★ 2026-10-11：`noticeText()` 也算"有东西可画"（用户要的是键随时能按）——
             //   否则一首没词的歌在"第一拍量不到封面"之后就再也没人重试了。
             //   ⚠️ 同一天又加了"没有时间轴 ⇒ 静态歌词"那一档 ⇒ 判据换成 `hasSomethingToShow()`
@@ -767,7 +772,7 @@ enum NowPlayingLyricsPlate {
         // ★ 半成品护栏：`isOpen` 是 `false`、但我们的封面/容器**还挂在屏上**
         //   （某拍失败留下的）⇒ 也要继续按着原生封面，并接着试着铺回来。
         //   这一条正是照片 57 那种"大封面回来了、我们的东西还压在上面"的兜底。
-        if coverHost != nil || lastContainer != nil {
+        if isAnythingLive {
             keepNativeCoverHidden(in: page)
             ensureToggleZone(in: page)
             return false
@@ -827,7 +832,7 @@ enum NowPlayingLyricsPlate {
         //    我们的封面（`isOpen` 已被回退），只看 `isOpen` 会让这一下变成"**再展开一次**"
         //    ⇒ 用户**关不掉**（独立只读复核点出来的死角）。
         //    "屏幕上有我们的东西"与 `closeEverything` 的守卫用的是同一组判据。
-        if isOpen || coverHost != nil || lastContainer != nil {
+        if isOpen || isAnythingLive {
             // 用户自己点收起 ⇒ **放动画**（封面"飞回原位"）。
             closeEverything(reason: "tapped", animated: true)
             // ★ 2026-10-10：**用户这一下就是"记忆"** —— 下次进播放器还是大封面。
@@ -863,19 +868,32 @@ enum NowPlayingLyricsPlate {
         ensureToggleZone(in: page)
     }
 
-    /// 「我们打算铺着」这个意图**现在还作数吗**（见 `wantsOpenUntil`）。
+    /// 「屏幕上真的有我们的东西」——**这一条判据只留一份**。
     ///
-    /// 三种情况：
-    ///   · 没立意图 ⇒ `false`；
-    ///   · **已经铺上了**（我们的封面 / 歌词容器在屏幕上）⇒ 一直作数（这时按住原生封面本来就是对的）；
-    ///   · 还在"点了但没铺上"的那段窗口里（≤ `wantsOpenLifetime`）⇒ 作数（照片 66 的转场靠它）。
+    /// 它原来在七八处各写一遍（`apply` 的残留守卫 / `reconcile` 的收尾守卫与半成品护栏 /
+    /// `coverDidLayOut` 的门禁 / `openAndMount` 的 `wasLive` / `closeEverything` 的
+    /// `hadSomethingVisible` / `toggle()` 的折叠判据），每修一次回归就多 OR 一个旗标。
+    private static var isAnythingLive: Bool { coverHost != nil || lastContainer != nil }
+
+    /// 这一拍处在哪一相（关 / 展开中 / 开 / 收起中）。
+    ///
+    /// 规则全在 `LyricsDoorRules` 里（**纯逻辑、有单测、CI 每次 push 都跑**，见
+    /// `Appearance/LyricsDoorPhase.swift` 与 `Tests/LyricsDoorPhase`）；本文件只负责把 UI 事实喂进去。
+    private static var doorPhase: LyricsDoorPhase {
+        LyricsDoorRules.phase(isLive: isAnythingLive, wantsOpen: wantsOpen, pageLeaving: pageLeaving)
+    }
+
+    /// 「我们打算铺着」这个意图**现在还作数吗**（见 `wantsOpenUntil`）。
     ///
     /// 过了窗口又什么都没铺上 ⇒ `false`，**调用方负责撤意图并把封面写回去**（别在这里写状态，
     /// 因为 `coverDidLayOut` 也会问它，而那个回调是别人的 `layoutSubviews`）。
     private static func wantsOpenNow() -> Bool {
-        guard wantsOpen else { return false }
-        if coverHost != nil || lastContainer != nil { return true }
-        return CFAbsoluteTimeGetCurrent() < wantsOpenUntil
+        LyricsDoorRules.intentStillValid(
+            wantsOpen: wantsOpen,
+            isLive: isAnythingLive,
+            now: CFAbsoluteTimeGetCurrent(),
+            intentUntil: wantsOpenUntil
+        )
     }
 
     /// ★ 只要我们的层还在屏幕上，就**每一拍**把 Spotify 当前那张主封面按掉。
@@ -920,7 +938,11 @@ enum NowPlayingLyricsPlate {
         // ★ 2026-10-04：换成 `wantsOpenNow()` —— 意图**过期**之后这里不许再按住封面，
         //   否则新封面在它自己第一次 `layoutSubviews` 就被按掉，而屏幕上什么都没有
         //   （用户报的「按键换歌漏大封面」，见 `wantsOpenUntil`）。
-        guard isOpen || coverHost != nil || lastContainer != nil || wantsOpenNow() else { return }
+        guard LyricsDoorRules.shouldHoldNativeCover(
+            isOpen: isOpen,
+            isLive: isAnythingLive,
+            intentValid: wantsOpenNow()
+        ) else { return }
         guard !pageLeaving else { return }
         guard tilt.window != nil, tilt.bounds.width >= 200 else { return noteCoverGuardReject() }
         guard isInsideCoverCell(tilt) else { return noteCoverGuardReject() }
@@ -1008,7 +1030,7 @@ enum NowPlayingLyricsPlate {
         //   否则会出现独立只读复核点出来的那个死角：歌词明明还开着、而 `isOpen` 已经是
         //   `false` ⇒ 用户再点走的是"展开"那一支 ⇒ **关不掉**。
         //   这种情况下保持 `isOpen = true`，让 `reconcile` 的 `isOpen` 那一支每拍接着试。
-        let wasLive = coverHost != nil || lastContainer != nil
+        let wasLive = isAnythingLive
 
         isOpen = true
         if layoutAndMount(in: page) {
@@ -1207,7 +1229,7 @@ enum NowPlayingLyricsPlate {
     private static func closeEverything(reason: String, animated: Bool) {
         // ⚠️ 这三行必须在那个 `guard` **之前**：重试窗口要在"关掉 / 离开页面"时**无条件**清掉，
         //    否则页面都走了它还挂着一个 deadline（虽然 `page.window` 会挡住，但账要算清）。
-        let hadSomethingVisible = isOpen || lastContainer != nil || coverHost != nil
+        let hadSomethingVisible = isOpen || isAnythingLive
         isOpen = false
         wantsOpen = false
         wantsOpenUntil = 0

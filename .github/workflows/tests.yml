@@ -123,6 +123,17 @@ jobs:
                  -o lyric-interlude-tests
           ./lyric-interlude-tests
 
+      # 2026-10-16：「歌词进播放器」那层的**相位机**（关 / 展开中 / 开 / 收起中）与三条窗口的规则
+      # （`LyricsDoorPhase.swift`）。它把原来散在六个旗标里、在七八处各写一遍的判据收成一处。
+      # 纯 Foundation，所以能进这里；视图层 `NowPlayingLyricsPlate.swift` 要 UIKit/Orion，进不来
+      # —— 但那一层现在**只把 UI 事实喂给这套规则**，判定本身在这里被测着。
+      - name: Lyrics door phase rules (player lyrics layer)
+        run: |
+          swiftc Sources/EeveeSpotify/Appearance/LyricsDoorPhase.swift \
+                 Tests/LyricsDoorPhase/main.swift \
+                 -o lyrics-door-phase-tests
+          ./lyrics-door-phase-tests
+
       # 唯一一个**不是** swiftc 的测试（纯 Python，不需要工具链）。
       - name: Resolve-configuration snapshot
         run: python3 Tests/ResolveConfigurationSnapshot/test.py

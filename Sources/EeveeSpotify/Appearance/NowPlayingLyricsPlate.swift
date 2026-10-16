@@ -3610,46 +3610,50 @@ enum NowPlayingLyricsPlate {
 
     /// 打开之后写在歌词**正中间**的那句话。`nil` = 有歌词可画（不写）。
     ///
-    /// 四种"没词"必须分开说（这正是用户要的）：
-    ///   · 源**明确**说是纯音乐 ⇒ 「此歌曲为纯音乐。」（`song_is_instrumental`，键早就有了）；
-    ///   · ★ **有行、但一行时间都没有** ⇒ 「这首歌的歌词没有时间轴」（`lyrics_no_timeline`，本轮新增）；
-    ///   · 查完了没有 ⇒ 「未找到歌词」（`ngzhwm_lyrics_unavailable`，键也早就有了）；
-    ///   · 还在查 ⇒ 「正在查找歌词…」（`lyrics_looking_up`，上一轮新增的键）。
-    /// ⚠️ "查无此歌"**不许**冒充纯音乐 —— 判据是 `LyricsDto.isInstrumental`（只有源明确判定时才置位）。
-    /// ⚠️ ★ 2026-10-11（S1）：也**不许**把"这一首没有时间轴"说成"未找到歌词" —— 见下面第 ③ 段。
+    /// **选哪一档**全在 `LyricsNoticePolicy`（纯逻辑、有单测、CI 每次 push 都跑）；
+    /// 这里只负责把当前数据喂进去、再把那一档翻成中文文案。
+    /// 四种"没词"必须分开说，混档就是用户能看见的误报：
+    ///   · 源**明确**说是纯音乐 ⇒ `song_is_instrumental`（不许拿"查无此歌"冒充它）；
+    ///   · **有行、但一行时间都没有**、连文本都提不出来 ⇒ `lyrics_no_timeline`；
+    ///   · 查完了没有 / 转换异常 ⇒ `ngzhwm_lyrics_unavailable`；
+    ///   · 还在查 ⇒ `lyrics_looking_up`（调试页那颗彩蛋会把文案换掉）。
+    ///
+    /// ⚠️ 参数按**短路**的顺序算：`hasLines` 为假时不去碰 `currentLines()` / `currentUntimedLines()`
+    /// （那两个会建数组，而 `hasSomethingToShow()` 会走到这里）。
     private static func noticeText() -> String? {
-        // ① 有行而且画得出来 ⇒ 正常画歌词。
-        if currentLyricsDto?.lines.isEmpty == false, currentLines() != nil { return nil }
-        // ② 源明确说了这是纯音乐。
-        if currentLyricsDto?.isInstrumental == true { return "song_is_instrumental".localized }
-        // ③ 有行、却画不出来。★ 先说清是**哪一档**"画不出来"，别一律报"没找到"。
-        if let dto = currentLyricsDto, !dto.lines.isEmpty {
-            // ★ 这一档是**误报**的源头（S1）：
-            //   `LyricLinesAdapter.toAppleMusicLyricLines()` 第 21 行的 `.filter { $0.offsetMs != nil }`
-            //   会把"一行时间都没有"的整首歌滤成空 ⇒ 我们这层没有行模型；
-            //   而**注入给 Spotify 的那份 payload 是带这些行的**（Spotify 自己的歌词卡能列全文）
-            //   ⇒ 用户看到的是"歌词明明有、我们却说未找到"。数据在，只是没有时间轴。
-            //
-            // ★★ 2026-10-11（用户追了一句「**歌词呢**」）：这一档**不再只写一句话** ——
-            //   文本提得出来就 `nil`（去画静态歌词，见 `staticLines(from:)`）；
-            //   只有**连文本都提不出来**（全是空行）才退回那句话。
-            if !dto.lines.contains(where: { $0.offsetMs != nil }) {
-                return currentUntimedLines() == nil ? "lyrics_no_timeline".localized : nil
-            }
-            // 有行、也有至少一行带时间，却还是画不出来 ⇒ 这是转换异常，按"没找到"说，**别做成死键**。
+        let dto = currentLyricsDto
+        let lines = dto?.lines ?? []
+        let hasLines = !lines.isEmpty
+        let notice = LyricsNoticePolicy.notice(
+            hasLines: hasLines,
+            hasDrawableLines: hasLines && currentLines() != nil,
+            isInstrumental: dto?.isInstrumental == true,
+            hasAnyTimestamp: hasLines && lines.contains { $0.offsetMs != nil },
+            hasUntimedText: hasLines && currentUntimedLines() != nil,
+            isLookingUp: isLookingUpLyrics
+        )
+        guard let notice else { return nil }
+        switch notice {
+        case .instrumental:
+            return "song_is_instrumental".localized
+        case .noTimeline:
+            return "lyrics_no_timeline".localized
+        case .unavailable:
             return "ngzhwm_lyrics_unavailable".localized
-        }
-        // ④ 数据还没到：正在查 vs 查完了没有。
-        switch currentLyricsLookupState {
-        case .idle, .loading:
-            // ★ 2026-10-12（用户点名要的**彩蛋**）：「正在查找歌词…」→「少女祈祷中…」。
-            //   开关在**调试**页（「替换寻找歌词时的占位符」），**默认关**。
-            //   全文只此一处写这句占位文本（`lyrics_looking_up` 的另一处只是注释）。
+        case .lookingUp:
+            // ★ 用户点名要的**彩蛋**：「正在查找歌词…」→「少女祈祷中…」。
+            //   开关在**调试**页（「替换寻找歌词时的占位符」），**默认关**；全文只此一处。
             return UserDefaults.lyricsSearchPlaceholderEasterEgg
                 ? "lyrics_looking_up_easter_egg".localized
                 : "lyrics_looking_up".localized
-        case .failed, .found:
-            return "ngzhwm_lyrics_unavailable".localized
+        }
+    }
+
+    /// 数据还没到、而且**还在查**（`.idle` / `.loading`）。查完了没有 ⇒ `.failed` / `.found`。
+    private static var isLookingUpLyrics: Bool {
+        switch currentLyricsLookupState {
+        case .idle, .loading: return true
+        case .failed, .found: return false
         }
     }
 

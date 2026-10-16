@@ -134,6 +134,15 @@ jobs:
                  -o lyrics-door-phase-tests
           ./lyrics-door-phase-tests
 
+      # 2026-10-16：打开后"没词可画时写哪一句"的判定（`LyricsNoticePolicy`）。四种"没词"必须
+      # 分开说 —— 混档就是用户能看见的误报（"歌词明明有、我们却说未找到"）。纯 Foundation。
+      - name: Lyrics notice policy (what we say when there is nothing to draw)
+        run: |
+          swiftc Sources/EeveeSpotify/Appearance/LyricsNoticePolicy.swift \
+                 Tests/LyricsNoticePolicy/main.swift \
+                 -o lyrics-notice-policy-tests
+          ./lyrics-notice-policy-tests
+
       # 唯一一个**不是** swiftc 的测试（纯 Python，不需要工具链）。
       - name: Resolve-configuration snapshot
         run: python3 Tests/ResolveConfigurationSnapshot/test.py

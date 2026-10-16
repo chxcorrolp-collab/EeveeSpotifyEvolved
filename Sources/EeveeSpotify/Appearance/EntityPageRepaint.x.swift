@@ -193,6 +193,14 @@ class AlbumCellBackgroundHook: ClassHook<UIView> {
 enum EntityPageSectionDrop {
 
     static let curationIdentifier = "PlaylistCuration.Row.CurationActionsToolbar"
+    /// ★★ 2026-10-16（用户：「歌单页那一行**添加 / 编辑 / 排序 / 姓名和详情 / 表情符号**没隐藏」）：
+    /// **整行那条 id 不是唯一的判据**。同一行里的按钮挂的是**另一个 id**
+    /// （`PlaylistCuration.AddButton`，真机日志里 72 次；行 id 107 次），而 `containsMarker` 是
+    /// **子串命中** —— 判据换成**模块前缀 `PlaylistCuration`** 就同时罩住两者，
+    /// 也顺带罩住 Spotify 将来在同一模块下新加的按钮。
+    ///
+    /// ⚠️ 前缀这么短、这么专有，不会误伤别的行（`PlaylistCuration.*` 全是这一排工具栏的东西）。
+    static let curationFragment = "PlaylistCuration"
     static let likedSongsFragment = "LikedSongs"
     /// ★★ 2026-10-18 第五轮（日志 99 的 `[HeaderProbe] page ids:` 逐字，出现两次）：
     /// **「你已点赞」那一排是有 accessibility id 的** —— `Components.UI.LikedSongs.Row`（挂在
@@ -295,9 +303,17 @@ enum EntityPageSectionDrop {
         }
 
         // ★★ 2026-10-18 第五轮：艺人页上把"被问到高度的 cell"打一次（见 `reportArtistCellsOnce`）。
-        //    ⚠️ 必须放在下面那些 `guard`/提前 return 之前 —— 它的全部意义就是回答
+        //    ⚠️ 必须放在下面那些 `guard`/提前返回之前 —— 它的全部意义就是回答
         //    "到底有没有被叫到"。
-        if root.accessibilityIdentifier == "creator-page" {
+        //
+        // ★★ 2026-10-16（用户报的"歌单页那排 pill / 喜欢的歌曲那排 chips 没隐藏"）：
+        //    **这份 dump 原来只在 `creator-page` 上跑** ⇒ 歌单页上我们**从来没有**那份
+        //    `cell #… ids=[…]` 清单，也就无法判断那排 pill 到底在不在某个 cell 里
+        //    （决定"折成 0 高"还是"只能藏、留 52pt 空档"）。这里放宽成
+        //    **creator-page 或带 `PL.Header` 的歌单页**；`reportArtistCellsOnce` 自己按页记账，
+        //    仍然每页只报一次。
+        if root.accessibilityIdentifier == "creator-page"
+            || eeveeAncestor(withIdentifier: "PL.Header", of: cell) != nil {
             reportArtistCellsOnce(cell, at: path, height: height)
         }
 
@@ -309,7 +325,9 @@ enum EntityPageSectionDrop {
             return true
         }
 
-        var drop = containsMarker(cell, curationIdentifier)
+        // ★★ 2026-10-16：判据从"整行那条 id"放宽到**模块前缀**（见 `curationFragment`）——
+        //    同行里的按钮是 `PlaylistCuration.AddButton`，只认整行 id 时一行都命不中。
+        var drop = containsMarker(cell, curationFragment)
         if !drop, root.accessibilityIdentifier == "creator-page" {
             drop = likedSongsMarkers.contains { containsMarker(cell, $0) }
             // ★★ 2026-10-11（日志 100）：「关于艺人」**先读到正文再折**。

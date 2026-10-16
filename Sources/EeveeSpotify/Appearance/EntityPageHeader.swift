@@ -468,11 +468,14 @@ private func eeveeOutermostScroll(from view: UIView) -> UIScrollView? {
 ///
 /// ⚠️ **只走通一条就返回** —— 两条都发 = 一次点击触发两次（等于没点）。
 @discardableResult
-func eeveeFire(_ control: UIView?) -> String? {
+func eeveeFire(_ control: UIView?, skippingControlAction: Bool = false) -> String? {
     guard let control else { return nil }
 
     // ① 真·UIControl **且确实注册了 target** ⇒ 发那一个事件（顺序按"最可能的"排）。
-    if let uiControl = control as? UIControl {
+    //    ★ 2026-10-16：`skippingControlAction` 给右上角那颗 `⋯` —— 它是 `Encore.Button`，
+    //    菜单不走 `sendActions`（日志 100：`fired: UIControl.touchUpInside` 而界面没动），
+    //    跳过这一档才有机会走到 ② 的手势那一条。
+    if !skippingControlAction, let uiControl = control as? UIControl {
         for (event, label) in eeveeFireEvents where eeveeHasTargets(uiControl, event) {
             uiControl.sendActions(for: event)
             return "UIControl.\(label)"
@@ -522,9 +525,9 @@ func eeveeFire(_ control: UIView?) -> String? {
 ///   ③ 祖先链上有 `UICollectionViewCell` / `UITableViewCell` 就走**它的选中回调** ——
 ///      这正是真人点一下走的那条路。
 @discardableResult
-func eeveeFireWide(_ view: UIView?) -> String? {
+func eeveeFireWide(_ view: UIView?, skippingControlAction: Bool = false) -> String? {
     guard let view else { return nil }
-    if let fired = eeveeFire(view) { return fired }
+    if let fired = eeveeFire(view, skippingControlAction: skippingControlAction) { return fired }
 
     var node: UIView? = view.superview
     var levels = 0
@@ -765,6 +768,12 @@ final class EntityPageHeaderButton: UIControl {
     /// 日志里必须能分清他说的是哪一颗（见 `updateRow` 与 `tapped`）。
     var role = "side button"
 
+    /// ★★ 2026-10-16（用户：「歌单页右上角有一个**点不动的三点按键**」）：
+    /// Spotify 那颗 `⋯` 是 `Encore.Button` 一族，菜单靠**它自己的交互**弹出来，不是 target/action ——
+    /// 日志 100 逐字：`fired: UIControl.touchUpInside`（转发"成功"了，界面一动不动）。
+    /// ⇒ 这一颗**跳过第 ① 档**（送 target/action），直接走手势那一档（见 `eeveeFire` 的三档）。
+    var skipsControlAction = false
+
     /// ★★ 2026-10-17（用户：「点击后**跳转到关于艺人模块**」）：这一颗点下去要**先把源滚进视野**
     /// 再转发 —— 艺人页的"关于"（`SPTArtistAboutBiographyView`）在列表很下面，只转发不滚动的话
     /// 用户什么都看不见。由调用方按需打开。
@@ -877,11 +886,17 @@ final class EntityPageHeaderButton: UIControl {
             target = eeveeMaterialiseBio(from: self)
         }
         var scrolled = false
-        var path = "NOTHING (no target, no tap recogniser)"
+        // ★ 2026-10-16：三档都带 `skippingControlAction` —— 右上角那颗 `⋯` 靠它跳过"送 target/action"
+        //   那一档（Spotify 的 `⋯` 不吃 `sendActions`，见 `skipsControlAction` 的说明）。
+        var path = target == nil
+            ? "NOTHING (no target at all — this button has no source)"
+            : "NOTHING (the target has no action and no tap recogniser)"
         if let target {
             if scrollsSourceIntoView { scrolled = eeveeScrollIntoView(target) }
             // ★★ 2026-10-18：那颗 `i` 走"宽转发"（祖先链上的 tap + cell 的选中回调），见 `eeveeFireWide`。
-            path = (firesDeep ? eeveeFireWide(target) : eeveeFire(target)) ?? path
+            path = (firesDeep
+                ? eeveeFireWide(target, skippingControlAction: skipsControlAction)
+                : eeveeFire(target, skippingControlAction: skipsControlAction)) ?? path
         } else if scrollsSourceIntoView {
             // 目标那一段还没建出来（懒加载）⇒ 把页面往下滚一屏让它出现，**不转发**。
             scrolled = eeveeScrollPageDown(from: self)

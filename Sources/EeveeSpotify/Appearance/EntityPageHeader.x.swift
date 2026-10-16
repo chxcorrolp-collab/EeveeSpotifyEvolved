@@ -209,6 +209,8 @@ enum EntityPageHeaderManager {
     /// 与**我们自己画的那一颗**（`EntityPageHeaderButton` 直接复用：它本来就是"玻璃圆 + 字形 + 转发"）。
     private static var cachedMore: UIView?
     private static var pinnedMore: EntityPageHeaderButton?
+    /// ★ 2026-10-16：我们那颗 `⋯` 还在屏上、可 Spotify 的源已经没了 —— 只报一次（见 `pinMoreButton`）。
+    private static var didReportPinnedMoreMissing = false
 
     /// 尾部按钮的兜底字形：**做成常量**（原来每一拍都 `UIImage(systemName:)` 造一张新的，
     /// 而这一拍在折叠的每一帧都会走到 —— 与"字形只取一次"同一条纪律）。
@@ -326,7 +328,14 @@ enum EntityPageHeaderManager {
         let shuffle = findControl("Components.UI.ShuffleButton", in: block, cache: &cachedShuffle)
         let play = findControl("header-play-button", in: headerRoot, cache: &cachedPlay)
         let save = findControl("Components.UI.AddToButton", in: block, cache: &cachedTrailing)
-        let download = save == nil ? eeveeFindView(block, identifier: "DownloadButton.Granular*") : nil
+        // ★★ 2026-10-16（用户：「喜欢的歌曲**播放键右边那颗向下箭头点了没反应**」）：
+        //    ⚠️ 2026-10-17 把 shuffle / play / save 三颗都改成了 `findControl`（按 id 拿到的常常是
+        //    `ElementView<…>` 包装层，转发打在包装上 = 没反应，见本文件 :984 那段说明），
+        //    **唯独漏了 download 这一颗** —— 而"已点赞的歌曲"那一页**走的正是它**
+        //    （日志 85 逐字：`trailing download`）。补齐：同样先钻到真正的 `UIControl`。
+        let download = save == nil
+            ? eeveeFindView(block, identifier: "DownloadButton.Granular*").map { firstControl(in: $0) ?? $0 }
+            : nil
         header.updateRow(
             shuffle: shuffle,
             play: play,
@@ -461,7 +470,11 @@ enum EntityPageHeaderManager {
         let play = findFloating("header-play-button", in: page, cache: &cachedPlay)
         let shuffle = findFloating("Components.UI.ShuffleButton", in: page, cache: &cachedShuffle)
         let add = findControl("Components.UI.AddToButton", in: header, cache: &cachedTrailing)
-        let download = add == nil ? eeveeFindView(header, identifier: "DownloadButton.Granular*") : nil
+        // ★★ 2026-10-16：与歌单页那条同一个漏点 —— download 也要先钻到真正的 `UIControl`
+        //    （见上面 `applyToPlaylistPage` 里那段说明）。
+        let download = add == nil
+            ? eeveeFindView(header, identifier: "DownloadButton.Granular*").map { firstControl(in: $0) ?? $0 }
+            : nil
         headerView.updateRow(
             shuffle: shuffle,
             play: play,
@@ -995,8 +1008,22 @@ enum EntityPageHeaderManager {
         //    但根因与播放键是同一个：按 id 拿到的是 `ElementView<…>` 包装层）⇒ 一起改成 `findControl`。
         guard let menu = findControl("Components.UI.ContextMenuButton*", in: headerRoot, cache: &cachedMore) else {
             // 这一页没有 `⋯`（或者还没建出来）⇒ 什么都不做，**也不留一颗假的**。
+            //
+            // ★★ 2026-10-16（用户：「右上角那个**点不动**的三点」）：这里原来**静默返回**，
+            //    而 `pinnedMore` 是**文件级静态**、一旦建出来就留在屏上 —— 于是"Spotify 重建了页头、
+            //    弱引用 `source` 失效"这种情况会留下一颗**永远点不动、日志里也没有任何痕迹**的按钮。
+            //    现在留一行日志（只在"屏上已经有我们那颗"时报一次），下一份日志就能分清
+            //    "这一页没有 ⋯" 与 "有，但源丢了"。
+            if let stale = pinnedMore, stale.window != nil, !didReportPinnedMoreMissing {
+                didReportPinnedMoreMissing = true
+                writeDebugLog(
+                    "[EntityPageHeader] pinned ⋯ is still on screen but Spotify's ContextMenuButton is gone"
+                        + " — the button has no source and will do nothing"
+                )
+            }
             return
         }
+        didReportPinnedMoreMissing = false
 
         let side = EntityPageHeaderMetrics.pinnedMoreSide
         let more: EntityPageHeaderButton
@@ -1027,6 +1054,18 @@ enum EntityPageHeaderManager {
         )
         if more.frame != frame { more.frame = frame }
         more.feed(from: menu)
+        // ★★ 2026-10-16（用户：「右上角那个**点不动**的三点」）：三件事一起补上 ——
+        //   ① `role = "more"`：日志里那颗原来一直是默认的 `side button`，分不出是谁（见 `tapped`）；
+        //   ② **`fireTarget = menu`**：转发目标从**弱引用** `source` 换成这颗真实控件 ——
+        //      `source` 一旦被回收（Spotify 重建页头）就变成一颗**静默失效**的按钮；
+        //   ③ **`skipsControlAction = true` + `firesDeep = true`**：Spotify 的 `⋯` 是
+        //      `Encore.Button`，菜单靠自己的交互弹，不吃 `sendActions`
+        //      （日志 100：`fired: UIControl.touchUpInside` 而界面一动没动）
+        //      ⇒ 跳过那一档、直接走手势/更宽那一档（就是让艺人页那颗 `i` 走通的路）。
+        more.role = "more"
+        more.fireTarget = menu
+        more.skipsControlAction = true
+        more.firesDeep = true
 
         eeveeConceal(wrapperFor(menu, in: headerRoot))
     }

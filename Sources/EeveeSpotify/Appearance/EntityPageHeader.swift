@@ -399,14 +399,66 @@ func eeveeArtistBio(from view: UIView) -> (view: UIView, text: String?)? {
     // ★★ 2026-10-18 第五轮：40 字那道闸是给"排除短标签"用的（"收听""已关注"那种），
     //    但日文 / 中文简介本来就短，正文可能只有二十几个字 ⇒ 40 字找不到时**再按 20 字找一次**。
     //    （卡片上那行日志会写出真正读到几个字，下一份日志就能判断这个下限合不合适。）
-    // ★★ 2026-10-16（用户：「AKIR 的艺人简介**就一行几个单词**，现在是不是会**舍弃字数很少**的
-    //    情况？」）：**是，被舍弃了**。上面那两道 40 → 20 把"一行几个单词"（十几字以内）整段判成
-    //    "没有正文" ⇒ `i` 说没有介绍、折叠闸门（`hasCapturedBio`）也永远不开 —— 正是他报的
-    //    "AKIR 的关于艺人没修好"。这里补**第三道 6 字**：卡片里最长的 ≥6 字文本就是正文
-    //    （卡片里其余文字是"关于艺人""更多"这类 2~4 字的标题/按钮，6 字足够把它们筛掉）。
-    return (bio, eeveeLongestText(in: bio)
-        ?? eeveeLongestText(in: bio, minimum: 20)
-        ?? eeveeLongestText(in: bio, minimum: 6))
+    // ★★ 2026-10-16（用户：「我见过的最短艺人简介是**四个字母**，不知道有没有更短的，怎么办」+
+    //    「有些行中间是有空行的，**现在似乎没有**」）：**别再靠字数猜**。
+    //
+    //    上面那三道 40 / 20 / 6 字是"拿长度当判据"，两个真实场景都会栽：
+    //      · 四个字母的简介永远过不了那道门（他说见过，还可能更短）；
+    //      · "最长的那一段"在卡片里会挑错东西 —— 社交链接标签、图 139 那张 "This Is …" 卡片的
+    //        标题，都可能比一句简介长。
+    //
+    //    而**精确那条路（`eeveeArtistBioText`）本来就没有字数门槛**（读到几个字都收）——
+    //    它读的是 `Components.UI.CreatorBiographyCard.BiographyLabel`。所以字数门槛只该是
+    //    "连那张 label 都认不出来"时的垫脚石，而垫脚石的正确形状不是"放宽到 6 字"，
+    //    是**在已知的卡片里按位置把文字拼起来**（见 `eeveeArtistBioBlockText`）：
+    //    段之间的空行也就跟着回来了（Spotify 常常一段一个 label）。
+    if let text = eeveeArtistBioText(in: bio) { return (bio, text) }
+    return (bio, eeveeArtistBioBlockText(in: bio))
+}
+
+/// 卡片里那些**界面文字**（不是正文）—— 拼正文时跳过。
+/// ⚠️ 只放"Spotify 自己给这一块画的按钮 / 小标题"，**别放可能是简介的词**（宁可多留）。
+private let eeveeArtistBioUILabels: Set<String> = [
+    "关于", "关于艺人", "更多", "展开", "收起", "显示更多", "阅读更多", "查看全部",
+    "播放", "关注", "已关注", "关注中", "分享",
+    "About", "More", "Show more", "Read more", "See more", "Play", "Follow", "Following", "Share",
+]
+
+/// 「关于艺人」那一块里的**整段正文**：块里所有文字**按位置顺序**拼起来（每段一行）。
+///
+/// 为什么不是"取最长的那一段"（见 `eeveeArtistBio` 里那段说明）：字数门槛误伤短简介，
+/// 而"最长"在卡片里会挑错东西；Spotify 又常常**一段一个 label**，只取最长那一个会把正文
+/// 切成一段、段之间的空行也一起丢掉。
+///
+/// 判据只在**已经认出来的那张卡片内部**用（`eeveeArtistBioCard` 的返回值），
+/// 不会拿到页面上别处的文字；走查仍按本仓库纪律**有界**（300 个节点）。
+func eeveeArtistBioBlockText(in card: UIView) -> String? {
+    var blocks: [(y: CGFloat, x: CGFloat, text: String)] = []
+    var queue: [UIView] = [card]
+    var visited = 0
+
+    while !queue.isEmpty, visited < 300 {
+        let view = queue.removeFirst()
+        visited += 1
+
+        var raw: String?
+        if let label = view as? UILabel { raw = label.text }
+        if let textView = view as? UITextView { raw = textView.text }
+
+        if let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmed.isEmpty,
+           !eeveeArtistBioUILabels.contains(trimmed) {
+            let origin = view.convert(view.bounds.origin, to: card)
+            blocks.append((origin.y, origin.x, trimmed))
+        }
+        queue.append(contentsOf: view.subviews)
+    }
+
+    guard !blocks.isEmpty else { return nil }
+    let ordered = blocks.sorted { lhs, rhs in
+        lhs.y == rhs.y ? lhs.x < rhs.x : lhs.y < rhs.y
+    }
+    return ordered.map(\.text).joined(separator: "\n")
 }
 
 /// 一棵子树里**最长的那段文字** —— 艺人简介就在 `SPTArtistAboutBiographyView` 的正文里

@@ -119,6 +119,11 @@ final class ArtistBioSheet: UIView {
         bodyView.isEditable = false
         bodyView.isScrollEnabled = true
         bodyView.showsVerticalScrollIndicator = true
+        // ★★ 2026-10-16（用户：「艺人简介这部分**可能会自带社交软件链接**，比如推特、维基百科什么的」）：
+        //    那段正文是 Spotify 给的原样文本（我们一个字都不改），里面就可能有 URL ——
+        //    打开**链接识别**让它可点（点开走系统 Safari）。我们不自己解析、也不重排文字。
+        bodyView.isSelectable = true
+        bodyView.dataDetectorTypes = [.link]
         bodyView.textContainerInset = UIEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
         bodyView.font = .systemFont(ofSize: 17)
         bodyView.textColor = UIColor.white.withAlphaComponent(0.92)

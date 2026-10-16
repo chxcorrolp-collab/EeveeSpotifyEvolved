@@ -805,12 +805,10 @@ enum EntityPageHeaderManager {
     private static func captureBioTextOnSight(from view: UIView) {
         let name = artistNameStorage
         guard !name.isEmpty, bioTexts[name] == nil, bioTexts.count < 32 else { return }
-        // 先按 id 精确那颗 label 读（`3e91ac3` 那条），读不到再退"这一块里最长的一段文字"。
-        // ★★ 2026-10-16：最后再补一道 **6 字** —— AKIR 那种"一行几个单词"的简介过不了 20 字那道门
-        //    （见 `eeveeArtistBio` 里那段说明），结果被判成"没有正文"。
-        let text = eeveeArtistBioText(in: view)
-            ?? eeveeLongestText(in: view, minimum: 20)
-            ?? eeveeLongestText(in: view, minimum: 6)
+        // 先按 id 精确那颗 label 读（`3e91ac3` 那条，**任何长度都收** —— 四个字母的简介也认），
+        // 认不出那张 label 才退"在卡片里按位置把文字拼起来"（见 `eeveeArtistBioBlockText`：
+        // 段之间的空行因此回来，短简介也不再被字数门槛丢掉）。
+        let text = eeveeArtistBioText(in: view) ?? eeveeArtistBioBlockText(in: view)
         guard let text, !text.isEmpty else { return }
         bioTexts[name] = text
         writeDebugLog(

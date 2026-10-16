@@ -599,6 +599,8 @@ enum NowPlayingLyricsPlate {
     static func apply(in pageView: UIView) {
         // ★ 换页面 ⇒ 这一棵树里的元素全变了，`findByIdentifier` 那份缓存整块作废。
         if lastPage !== pageView { invalidateNodeLookups() }
+        // ★ 换歌同理（元素会被重建，同一个 id 可能新旧两份同时在树上）。
+        noteTrackForLookups()
         lastPage = pageView
         // 进页面 = 这一程开始（上一次的"要走了"作废）。
         pageLeaving = false
@@ -733,6 +735,9 @@ enum NowPlayingLyricsPlate {
     @discardableResult
     static func reconcile() -> Bool {
         guard isEnabled else { return false }
+        // ★ 这条节拍就是"每拍一次"的那个位置：查表缓存要跟着"哪一首歌"作废，
+        //   放在这里比放在 `findByIdentifier` 里省 —— 那一拍能问它二十来次。
+        noteTrackForLookups()
 
         // ★★ 2026-10-10（照片 65）：**收尾推迟到这一刻** —— 页面真的不在窗口里了。
         //
@@ -4075,7 +4080,6 @@ enum NowPlayingLyricsPlate {
     }
 
     private static func findByIdentifier(_ identifier: String, in root: UIView) -> UIView? {
-        noteTrackForLookups()
         let key = NodeLookupKey(root: ObjectIdentifier(root), identifier: identifier)
         if let entry = nodeLookups[key] {
             if let cached = entry.view, let entryRoot = entry.root, entryRoot === root,

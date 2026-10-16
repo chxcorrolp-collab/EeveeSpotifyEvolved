@@ -700,7 +700,13 @@ enum EntityPageHeaderManager {
             shuffle: leading ?? shuffle,
             play: play,
             trailing: follow,
-            trailingFallback: UIImage(systemName: followed ? "checkmark" : "person.badge.plus")
+            // ★★ 2026-10-16（用户：「播放按键右边的**添加艺人**显示有问题。改成**中空的五角星**
+            //    （和 AM 一样）……点击之后（即收藏艺人之后）变成现在的绿色勾」）：
+            //    未关注 ⇒ `star`（SF Symbol 的 star 本来就是中空）+ **强制用兜底字形**
+            //    （不采用 Spotify 那颗自己的"＋人"图）；已关注 ⇒ 保持原样：
+            //    Spotify 自己的绿勾优先，取不到才用 `checkmark` 兜底。
+            trailingFallback: UIImage(systemName: followed ? "checkmark" : "star"),
+            trailingPrefersFallback: !followed
         )
         // ★★ 2026-10-17：**左边那颗永远是 `i`**（用户点名要的），不再因为"那一块还没建出来"退回
         //    shuffle 的样子；**动作**落在"关于艺人"上（`setLeadingTarget`），目标没建出来时点它
@@ -787,7 +793,11 @@ enum EntityPageHeaderManager {
         let name = artistNameStorage
         guard !name.isEmpty, bioTexts[name] == nil, bioTexts.count < 32 else { return }
         // 先按 id 精确那颗 label 读（`3e91ac3` 那条），读不到再退"这一块里最长的一段文字"。
-        let text = eeveeArtistBioText(in: view) ?? eeveeLongestText(in: view, minimum: 20)
+        // ★★ 2026-10-16：最后再补一道 **6 字** —— AKIR 那种"一行几个单词"的简介过不了 20 字那道门
+        //    （见 `eeveeArtistBio` 里那段说明），结果被判成"没有正文"。
+        let text = eeveeArtistBioText(in: view)
+            ?? eeveeLongestText(in: view, minimum: 20)
+            ?? eeveeLongestText(in: view, minimum: 6)
         guard let text, !text.isEmpty else { return }
         bioTexts[name] = text
         writeDebugLog(

@@ -32,6 +32,8 @@ final class ArtistBioSheet: UIView {
     /// **已经真的显示了正文**吗（占位那句不算）—— 只给"原生正文晚一拍到了"那条补看用，
     /// 免得把已经取到的 Genius / 维基正文又盖掉。
     private var hasBody = false
+    /// 卡片**静止时**的 y（下滑关闭时用它回弹 / 判"滑够了没有"）。
+    private var cardRestY: CGFloat = 0
 
     /// 弹一张（同时只留一张：连点两次不会叠）。
     static func present(name: String, text: String?, colour: UIColor?) {
@@ -65,12 +67,28 @@ final class ArtistBioSheet: UIView {
         let height = min(max(240, bounds.height * 0.58), 560)
         card.frame = CGRect(x: 0, y: bounds.height - height, width: bounds.width, height: height)
         card.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
-        card.backgroundColor = Self.cardColour(from: colour)
+        // ★★ 2026-10-16（用户：「把艺人页的 `i` 点击后换成**液态玻璃**，并且可下滑关闭」）：
+        //    卡片底改成**真玻璃**（`GlassCapsule.makeGlassView`：iOS 26 的 `UIGlassEffect`
+        //    带折射与边缘高光；拿不到就退 `.systemUltraThinMaterialDark`，见那个工厂的说明），
+        //    底下再垫一层**很淡的取色** —— 纯玻璃压在浅色照片上时白字会看不清，
+        //    这一层就是给对比度兜底的（原来是**不透明**色块，所以「换成玻璃」才看得出来）。
+        card.backgroundColor = Self.cardColour(from: colour).withAlphaComponent(0.28)
         card.layer.cornerRadius = 24
         card.layer.cornerCurve = .continuous
         card.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
         card.clipsToBounds = true
+        let glass = GlassCapsule.makeGlassView(wantsInteractive: false).view
+        glass.frame = card.bounds
+        glass.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        card.insertSubview(glass, at: 0)
         addSubview(card)
+
+        cardRestY = card.frame.origin.y
+        // 下滑关闭（见 `cardPanned`）：正文那层滚动仍然交给 `bodyView`，
+        // 手势**什么时候该让位**由 `gestureRecognizerShouldBegin` 判（正文没滚到顶就不抢）。
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(cardPanned))
+        pan.delegate = self
+        card.addGestureRecognizer(pan)
 
         titleLabel.text = name
         titleLabel.font = .systemFont(ofSize: 22, weight: .bold)
@@ -296,6 +314,52 @@ final class ArtistBioSheet: UIView {
         dismiss()
     }
 
+    /// **下滑关闭**（2026-10-16，用户点名要的）。
+    ///
+    /// 判据照系统 sheet：滑过卡片高度的 30% **或者**放手时向下速度 > 800pt/s 就关，
+    /// 否则弹回原位（用弹簧，手感与 `GlassCapsule` 那套一致）。
+    /// ⚠️ 正文还在滚的时候**不抢手势** —— 见 `gestureRecognizerShouldBegin`。
+    @objc private func cardPanned(_ pan: UIPanGestureRecognizer) {
+        let offset = max(0, pan.translation(in: self).y)
+
+        switch pan.state {
+        case .changed:
+            card.frame.origin.y = cardRestY + offset
+            alpha = max(0.35, 1 - offset / max(1, card.bounds.height))
+        case .ended, .cancelled, .failed:
+            let velocity = pan.velocity(in: self).y
+            if offset > card.bounds.height * 0.3 || velocity > 800 {
+                dismissFromDrag()
+            } else {
+                UIView.animate(
+                    withDuration: 0.28,
+                    delay: 0,
+                    usingSpringWithDamping: 0.86,
+                    initialSpringVelocity: 0
+                ) {
+                    self.card.frame.origin.y = self.cardRestY
+                    self.alpha = 1
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    private func dismissFromDrag() {
+        UIView.animate(
+            withDuration: 0.22,
+            animations: {
+                self.card.frame.origin.y = self.bounds.height
+                self.alpha = 0
+            },
+            completion: { _ in
+                self.removeFromSuperview()
+                if ArtistBioSheet.current === self { ArtistBioSheet.current = nil }
+            }
+        )
+    }
+
     private func dismiss() {
         UIView.animate(
             withDuration: 0.18,
@@ -305,5 +369,25 @@ final class ArtistBioSheet: UIView {
                 if ArtistBioSheet.current === self { ArtistBioSheet.current = nil }
             }
         )
+    }
+}
+
+/// 下滑关闭那条手势的"让位"规则。
+extension ArtistBioSheet: UIGestureRecognizerDelegate {
+
+    /// **只在"下拉卡片"这一种情况下开始**，其余全让给正文那层滚动：
+    ///   · 方向必须是**向下**（横向 / 向上都不抢）；
+    ///   · 手指落在正文里、而正文**还没滚到顶** ⇒ 那是用户在滚正文，不是在下拉卡片。
+    ///
+    /// 为什么不做"同时识别"：那样拖正文会一边滚一边把卡片往下拽，手感是坏的。
+    func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+        guard let pan = gesture as? UIPanGestureRecognizer else { return true }
+
+        let translation = pan.translation(in: self)
+        guard translation.y > 0, abs(translation.y) > abs(translation.x) else { return false }
+
+        let point = pan.location(in: card)
+        if bodyView.frame.contains(point), bodyView.contentOffset.y > 0 { return false }
+        return true
     }
 }

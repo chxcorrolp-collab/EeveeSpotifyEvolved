@@ -409,7 +409,8 @@ enum EntityPageAppearance {
             restore(reason: "another page")
             currentPage = target.page
         }
-        EntityPageRepaint.root = target.page
+        // ⚠️ `EntityPageRepaint.root = target.page` 原来**就写在这里**，2026-10-16 挪到下面
+        //    "取色底画完之后"（原因见那一处注释：照片 137 的下半页整片黑）。
         // ★★ 2026-10-18 第五轮（诊断）：这一页上「你已点赞」那一行**装在哪个 cell 类**里 ——
         //    见 `EntityPageSectionDrop.reportLikedSongsRowClassOnce`。它不依赖任何钩子，
         //    所以"钩子压根没被叫"那一支照样能给出下一步该挂哪个类（每页一次）。
@@ -426,6 +427,20 @@ enum EntityPageAppearance {
             ensureField(on: target, colour: colour, topEdge: topEdge)
         } else if field != nil {
             restore(reason: "field switch off")
+        }
+
+        // ★★ 2026-10-16（**照片 137：刚进艺人页时下半页整片黑**）：底色拦截器
+        //    （`EntityPageRepaint.root`）**必须等我们自己的底画上之后再武装**。
+        //
+        //    它的作用是"Spotify 重画这一页的底色时，把那次写入丢掉"（见 `restore` 里那句说明）——
+        //    可它一武装就开始丢**Spotify 画在这一页里的所有底色**，而封面颜色还没算出来时
+        //    `ensureField` 会 `guard let colour else { return }` **整拍什么都不画**
+        //    ⇒ 那一段里页面上**一张底都没有** = 纯黑，正是 137 里"照片 + 标题在、下面全黑"。
+        //
+        //    现在：**这一拍真有底**（`colour != nil`）才武装。没有底就让 Spotify 自己的底先留着
+        //    （比黑屏自然），等封面色算出来的那一拍再接管。切页 / 离场那条 `root = nil` 不变。
+        if wantsField, colour != nil {
+            EntityPageRepaint.root = target.page
         }
 
         if wantsDissolve {

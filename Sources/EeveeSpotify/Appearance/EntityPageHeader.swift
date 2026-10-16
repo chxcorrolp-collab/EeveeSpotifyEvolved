@@ -399,7 +399,14 @@ func eeveeArtistBio(from view: UIView) -> (view: UIView, text: String?)? {
     // ★★ 2026-10-18 第五轮：40 字那道闸是给"排除短标签"用的（"收听""已关注"那种），
     //    但日文 / 中文简介本来就短，正文可能只有二十几个字 ⇒ 40 字找不到时**再按 20 字找一次**。
     //    （卡片上那行日志会写出真正读到几个字，下一份日志就能判断这个下限合不合适。）
-    return (bio, eeveeLongestText(in: bio) ?? eeveeLongestText(in: bio, minimum: 20))
+    // ★★ 2026-10-16（用户：「AKIR 的艺人简介**就一行几个单词**，现在是不是会**舍弃字数很少**的
+    //    情况？」）：**是，被舍弃了**。上面那两道 40 → 20 把"一行几个单词"（十几字以内）整段判成
+    //    "没有正文" ⇒ `i` 说没有介绍、折叠闸门（`hasCapturedBio`）也永远不开 —— 正是他报的
+    //    "AKIR 的关于艺人没修好"。这里补**第三道 6 字**：卡片里最长的 ≥6 字文本就是正文
+    //    （卡片里其余文字是"关于艺人""更多"这类 2~4 字的标题/按钮，6 字足够把它们筛掉）。
+    return (bio, eeveeLongestText(in: bio)
+        ?? eeveeLongestText(in: bio, minimum: 20)
+        ?? eeveeLongestText(in: bio, minimum: 6))
 }
 
 /// 一棵子树里**最长的那段文字** —— 艺人简介就在 `SPTArtistAboutBiographyView` 的正文里
@@ -738,6 +745,19 @@ final class EntityPageHeaderButton: UIControl {
             glyphView.image = fallbackGlyph.withRenderingMode(.alwaysTemplate)
         }
     }
+    /// ★★ 2026-10-16（用户：「播放按键右边的**添加艺人**显示有问题，改成中空的五角星（和 AM 一样）……
+    ///    点击之后（即收藏艺人之后）变成现在的绿色勾」）：
+    /// **强制用兜底字形**，不采用 Spotify 那颗按钮自己的图。只给艺人页的 Follow 用，
+    /// 而且只在**未关注**那一档打开 —— 那颗在未关注时是"＋人"，用户要的是 AM 那种中空五角星；
+    /// 已关注时保持原样（Spotify 自己的绿勾，取不到才用 `checkmark` 兜底）。
+    var prefersFallbackGlyph = false {
+        didSet {
+            // 与 `fallbackGlyph` 的 didSet 同一条理由：`feed(from:)` 在"源没变"时会早退，
+            // 所以显式设的东西必须**当场**落到 `glyphView` 上。
+            guard prefersFallbackGlyph, let fallbackGlyph else { return }
+            glyphView.image = fallbackGlyph.withRenderingMode(.alwaysTemplate)
+        }
+    }
     /// 关态颜色 / 开态颜色（开态按源控件的 `isSelected` 判断）。
     var glyphColor: UIColor = .label
     var onGlyphColor: UIColor = .systemGreen
@@ -797,7 +817,7 @@ final class EntityPageHeaderButton: UIControl {
         refreshTint()
         guard !sameSource || glyphView.image == nil else { return }
 
-        let glyph = eeveeGlyph(of: control) ?? fallbackGlyph
+        let glyph = prefersFallbackGlyph ? fallbackGlyph : (eeveeGlyph(of: control) ?? fallbackGlyph)
         glyphView.image = glyph?.withRenderingMode(.alwaysTemplate)
     }
 
@@ -1114,13 +1134,23 @@ final class EntityPageHeaderView: UIView {
     }
 
     /// 三颗按钮各认一个 Spotify 控件；`nil` = 那颗不显示。
-    func updateRow(shuffle: UIView?, play: UIView?, trailing: UIView?, trailingFallback: UIImage?) {
+    ///
+    /// - Parameter trailingPrefersFallback: 右那颗**只用兜底字形**（见 `prefersFallbackGlyph`）——
+    ///   艺人页未关注时要用中空五角星，不能采用 Spotify 那颗自己的"＋人"图。
+    func updateRow(
+        shuffle: UIView?,
+        play: UIView?,
+        trailing: UIView?,
+        trailingFallback: UIImage?,
+        trailingPrefersFallback: Bool = false
+    ) {
         // ★ 2026-10-13：给两颗按钮**标身份** —— 日志 89 只有一行 `header button tapped (source found)`，
         //   分不出用户点的是左边那颗还是右边那颗（他报告"右边那颗和原生按钮重合"时，
         //   这一条恰恰是最该看清的）。下一份日志会写成 `tapped (role trailing, source …)`。
         shuffleButton.role = "shuffle"
         trailingButton.role = "trailing"
         trailingButton.fallbackGlyph = trailingFallback
+        trailingButton.prefersFallbackGlyph = trailingPrefersFallback
         shuffleButton.feed(from: shuffle)
         if let play { playButton.feed(from: play) }
         trailingButton.feed(from: trailing)

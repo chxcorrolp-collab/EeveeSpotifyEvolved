@@ -1,4 +1,3 @@
-import CoreImage
 import Foundation
 import UIKit
 
@@ -30,7 +29,7 @@ import UIKit
 /// ── 开关 ─────────────────────────────────────────────────────────────────
 ///
 /// 扩展功能 →「**Melox 风页面**」**一颗**（`UserDefaults.entityPageDissolve`，默认**关**）——
-/// 它内部同时管"取色底"与"模糊封面底 / 下缘溶解"两条路径（`tick()` 里的 `wantsField` /
+/// 它内部同时管"取色底"与"满幅照片 / 下缘溶解"两条路径（`tick()` 里的 `wantsField` /
 /// `wantsDissolve`），用户侧只有这一颗。
 /// ★ 2026-10-14：老键 `entityPageField`（原「封面取色底」那颗）**已删除** —— 它早已零读取端。
 /// 这一颗关掉 = **一个字节都不改**（清过的底色逐个写回、两层视图撤掉）。
@@ -70,31 +69,31 @@ enum EntityPageAppearance {
     private static let fieldBleed: CGFloat = 600
     // ⚠️ 老键 `fieldColorEnd`（"取色底占页面高度的比例"，0.58）**已删** —— 艺人页的收口归 pw 的
     //    `blackFrom` / `blackTo`，专辑/歌单页那一支是平色，两页都不再用它。
-    /// 封面化开成的那片背景占页面高度的比例（pw 那张 playlist 截图约 45%，这里给到 52%）。
-    private static let heroHeightRatio: CGFloat = 0.52
-    /// ★★ 2026-10-18（用户：「AM 那三颗按键比 Spotify 靠下一点，所以它的渐变刚好不压到艺人名字；
-    ///    Spotify 的靠上就会被压住」）——**把渐变的收口绑到"我们自己那块页头里的名字"上**。
+    /// ★★ 2026-10-16：满幅照片**整幅上移**的比例（图高的 5%~7%，用户量的差是 25pt / 414pt ≈ 6%）。
     ///
-    /// 改之前的几何（真机日志 96 + `EntityPageHeaderView.layoutSubviews` 的算式）：
-    ///   · 满幅照片的 mask 是 `0 → 54% → 100%`，作用在 **520pt** 的 `HeaderContainer` 上
-    ///     ⇒ 照片从 281pt 一路化到 520pt（**239pt 长的尾巴**）；
-    ///   · 页头那一块贴底排：名字在 **347–388**、三颗在 **408–506** ⇒ 整块都落在尾巴里，
-    ///     名字那一行照片还剩六成 ⇒ 用户看到的正是"**渐变压在艺人名字上**"。
-    /// AM 那边不是我们的做法：它的收口在名字**上方**就收完（照片 118：渐变在 ~360pt 收干净，
-    /// 名字 365 起、三颗 416–493 全落在平色上）。它靠的是"那一行更靠下"，我们靠这两行常数。
+    /// 用户诊断（照片 118 vs 130）：「AM 是图片顶部对齐、铺满到状态栏下面，主体落在上半部分……
+    /// Spotify 的图偏下」⇒ 整体上移，裁掉的是照片顶部那条空白。照片因此不再和名字抢版面。
+    private static let heroRiseRatio: CGFloat = 0.06
+    /// ★★ 2026-10-16（照片 118/130 对比是判决）：**化开的起点改成绑"图自己的高度"**。
     ///
-    /// ⇒ `goneAt = 名字上沿 − meltGap`（照片到这里已经**完全**化没），
-    ///    `solidUntil = 名字上沿 − meltSpanRatio × 页头高`（再往上才是完全不透明的照片）。
-    /// 页头多高、Spotify 自己把那一行摆在哪，都不再影响收口落点；名字与三颗按钮一律落在平色上。
+    /// 旧几何（照片 130 的现场）：`solidUntil = 名字上沿 − 30% × 页头高` = `347 − 156` = **191pt**，
+    /// 而方图 414pt 贴在 y=0、猫在 **100–350pt** ⇒ 照片从 **46%** 就开始淡，下半身整段落在淡出区 ✗
+    /// （用户原话：「渐变压在艺人名字上」之后，接着就是「化开窗口把主体吃掉了」）。
+    /// AM（照片 118）的渐变**只吃掉照片最底部那一段**，起手远低于此。
+    ///
+    /// ⇒ 起点 = `图高 × meltStartRatio`（414pt 的方图 ⇒ 273pt），
+    ///   终点仍锚在名字上沿之上（`meltGap`）⇒ 名字与那三颗按钮照旧落在平色上，
+    ///   但**不再**因此把渐变一路往上顶到图的中段。
     private static let meltGap: CGFloat = 8
-    /// 化开那一段占页头高度的比例（520pt 的艺人页 ⇒ 156pt）。
-    ///
-    /// ★★ 2026-10-18 第三轮（用户：「**这有点难看了吧**」，照片 130）：0.20（104pt）那条化开太陡，
-    /// 照片的下缘看着像**被切断**。AM 那边收得慢（照片 118 的化开带约 60pt，但它的照片本来就只有
-    /// 330pt 高、下缘就是照片自己的边）⇒ 我们这边放宽到 0.30，让它像"化掉"而不是"切掉"。
-    private static let meltSpanRatio: CGFloat = 0.30
+    /// 化开的**起点**占图高的比例（AM = 图高的 65%~70%，取中）。
+    private static let meltStartRatio: CGFloat = 0.66
     /// 化开那一段的**下限**：页头矮的时候别把渐变整成一条硬边。
     private static let minMeltSpan: CGFloat = 90
+    /// 化开那一段的缓动采样（`1 − p²` 在前 7 个等分点上的值）：**前半段掉得慢、末端收得快**。
+    ///
+    /// 用户诊断（照片 130）：「线性斜坡两端的折角才是'被切断'感的主要来源，和长短关系不大」。
+    /// `CAGradientLayer` 只在档位之间线性插值，所以用多档逼近 smoothstep 形状。
+    private static let meltEasing: [CGFloat] = [1, 0.972, 0.889, 0.75, 0.556, 0.306, 0]
     /// ★★ 2026-10-18（用户：「**现在的模糊艺人底会有看不清字的情况，做成往下渐变变灰/黑的吧，pw 的逻辑**」）
     /// —— **页面的底整个换成 pw 的 `SGRArtworkField`**（`Redesigned/Kit/SGRField.m`，GPL 的 v0.21.1）：
     ///
@@ -132,12 +131,6 @@ enum EntityPageAppearance {
     /// 本来就是深底）。要更亮/更暗就改这一个数。
     private static let maxFieldLuminance: CGFloat = 0.07
     private static let artistFieldLuminance: CGFloat = 0.20
-    /// ⚠️ 下面两条（Melox 模糊底的常数）与 `blurred()` / `ensureVeil()` / `hero` 一起**已停用**
-    /// （2026-10-18 第二轮，三页都不再铺模糊底）—— 函数与常数留着没删，纯粹是为了让这一版
-    /// 的改动面小一点；下一次清理时一起删。
-    private static let meloxBlurRadius: CGFloat = 18
-    /// 先降采样到的目标最长边（MeloX 的 `downsampled` 就是 `160 / max(width, height)`）。
-    private static let meloxDownsampleEdge: CGFloat = 160
 
     // MARK: - 状态
 
@@ -147,21 +140,23 @@ enum EntityPageAppearance {
     private static var timer: Timer?
     private static var currentPage: UIView?
     private static var field: GradientView?
-    /// 底子那张**模糊**封面（见 `ensureHero` ①）。
-    private static var hero: UIImageView?
-    /// ★ 2026-10-13：铺在最上面的那张**清晰满幅**封面（见 `ensureHero` ②）。
+    /// ★ 2026-10-13：铺在最上面的那张**清晰满幅**封面（见 `ensureHero`）。
     private static var sharpHero: UIImageView?
     /// 满幅 hero 的**单调高度**（"到过的最深处"），存在**那块 plane** 上（pw 的 `kHeroHeightKey`）。
     private static var heroHeightKey: UInt8 = 0
     /// hero 的最小高度（pw 的 `kMinHero = 120`）：比这矮就不画，免得出来一条细带。
     private static let minHeroHeight: CGFloat = 120
-    /// ★ 2026-10-17：**顶上那一条"带"** —— 用**这个页面的取色**画，照片从它里面化出来（见 `ensureScrim`）。
+    /// ★★ 2026-10-16：**顶上那一条"纱"**（见 `ensureScrim`）—— 现在它**挂在照片自己身上**，
+    /// 颜色取**照片顶边那一小条的平均色**，高度只到状态栏。
     private static var scrim: GradientView?
-    /// 那一条里**完全不透明**的那一段占多高：`0.55 × (安全区顶 + 22)` ≈ 45pt ⇒ 正好盖住灵动岛/状态栏
-    /// 那一条；剩下那截是"照片从色里长出来"的渐变，所以它既是缓冲区、也是渐变（用户两轮要的是同一件事）。
-    private static let scrimSolidFraction: CGFloat = 0.55
-    /// 那一条在"安全区顶"之外还要往下化开多少 —— 不留这一截的话，色带底沿会看到一条硬边。
-    private static let scrimExtraFade: CGFloat = 22
+    /// 那一截在"安全区顶"之外还要往下化开多少 —— 不留这一截的话，色带底沿会看到一条硬边。
+    private static let scrimExtraFade: CGFloat = 12
+    /// 取顶边颜色时只看**图高最上面这一小条**，不是整图平均 ——
+    /// 整图平均会把主体也算进去（白猫那张就是被"整图 + 压暗"糊成一条灰带的，见 `ensureScrim`）。
+    private static let topEdgeStripFraction: CGFloat = 0.06
+    /// 顶边那一小条的平均色，按"哪张图"缓存一次（0.6s 一拍，不能每拍重算 CoreGraphics）。
+    private static var cachedTopEdgeSource: UIImage?
+    private static var cachedTopEdgeColour: UIColor?
     /// 那一条**当前用着哪个颜色**（`#RRGGBB`）：换封面才重写 layer，0.6s 那一拍不重复写。
     private static var scrimColourKey: String?
     /// 被我们藏掉的 wash 视图（**记原值**，关开关原样撤回）—— 见 `concealWash` / `revealWash`。
@@ -181,10 +176,6 @@ enum EntityPageAppearance {
         let interactive: Bool
         let accessibilityHidden: Bool
     }
-    /// 模糊结果按"哪张图"缓存一次（同一张封面不重复跑 CoreImage）。
-    private static var cachedHeroSource: UIImage?
-    private static var cachedHeroImage: UIImage?
-    private static let ciContext = CIContext(options: nil)
     /// 我们清过的底色（**记原值**：关开关要逐个写回 —— 与 `DeclutterChrome` 同一条纪律）。
     private static var clearedBackgrounds: [(view: UIView, color: UIColor)] = []
     /// ★ 2026-10-17：**画在 layer 上的**那批底色，分开记（还原时写回的是 `CGColor`，不是 `UIColor`）。
@@ -382,7 +373,7 @@ enum EntityPageAppearance {
 
         guard let target = currentTarget() else {
             // 页面走了：把上一页留下的东西全部还原（切页/退出都不留残迹）。
-            if currentPage != nil || field != nil || hero != nil || sharpHero != nil
+            if currentPage != nil || field != nil || sharpHero != nil
                 || scrim != nil || concealedNativeCover != nil {
                 restore(reason: "left the page")
             }
@@ -401,13 +392,15 @@ enum EntityPageAppearance {
         //    所以"钩子压根没被叫"那一支照样能给出下一步该挂哪个类（每页一次）。
         EntityPageSectionDrop.reportLikedSongsRowClassOnce(in: target.page)
 
-        // ★★ 2026-10-18：**这一页的底色用哪个颜色**只算一次，三条路共用（底 / 照片的化开 / 顶带）——
-        //    否则"底是压暗过的、顶带还是原色"这种不一致会从缝里露出来。见 `pageColour(for:)`。
+        // ★★ 2026-10-18：**这一页的底色用哪个颜色**只算一次（底 / 照片的化开共用它）。
         let colour = pageColour(for: target)
         currentFieldColour = colour
+        // ★★ 2026-10-16：**顶上那条纱与状态栏字色**改用照片**自己的顶边**那一小条，不再用这个压暗过的
+        //    底色 —— 压暗过的底色恒为暗 ⇒ 白照片上贴一条灰带、状态栏永远白字（照片 130 就是现场）。
+        let topEdge = target.kind == .artist ? topEdgeColour(for: target) : nil
 
         if wantsField {
-            ensureField(on: target, colour: colour)
+            ensureField(on: target, colour: colour, topEdge: topEdge)
         } else if field != nil {
             restore(reason: "field switch off")
         }
@@ -418,7 +411,7 @@ enum EntityPageAppearance {
             //    见 `paintField` / `fieldColourFor`），差别只剩“封面是谁的”：艺人页铺我们的满幅照片
             //    （Spotify 那张让位），专辑 / 歌单页**保留 Spotify 自己那张卡片**。
             let sharp = target.kind == .artist
-            ensureHero(on: target, sharpCover: sharp, colour: colour)
+            ensureHero(on: target, sharpCover: sharp)
             // ★ 2026-10-14：这里原来还有一条"头部居中"（`centerHeaderLabels`）—— **已删**：
             //    它只在这个艺人页（`sharp`）分支里跑，可名单里那 4 个 id 全是**专辑页**的
             //    `CreativeWorkPlatform.Components.UI.{PreTitleRow,TitleRow,ParentRow,MetadataRow}`
@@ -449,8 +442,10 @@ enum EntityPageAppearance {
     // MARK: - ① 取色底
 
     /// ★★ 2026-10-18：颜色改成**外面算好传进来**（`tick` 里的 `pageColour(for:)`）——
-    /// 艺人页要的是 pw 压暗过的那一版，而且底 / 照片的化开 / 顶上那条带必须用**同一个值**。
-    private static func ensureField(on target: Target, colour: UIColor?) {
+    /// 艺人页要的是 pw 压暗过的那一版。
+    /// ★★ 2026-10-16：再加一个 `topEdge`（照片顶边那一小条的平均色）——
+    /// 状态栏压在照片上，所以它只看照片的顶边，不看那块被压暗过的底。
+    private static func ensureField(on target: Target, colour: UIColor?, topEdge: UIColor?) {
         guard let colour else { return }
         let page = target.page
 
@@ -491,14 +486,17 @@ enum EntityPageAppearance {
 
         // ★★ 2026-10-06：**浅底时把文字翻成深色** —— 见 `textTone`（你报的"浅色背景下看不清
         //    账号名字 / 本月有 xxx 听众"）。与清底色同一条纪律：**每一拍补一次**。
-        let light = isLight(colour)
-        textTone(in: page, isLight: light)
+        //    ⚠️ 判据仍然是**页面底色的明暗**：正文压在底上，不压在照片上。
+        textTone(in: page, isLight: isLight(colour))
 
         // ★★ 2026-10-17：**状态栏也跟着翻** —— AM 的 118（亮底）是黑字、119（暗棕底）是白字，
         //    它就是靠这一条解决"照片铺到顶"的（不是靠留白）。我们原来一处都没碰过状态栏，
         //    于是在亮封面上白字直接消失（用户照片 115 的现场）。
-        //    判据**复用同一个 `isLight`**，不另立阈值；值没变时 `apply` 只是一次比较。
-        EntityPageStatusBar.apply(light ? .darkContent : .lightContent)
+        // ★★ 2026-10-16：判据换成**照片顶边那一小条**（`topEdge`）—— 状态栏正压在照片顶上；
+        //    用压暗后的底色判会让它**恒为白字**（照片 130 的现场：白照片 + 白字）。
+        //    没有满幅照片的页面（专辑 / 歌单）退回"页面色亮不亮"那一档，与改之前逐字一致。
+        let statusLight = isLight(topEdge ?? colour)
+        EntityPageStatusBar.apply(statusLight ? .darkContent : .lightContent)
 
         guard !didReport else { return }
         didReport = true
@@ -573,63 +571,14 @@ enum EntityPageAppearance {
         tonedViews.removeAll()
     }
 
-    /// 把颜色**按倍数压暗**（保留色相与饱和度）。
-    ///
-    /// ★★ 2026-10-06（照片 116/117：「渐变也有问题」，日志 92 逐字 `#B08FA8 → #B08DA7 → #A887A0`）：
-    /// 那三段**几乎是同一个颜色**，所以整页看着是平的。原因是 `tinted` 只设**上限**——
-    /// 基色亮度本来只有 0.65 时，`atMost: 0.88` 等于什么都没做，而 `0.66` 也只压掉一点点。
-    /// 这里改成**乘一个系数**（往上抬不了就往下走），亮底与暗底都能拉开。
-    private static func scaled(_ colour: UIColor, by factor: CGFloat) -> UIColor {
-        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 1
-        guard colour.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha) else {
-            return colour
-        }
-        return UIColor(
-            hue: hue,
-            saturation: saturation,
-            brightness: max(0.04, min(1, brightness * factor)),
-            alpha: 1
-        )
-    }
-
-    /// 竖直渐变。**两种页面两套画法**（这一节的两段注释是历史，别把两页的规矩搞混）：
-    ///
-    /// · **艺人页**（2026-10-18，用户：「现在的模糊艺人底会有看不清字的情况，做成往下渐变变灰/黑的吧，
-    ///   **pw 的逻辑**」）= **照 pw**：上面一块**深色**（封面颜色压过亮度上限的那一版，见
-    ///   `maxFieldLuminance`），从**窗口高度的 55%** 起一路渐变到**纯黑**（`blackFrom` / `blackTo`）。
-    ///   pw 的 `SGRArtworkField` 是两层（`_solid` 一块色 + `_black` 一条 clear→纯黑，`SGRField.m:98-102`），
-    ///   这里用一条三段渐变画出**同一个合成结果** ⇒ 页面越往下越黑，白字就压得住。
-    /// · **专辑 / 歌单页** = Melox 那三层里最底的一层：**纯取色**（不是渐变），
-    ///   那条"往下变沉"归 `veil` 画在模糊封面之上（用户 2026-10-18：「看 melox 的歌单页和 am
-    ///   几乎一模一样，看它的吧」）。
-    ///
-    /// ⚠️ 下面那条"照片 95-97 的教训"说的是**专辑/歌单页**（那两页至今不许落到纯 `#121212`）；
-    ///     艺人页这条"渐到黑"是用户点名要的，字都压在它上面，和 pw 一样。
+    /// 竖直渐变：**上面的取色 → 窗口 55% 起渐到纯黑**（pw 的 `SGRField`；见 `blackFrom` 那段的出处）。
     ///
     /// ⚠️ **照片 95-97 的教训**：原来 57% 之后就是纯 `#121212` ⇒ 用户看到的是"**下半部分还是黑的**" ✗。
-    /// pw 的字段是 `bleed = {600, 0, 600, 0}`（**比整页还大一圈**，见 `AlbumField.x` / `PlaylistField.x`），
-    /// 整页都带着那片颜色 ⇒ 专辑 / 歌单页那一支至今只画**一块平色**（不再有"越往下越沉"的三段）；
-    /// 要不要抄 pw 那条 `_black`，两页的答案**相反**（艺人页要、这两页不要，见上面两段）。
+    /// 现在颜色是**封面压暗过的那一版**（`fieldColourFor`），不是 `#121212` ⇒ 整页一直带着这片颜色。
     private static func paintField(_ view: GradientView, colour: UIColor) {
-        // ★★ 2026-10-18 第二轮：**三页同一条**（用户：「歌单页的封面会消失（如果歌单页的模糊不和艺人页
-        //    一样，换成和艺人一样的）」）—— 原来 `if artist` / `else`（Melox 平色）那条分岔**已合并**：
-        //    专辑 / 歌单页也走 pw 这条"深色 → 纯黑"。它们与艺人页的差别只剩"封面是 Spotify 那张卡片"
-        //    （见 `ensureHero`），底色与收口完全一致。
-        // ★ 2026-10-13（照片 110）那条“两个上限 0.26 / 0.14”（`scaled(_:by:)` / `tinted(_:atMost:)`）
-        //    已经**整条退役**：专辑 / 歌单页不再压颜色（Melox 是渐到取色本身），艺人页的压暗改在
-        //    `fieldColourFor` 里按 pw 的线性亮度上限做。那两个旧函数留着，但**已无调用点**。
-        // ★★ 2026-10-06 那条"封面亮就给亮底"（照片 111）**对艺人页已经作废** —— 它正是"看不清字"的
-        //    来源；`textTone` 的反色判据现在跟着 `fieldColourFor` **压暗后**的颜色走
-        //    （压暗之后 `isLight` 恒为假 ⇒ 艺人页不再反色，白字照旧）。专辑 / 歌单页不受影响。
-        // ★★★ 2026-10-18（用户：「我看 melox 的歌单页和 am 几乎一模一样，**看它的吧**」）：
-        //   照 Melox `Features/Playlist/PlaylistDetailContent.swift:441-452` 的三层 ——
-        //   **取色纯色 + 模糊封面 + 一条 `取色@34% → 取色` 的 LinearGradient**（`:237-241` 页头区同一条）。
-        //   ⇒ 这一层（最底）只负责"底色是取色"，**它是纯色、不是渐变**；那条渐变由 `veil` 画在
-        //     模糊封面**之上**（见 `ensureVeil`），跟 Melox 的叠放次序一致。
-        //
-        //   ⚠️ 2026-10-18 起：**艺人页要 pw 那条 `_black`**（下面 `if artist` 那一支），
-        //     专辑 / 歌单页**不要**（它们照 Melox 渐到取色本身）。用户 2026-10-13 否掉的那句
-        //     「往下滑是全黑的、没有颜色」说的是**专辑/歌单页**，别拿它去撤艺人页。
+        // 三页同一条：底色都是"封面压暗过的那一版 → 窗口 55% 起渐到纯黑"。
+        // 三页的差别只剩"封面是谁"（艺人页铺我们的满幅照片，专辑 / 歌单页留 Spotify 那张卡片，
+        // 见 `ensureHero`）。
         let layer = view.gradient
         layer.startPoint = CGPoint(x: 0.5, y: 0)
         layer.endPoint = CGPoint(x: 0.5, y: 1)
@@ -662,12 +611,10 @@ enum EntityPageAppearance {
         return fallback > 0 ? fallback : 874
     }
 
-    /// **这一页的底色**：三页**同一个**（2026-10-18 第二轮，用户：「歌单页的封面会消失（如果歌单页的
-    /// 模糊不和艺人页一样，换成和艺人一样的）」）—— 一律是 **pw 压暗过的那一版**（`fieldColourFor`）。
+    /// **这一页的底色**：三页**同一个** —— 一律是 **pw 压暗过的那一版**（`fieldColourFor`）。
     ///
-    /// ⚠️ 这一条**推翻了**上一轮"专辑 / 歌单页照 Melox（纯取色 + 模糊封面 + veil）"那条分岔：
-    /// 用户看到的是**歌单页的封面不见了 + 白字压在浅底上看不清**（照片 127），而 **AM 自己的专辑/歌单页
-    /// 就是"深底 + 封面卡片 + 白字"**（照片 123：底色是暗灰、标题/艺人/元数据全是白字）⇒ 统一到 pw 这套。
+    /// 三页不分开的理由：浅色底让**白字看不清**（照片 127 的歌单页就是现场），
+    /// 而 **AM 自己的专辑 / 歌单页就是"深底 + 封面卡片 + 白字"**（照片 123）。
     private static func pageColour(for target: Target) -> UIColor? {
         guard let colour = target.color else { return nil }
         // ★★ 2026-10-18 第三轮：**艺人页压得轻、专辑/歌单页压得重**（见 `artistFieldLuminance` 那张表）。
@@ -743,74 +690,6 @@ enum EntityPageAppearance {
     /// 线性 → sRGB 编码值（pw 的 `toEncoded`，`SGRPalette.m:72-74`）。
     private static func encoded(_ component: CGFloat) -> CGFloat {
         component <= 0.0031308 ? component * 12.92 : 1.055 * pow(component, 1 / 2.4) - 0.055
-    }
-
-    /// Melox 的**第三层**：`取色@34% → 取色`，盖在模糊封面**之上**、页面内容**之下**。
-    ///
-    /// ⚠️ **2026-10-18 第二轮起已停用**：三页都不再铺模糊底（见 `blackFrom` 那段末尾的 ⚠️），
-    ///    所以这一层没有东西可盖了 —— 函数留着没删，只是为了让这一版改动面小一点。
-    ///
-    /// ★★ 2026-10-18：这一层就是"往下滑颜色变沉"的**全部来源**（Melox `:441-452` 的
-    /// `LinearGradient(colors: [palette.backgroundColor.opacity(0.34), palette.backgroundColor])`）。
-    /// 它的下端是**不透明的取色** ⇒ 页面下半部分稳定落在"这个封面的颜色"上，
-    /// 不像 pw 那样落到纯黑，也不像我们旧做法那样一路压到 45% 亮度。
-    private static var veil: GradientView?
-    private static var veilColourKey: String?
-
-    private static func ensureVeil(above blurred: UIView, in container: UIView, colour: UIColor?) {
-        guard let colour else { return }
-        let view: GradientView
-        if let veil, veil.superview === container {
-            view = veil
-        } else {
-            removeVeil()
-            let fresh = GradientView()
-            fresh.isUserInteractionEnabled = false
-            fresh.accessibilityIdentifier = "eevee-page-veil"
-            fresh.gradient.startPoint = CGPoint(x: 0.5, y: 0)
-            fresh.gradient.endPoint = CGPoint(x: 0.5, y: 1)
-            fresh.gradient.locations = [NSNumber(value: 0), NSNumber(value: 1)]
-            container.insertSubview(fresh, aboveSubview: blurred)
-            veil = fresh
-            view = fresh
-            writeDebugLog(
-                "[\(logTag)] veil over the blurred cover — Melox's third layer (colour 34% → colour);"
-                    + " this is what makes the page settle into the artwork's colour going down"
-            )
-        }
-        let key = hex(of: colour)
-        if key != veilColourKey {
-            veilColourKey = key
-            view.gradient.colors = [
-                colour.withAlphaComponent(0.34).cgColor,
-                colour.cgColor,
-            ]
-        }
-        let frame = CGRect(x: 0, y: 0, width: container.bounds.width, height: max(1, container.bounds.height))
-        if !view.frame.equalTo(frame) { view.frame = frame }
-    }
-
-    private static func removeVeil() {
-        veil?.removeFromSuperview()
-        veil = nil
-        veilColourKey = nil
-    }
-
-    /// 同一**色相**压暗（保住"就是这片颜色"的观感，而不是褪成中性灰 ✗）。
-    private static func tinted(_ color: UIColor, atMost ceiling: CGFloat) -> UIColor {
-        var hue: CGFloat = 0
-        var saturation: CGFloat = 0
-        var brightness: CGFloat = 0
-        var alpha: CGFloat = 0
-        guard color.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha) else {
-            return UIColor(white: ceiling, alpha: 1)
-        }
-        return UIColor(
-            hue: hue,
-            saturation: min(1, saturation * 1.05),
-            brightness: min(brightness, ceiling),
-            alpha: 1
-        )
     }
 
     /// **只清那些颜色恰好是 `#121212` 的视图**（pw 的教训：list 与每个 cell 都自己画这层）。
@@ -988,14 +867,10 @@ enum EntityPageAppearance {
     // MARK: - ② 封面溶进背景
 
     /// 用户 2026-10-13 指着 pw 的 playlist 截图：「**pw 的做法是把封面溶进背景**」——
-    /// **封面那一层**。★ 2026-10-18 第二轮之后它只剩两件事：
+    /// **封面那一层**。它只剩两件事：
     ///   · **艺人页**：让 Spotify 那张小封面让位，铺我们自己的满幅照片（`ensureSharpHero`）；
     ///   · **专辑 / 歌单页**：**保留 Spotify 自己那张封面卡片**（只把圆角改成 AM 的连续圆角）。
-    ///
-    /// ⚠️ 这个函数原来还画"两张图"（① 整页的模糊底 ② 满幅清晰封面）—— **2026-10-18 起"模糊底 + veil"
-    /// 那一套在三个页面上都停用了**（用户点名要 pw 的"深色 → 黑"，见 `paintField` / `blackFrom`；
-    /// 起因是浅底的模糊底让白字看不清，照片 127）。函数体里那段模糊底已经删掉，历史留在这一行。
-    private static func ensureHero(on target: Target, sharpCover: Bool, colour: UIColor?) {
+    private static func ensureHero(on target: Target, sharpCover: Bool) {
         guard let cover = target.cover else { return }
 
         if sharpCover {
@@ -1004,18 +879,15 @@ enum EntityPageAppearance {
             //   它让位给我们那张满幅照片。
             concealNativeCover(cover)
             guard let source = coverImage(in: cover) else { return }
-            ensureSharpHero(cover: cover, source: source, page: target.page, colour: colour)
+            ensureSharpHero(cover: cover, source: source, page: target.page)
             return
         }
 
-        // ★★ 2026-10-18 第二轮（用户：「歌单页的封面会消失（如果歌单页的模糊不和艺人页一样，
-        //    换成和艺人一样的）」）—— **专辑 / 歌单页保留 Spotify 自己那张封面卡片，
-        //    并且不再铺模糊底**：
-        //    · “封面会消失”的根因就是原来这里无条件跑的 `concealNativeCover(cover)`：
+        // **专辑 / 歌单页保留 Spotify 自己那张封面卡片**：
+        //    · "封面会消失"的根因就是原来这里无条件跑的 `concealNativeCover(cover)`：
         //      专辑 / 歌单页也照藏 ⇒ 卡片整张不见（照片 127：歌单页只剩一层模糊底 + 白字）。
         //      它现在只服务艺人页（上面那一支）。
-        //    · 模糊底 + veil 那一套（Melox）在这两页**停用** —— 它们的底现在也是
-        //      pw 那条“深色 → 黑”（`paintField`），“白字压在浅底上看不清”一并解决。
+        //    · 两页的底也是 pw 那条"深色 → 黑"（`paintField`），"白字压在浅底上看不清"一并解决。
         revealNativeCover()
         roundCoverCard(cover)
     }
@@ -1039,7 +911,7 @@ enum EntityPageAppearance {
     ///
     /// ⚠️ `_backgroundViewContainer` 里那些 wash 的 `GradientView` 必须**一起藏掉**：pw 的 issue #53
     /// 就是"wash 的 alpha 被抬高之后，不透明的一层把整张图整个盖住"。
-    private static func ensureSharpHero(cover: UIView, source: UIImage, page: UIView, colour: UIColor?) {
+    private static func ensureSharpHero(cover: UIView, source: UIImage, page: UIView) {
         // ★ 2026-10-13（照片 104：专辑页只有一片颜色、没有封面）：**宿主分两种** ——
         //   · 歌单页：Spotify 画页面颜色 wash 的那块 plane（pw 的 `PlaylistHeader.x` 做法）；
         //   · 专辑页：**头自己**（pw 的 `AlbumHeader.x` 逐字：`[header insertSubview:hero atIndex:0]`）。
@@ -1047,7 +919,7 @@ enum EntityPageAppearance {
         //   专辑页**没有** `_backgroundViewContainer`（那是歌单页的结构；它的 wash 是页面里那个
         //   `LegacyUI…HeaderView` + `GradientView`，见 pw 的 `AlbumField.x`）⇒ 原来这里
         //   `guard let plane … else { return }` 一句直接返回 ⇒ **整条 sharpHero 静默不装**：
-        //   日志 87 里就只剩 `hero …`（模糊底）而**没有** `sharp hero …` 那一行，
+        //   日志 87 里就**没有** `sharp hero …` 那一行，
         //   用户看到的正是"只有背景色、没有封面"。
         let plane = washPlane(for: cover)
         let albumHeader = firstView(
@@ -1122,9 +994,13 @@ enum EntityPageAppearance {
         // ★ 2026-10-17：这条**永远是死路** —— 用户二选一里选了方案 A（图照旧铺到顶 + 顶上加纱），
         //    顶上那件事现在由 `ensureScrim` 做。算式留着，将来真要翻回"把图往下挪"时不用重推。
         let topInset = wantsTopInset ? page.safeAreaInsets.top : 0
+        // ★★ 2026-10-16：**整幅上移**（`frame.y` 取负）—— AM 的照片主体落在上半部分，
+        //    我们原来顶对齐、主体偏下（照片 130 的猫比 AM 照片 118 低约 25pt；25/414 ≈ 6%）。
+        //    裁掉的是照片顶部那条空白；下面 mask 的落点按同一偏移换算（见 `imageHeight` 那一段）。
+        let rise = fillsHost ? round(height * heroRiseRatio) : 0
         let frame = CGRect(
             x: 0,
-            y: topInset,
+            y: topInset - rise,
             width: host.bounds.width,
             height: max(minHeroHeight, round(height) - topInset)
         )
@@ -1153,69 +1029,54 @@ enum EntityPageAppearance {
         if !view.frame.equalTo(frame) { view.frame = frame }
         if view.image !== source { view.image = source }
 
-        // ★★ 2026-10-18：**收口绑名字，不绑页头高度** —— 见 `meltGap` / `meltSpanRatio` 那段。
-        //    认得出我们那块页头（名字的 y 拿得到）就用它算；认不出（还没建 / 正在收起、整块已渐隐）
-        //    就退回老行为（54% 起化、到底化完），**绝不因为算不出来把渐变整条撤掉**。
+        // ★★ 2026-10-16：**起点绑图高（66%），终点绑名字上沿** —— 见 `meltStartRatio` 那段。
+        //    mask 作用在 `view` 自己的坐标里，而照片上移了 `rise` ⇒ 名字的本地 y 要把 `rise` 加回来
+        //    （`frame.minY` 是负的，减它等于加）。
+        let imageHeight = max(1, view.bounds.height)
+        let meltStart = imageHeight * meltStartRatio
+        let meltEnd: CGFloat
         if let textTop = ourHeaderTextTop(in: host), textTop > host.bounds.height * 0.2 {
-            let span = max(minMeltSpan, host.bounds.height * meltSpanRatio)
-            applyDissolveMask(to: view, solidUntil: textTop - span, goneAt: textTop - meltGap)
+            let local = textTop - frame.minY
+            meltEnd = min(imageHeight, max(meltStart + minMeltSpan, local - meltGap))
         } else {
-            applyDissolveMask(to: view, opaqueFraction: 0.54)
+            // 认不出我们那块页头（还没建 / 正在收起）：一路化到图的下缘，
+            // 但起点仍是图高的 66% —— 不像旧版那样从 54% 就开始（那正是"吃掉主体"的来源）。
+            meltEnd = imageHeight
         }
+        applyDissolveMask(to: view, solidUntil: meltStart, goneAt: meltEnd)
 
-        // ★ 2026-10-17：照片**照旧铺到顶**，顶上那条由**页面取色**去化（不是黑纱）—— 见 `ensureScrim`。
-        ensureScrim(in: host, above: view, page: page, colour: colour)
+        // ★★ 2026-10-16：顶上那条纱**挂在照片自己身上**、颜色取**照片顶边那一小条** ——
+        //    不再是"页面取色"（压暗过的深灰贴在白照片上 = 照片 130 顶上那条灰带，见 `ensureScrim`）。
+        ensureScrim(in: view, page: page, image: source)
     }
 
-    /// ★★ 2026-10-17（用户，第二轮 —— 看了 AM 的艺人页截图 118/119 之后）：
-    /// 「am 是这么处理的：**用渐变来处理**，而往下滚就**一直保持渐变之后的颜色**。我们不是这个设计吧？
-    /// 能不能做成这样。而且渐变之后的颜色**会根据艺人变化**的。比如 nanatsukaze 的就是淡灰色，
-    /// 杰克逊的就是棕色。」
+    /// **顶上那一条"纱"** —— 状态栏压在满幅照片上时，给它一条与照片同色的底。
     ///
-    /// ## 先厘清：这三句里有两句我们**早就是**了
+    /// AM 的做法（照片 118/119）：顶上那一条**就是照片自己的颜色**（照片从这片颜色里长出来），
+    /// 不是叠一层深色。所以这里的三条：
     ///
-    /// 真机日志逐字（`eeveespotify_debug_shared 93.log`）：
-    ///
-    /// ```
-    /// [PageField] field colour is now #F2F7FB — top F2F7FB, 57% #D7DCE0, bottom #A1A5A8   ← Nanatsukaze 艺人页
-    /// [PageField] field on TemplateView 0,0,414,896 ← cover colour #F2F7FB               ← field 是页面根的子视图
-    /// [PageField] sharp hero in HeaderContainer 0,0,414,520 at 0,0,414,520
-    /// ```
-    ///
-    /// ⇒ ① **渐变**：`paintField` 就是一条整页的取色渐变，照片再"化"进它（`applyDissolveMask`）；
-    ///    ② **往下滚保持**：field 挂在**页面根**上（不在 scroll view 里）⇒ 内容滚、颜色不动；
-    ///    ③ **随艺人变**：颜色是每页从封面/照片当场算的（`averageColor`），Nanatsukaze 的底正是
-    ///      `#A1A5A8`（淡灰 ✓），另一张是 `#B08FA8`（粉紫 ✓）。这三条**不用改**。
-    ///
-    /// ## 真正缺的两件（这一轮补的就是它们）
-    ///
-    /// **① 顶上那一条不是黑的。** 上一版我按"方案 A"盖了一条 **黑 → 透明** 的纱（用户当时选的就是
-    /// 它）—— 但 AM 不是这么干的：AM 顶上那一条**就是页面自己的颜色**，照片从这片颜色里"长"出来。
-    /// 改成取色之后，同一条纱自动变成"这个艺人的颜色"，与下面 field 的顶色**一模一样**（
-    /// `paintField` 的 0 号色就是它）⇒ 纱和 field 之间不可能有接缝。
-    ///
-    /// **② 状态栏明暗要跟着翻。** AM 的 118（Nanatsukaze）状态栏是**黑字**、119（Michael Jackson）
-    /// 是**白字** —— 它就是靠这个解决"照片铺到顶"的，而不是靠留白。我们这边原来一处都没碰过状态栏
-    /// ⇒ 亮封面上白字直接消失（照片 115 就是这个现场）。现在 `EntityPageStatusBar` 接手。
-    ///
-    /// ## 形状
-    ///
-    /// * 高 = `安全区顶 + 22`（与安全区同高那一段**不透明**，正好盖住灵动岛/状态栏那一条；
-    ///   最后一截化开，照片从色里长出来 ⇒ 既是"缓冲区"也是"渐变"）。
-    /// * 颜色 = 这个页面的取色（`colour`），取不到就不画（别用黑色顶替 —— 那正是上一版的问题）。
-    /// * 插在 **`hero` 正上方、宿主的其余子视图之下**（`insertSubview(_:aboveSubview:)`）⇒
-    ///   Spotify 自己的返回键、我们 pinned 的 ⋯、页头那些文字都在它**上面**，谁都不会被压暗。
-    /// * 锚在宿主 y=0（跟着照片滚）。滚下去之后那一条由 Spotify 自己收起来的导航栏接手。
+    /// * 颜色 = **照片顶边那一小条的平均色**（`topEdgeStripFraction`）。整图平均不行 ——
+    ///   我们上一版用的是**页面取色**（封面被压到亮度上限之后的那一档深灰，
+    ///   白猫那张 ≈ `#7B7D7F`）⇒ 深灰糊在白照片顶上，就是照片 130 顶上那条脏灰带。
+    /// * 高度 = **安全区（状态栏 / 灵动岛）+ 一小截化开**，不再往下伸进页头。
+    /// * **顶边偏亮就整条不画**：那种情况状态栏已经翻成黑字（`ensureField` 用同一小条判），
+    ///   照片自己就是最好的底，再叠一层只会把它弄脏（用户：「图偏亮就弱化或直接不要」）。
+    /// * 挂在**照片视图自己身上**（`hero.addSubview`）⇒ 照片被缩放 / 视差 / 被宿主裁切时，
+    ///   纱的位置永远和图钉在一起，不会和图错开。
     ///
     /// ⚠️ 与 `wantsTopInset`（真正把图往下挪）仍**不是一回事**：那条 2026-10-06 被用户否过
     /// （"缓冲没和封面接上、而且太大"），现在仍然恒 `false`。
-    private static func ensureScrim(in host: UIView, above hero: UIView, page: UIView, colour: UIColor?) {
-        // 取不到颜色就**什么都不画**：宁可没有这一条，也不能拿一个错的颜色顶上去
-        // （黑纱就是这么来的，AM 那边根本没有那一层）。
-        guard let colour else { return }
+    private static func ensureScrim(in hero: UIImageView, page: UIView, image: UIImage) {
+        // 取不到顶边颜色、或顶边本来就亮 ⇒ **什么都不画**：宁可没有这一条，
+        // 也不能拿一个错的颜色顶上去（黑纱、灰带都是这么来的，AM 那边根本没有那一层）。
+        guard let colour = topEdgeColour(of: image), !isLight(colour) else {
+            removeScrim()
+            return
+        }
 
+        let host = hero.superview ?? page
         let view: GradientView
-        if let scrim, scrim.superview === host {
+        if let scrim, scrim.superview === hero {
             view = scrim
         } else {
             removeScrim()
@@ -1225,36 +1086,38 @@ enum EntityPageAppearance {
             let gradient = fresh.gradient
             gradient.startPoint = CGPoint(x: 0.5, y: 0)
             gradient.endPoint = CGPoint(x: 0.5, y: 1)
-            host.insertSubview(fresh, aboveSubview: hero)
+            hero.addSubview(fresh)
             scrim = fresh
             view = fresh
-            writeDebugLog(
-                "[\(logTag)] top band in \(type(of: host)) — the cover still runs full bleed to the top;"
-                    + " the page's own colour holds the top \(Int(scrimSolidFraction * 100))% of it and"
-                    + " dissolves into the picture below (AM's look, and the status bar flips with it)"
-            )
-        }
-
-        // 颜色只在"换了一张封面"时才重写（每 0.6s 走一趟，不能每拍都写 layer）。
-        let key = hex(of: colour)
-        if key != scrimColourKey {
-            scrimColourKey = key
-            let gradient = view.gradient
-            gradient.colors = [
-                colour.withAlphaComponent(1).cgColor,
-                colour.withAlphaComponent(1).cgColor,
-                colour.withAlphaComponent(0).cgColor,
-            ]
-            gradient.locations = [
-                NSNumber(value: 0),
-                NSNumber(value: Double(scrimSolidFraction)),
-                NSNumber(value: 1),
-            ]
         }
 
         let safeTop = resolvedSafeAreaTop(in: host, page: page)
         let height = max(12, safeTop + scrimExtraFade)
-        let frame = CGRect(x: 0, y: 0, width: host.bounds.width, height: height)
+        let solid = min(1, safeTop / height)
+
+        // 颜色 / 高度只在变了的时候才写 layer（0.6s 一拍，不能每拍都写）。
+        let key = "\(hex(of: colour))@\(Int(height))"
+        if key != scrimColourKey {
+            scrimColourKey = key
+            let gradient = view.gradient
+            gradient.colors = [
+                colour.cgColor,
+                colour.cgColor,
+                colour.withAlphaComponent(0).cgColor,
+            ]
+            gradient.locations = [
+                NSNumber(value: 0),
+                NSNumber(value: Double(solid)),
+                NSNumber(value: 1),
+            ]
+            writeDebugLog(
+                "[\(logTag)] top band #\(hex(of: colour)) — the cover's own top edge,"
+                    + " \(Int(height))pt (status bar + \(Int(scrimExtraFade))pt) over the picture;"
+                    + " nothing at all when that edge is light"
+            )
+        }
+
+        let frame = CGRect(x: 0, y: 0, width: hero.bounds.width, height: height)
         if !view.frame.equalTo(frame) { view.frame = frame }
     }
 
@@ -1402,53 +1265,48 @@ enum EntityPageAppearance {
     // 参数名一个 color 一个 colour 也算重复声明，编译器直接报 `invalid redeclaration`。
 
 
-    /// 向下化开：`solidUntil` 之上**完全不透明**，`goneAt` 之下**完全透明**，中间线性。
+    /// 向下**淡出**：`solidUntil` 之上完全不透明，`goneAt` 之下完全透明，中间走 `meltEasing` 的多档缓动。
     ///
-    /// ★★ 2026-10-18：从"只抽一个比例"改成**两个绝对 y** —— 艺人页的收口要落在**名字上沿**
-    /// （见 `meltGap` / `meltSpanRatio`），那是按内容算出来的位置，不是一个固定比例。
-    /// 比例那条路（模糊底）仍然走下面那个薄包装 ⇒ 行为与改之前**逐字一致**。
+    /// ⚠️ 这是**给图片本身加透明度蒙版**（`view.layer.mask`），不是在图上叠一层深色 ——
+    /// 图是"自己淡出到下面的底色里"的，底色由 `paintField` 负责。
     private static func applyDissolveMask(to view: UIView, solidUntil: CGFloat, goneAt: CGFloat) {
         let height = max(1, view.bounds.height)
         let solid = max(0, min(1, solidUntil / height))
         let gone = max(solid, min(1, goneAt / height))
 
+        let steps = meltEasing.count
         let mask: CAGradientLayer
-        if let existing = view.layer.mask as? CAGradientLayer {
+        if let existing = view.layer.mask as? CAGradientLayer, existing.colors?.count == steps {
             mask = existing
         } else {
+            view.layer.mask = nil
             let layer = CAGradientLayer()
             layer.startPoint = CGPoint(x: 0.5, y: 0)
             layer.endPoint = CGPoint(x: 0.5, y: 1)
-            layer.colors = [
-                UIColor.white.cgColor,
-                UIColor.white.cgColor,
-                UIColor.clear.cgColor,
-            ]
             view.layer.mask = layer
             mask = layer
         }
 
-        // ⚠️ 复用的那个 layer 上写的是**上一拍的比例** ⇒ 位置**每次都要重写**（原来只在新建那一支里写过，
+        var locations: [NSNumber] = []
+        var colours: [CGColor] = []
+        for (index, alpha) in meltEasing.enumerated() {
+            let progress = CGFloat(index) / CGFloat(steps - 1)
+            locations.append(NSNumber(value: Double(solid + (gone - solid) * progress)))
+            colours.append(UIColor.white.withAlphaComponent(alpha).cgColor)
+        }
+
+        // ⚠️ 复用的那个 layer 上写的是**上一拍的位置** ⇒ 位置**每次都要重写**（原来只在新建那一支里写过，
         //    所以换一个更矮/更高的收口时它不会跟着动）。写的时候关掉隐式动画，免得收口自己动。
-        let wanted = [0, Double(solid), Double(gone)]
+        let wanted = locations.map { $0.doubleValue }
         let current = mask.locations?.map { $0.doubleValue } ?? []
         if current != wanted {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            mask.locations = [
-                NSNumber(value: 0),
-                NSNumber(value: solid),
-                NSNumber(value: gone),
-            ]
+            mask.colors = colours
+            mask.locations = locations
             CATransaction.commit()
         }
         if !mask.frame.equalTo(view.bounds) { mask.frame = view.bounds }
-    }
-
-    /// 按比例那条路（**模糊底**用）：上 `opaqueFraction` 不透明 → 底全透明。
-    private static func applyDissolveMask(to view: UIView, opaqueFraction: CGFloat) {
-        let height = max(1, view.bounds.height)
-        applyDissolveMask(to: view, solidUntil: height * opaqueFraction, goneAt: height)
     }
 
     /// 我们自己那块页头（`EntityPageHeaderView`）里**名字的上沿**，换算到 `host` 的坐标里；认不出就是 nil。
@@ -1523,7 +1381,6 @@ enum EntityPageAppearance {
 
     private static func removeHero() {
         removeScrim()
-        removeVeil()
         revealNativeCover()
         revealWash()
         // 单调高度是记在**那块 plane** 上的（换页面时 plane 可能被复用）⇒ 撤的时候一起清掉，
@@ -1533,50 +1390,11 @@ enum EntityPageAppearance {
         }
         sharpHero?.removeFromSuperview()
         sharpHero = nil
-        hero?.removeFromSuperview()
-        hero = nil
-        cachedHeroSource = nil
-        cachedHeroImage = nil
     }
 
     /// 封面元素里那张真图。
     private static func coverImage(in root: UIView) -> UIImage? {
         firstImageView(in: root)?.image
-    }
-
-    /// 底子那张模糊封面 —— **照 MeloX 的三步**（`MeloX/Core/Artwork/ArtworkAccentColorProvider.swift`）：
-    ///
-    /// 1. **先把图缩到最长边 160px**（Lanczos，它的 `downsampled`）—— 先缩再糊，半径的相对强度才可控 ✓
-    ///    （我上一版直接糊原图 ✗，只能拿"图宽的百分比"凑半径，效果飘）；
-    /// 2. **`clampedToExtent()` 再糊** —— 不 clamp 的话边缘会被糊成透明，铺满整页时四周发虚 ✗；
-    /// 3. **半径 18**（它的常数 ✓），作用在那张 160px 的图上。
-    ///
-    /// 它算完**按封面 URL 缓存**，整页当背景铺 ✓ —— 我们这里同样按"哪张图"缓存一次 ✓。
-    private static func blurred(_ image: UIImage) -> UIImage? {
-        guard let cgImage = image.cgImage else { return nil }
-        let source = CIImage(cgImage: cgImage)
-        let sourceExtent = source.extent.integral
-        guard !sourceExtent.isEmpty, !sourceExtent.isInfinite else { return nil }
-
-        // ① 先降采样（最长边 160）—— 与 MeloX 的 `downsampled` 同一件事。
-        var prepared = source
-        let longest = max(sourceExtent.width, sourceExtent.height)
-        if longest > meloxDownsampleEdge, let lanczos = CIFilter(name: "CILanczosScaleTransform") {
-            lanczos.setValue(source, forKey: kCIInputImageKey)
-            lanczos.setValue(meloxDownsampleEdge / longest, forKey: kCIInputScaleKey)
-            lanczos.setValue(1, forKey: kCIInputAspectRatioKey)
-            if let scaled = lanczos.outputImage { prepared = scaled }
-        }
-
-        // ② clamp 边缘 + ③ 半径 18，都作用在那张小图上。
-        let preparedExtent = prepared.extent.integral
-        guard !preparedExtent.isEmpty, !preparedExtent.isInfinite,
-              let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
-        filter.setValue(prepared.clampedToExtent(), forKey: kCIInputImageKey)
-        filter.setValue(meloxBlurRadius, forKey: kCIInputRadiusKey)
-        guard let output = filter.outputImage,
-              let rendered = ciContext.createCGImage(output, from: preparedExtent) else { return nil }
-        return UIImage(cgImage: rendered)
     }
 
     // MARK: - ③ 藏掉 Spotify 自己那些按键
@@ -1774,6 +1592,57 @@ enum EntityPageAppearance {
             blue: CGFloat(pixel[2]) / 255,
             alpha: 1
         )
+    }
+
+    /// 这一页照片**顶边那一小条**的平均色（认不出照片就是 nil）。
+    ///
+    /// 与 `pageColour(for:)` 是**两个不同的东西**：那个是"整页的底"（要压暗到白字读得清），
+    /// 这个是"照片最上面那一条长什么样" —— 顶上那条纱与状态栏字色都只看它。
+    private static func topEdgeColour(for target: Target) -> UIColor? {
+        guard let cover = target.cover, let image = coverImage(in: cover) else { return nil }
+        return topEdgeColour(of: image)
+    }
+
+    /// 把整张图画进一个 **1 × rows** 的上下文：**每一行就是图里对应那一横条的平均色**。
+    ///
+    /// `draw` 用的是 CG 坐标（原点在左下）⇒ 图的最上面一条落在**第 0 行**；
+    /// 取最前面那 `topEdgeStripFraction` 的几行求平均 = "顶边一小条"，不把主体算进去。
+    private static func topEdgeColour(of image: UIImage) -> UIColor? {
+        if cachedTopEdgeSource === image, let cached = cachedTopEdgeColour { return cached }
+        guard let cgImage = image.cgImage else { return nil }
+
+        let rows = 64
+        var buffer = [UInt8](repeating: 0, count: rows * 4)
+        guard let context = CGContext(
+            data: &buffer,
+            width: 1,
+            height: rows,
+            bitsPerComponent: 8,
+            bytesPerRow: 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: 1, height: rows))
+
+        let wanted = max(1, min(rows, Int((CGFloat(rows) * topEdgeStripFraction).rounded())))
+        var red = 0
+        var green = 0
+        var blue = 0
+        for row in 0..<wanted {
+            red += Int(buffer[row * 4])
+            green += Int(buffer[row * 4 + 1])
+            blue += Int(buffer[row * 4 + 2])
+        }
+        let divisor = CGFloat(wanted) * 255
+        let colour = UIColor(
+            red: CGFloat(red) / divisor,
+            green: CGFloat(green) / divisor,
+            blue: CGFloat(blue) / divisor,
+            alpha: 1
+        )
+        cachedTopEdgeSource = image
+        cachedTopEdgeColour = colour
+        return colour
     }
 
     // MARK: - 小工具

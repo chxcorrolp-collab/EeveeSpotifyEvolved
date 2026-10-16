@@ -78,7 +78,7 @@ struct EntityPageSettingsView: View {
                 //
                 //   ⚠️ 名字与内容不符（本次审计最值得改文案的一条）：这一颗内部其实装了
                 //   **11 件事**，而且其中 1–8、10 是**有先后的流水线**（清原生底色 → 铺取色底 →
-                //   文字反色 → 状态栏字色 → 模糊封面底 → veil → 下缘溶解 → 藏原生 wash），
+                //   文字反色 → 状态栏字色 → 满幅照片（含顶上那条纱）→ 下缘溶解 → 藏原生 wash），
                 //   拆开只会让用户拼不出正确组合 ⇒ **不建议拆**。唯一有独立价值的是
                 //   「艺人页照片铺满 + 顶部色带」（`EntityPageAppearance.x.swift:347` 的 `if sharp`
                 //   分支，主体在 `ensureHero` / `ensureSharpHero` / `ensureScrim` 三处），

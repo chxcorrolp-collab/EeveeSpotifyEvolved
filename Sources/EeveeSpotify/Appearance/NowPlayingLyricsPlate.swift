@@ -400,11 +400,6 @@ enum NowPlayingLyricsPlate {
     /// `MarqueeLabel@0,24,308,22,id=now-playing-subtitle-label`（标题是 `now-playing-title-label`）。
     private static let subtitleLabelIdentifier = "now-playing-subtitle-label"
 
-    /// 歌词区进场时从 0.96 放大到 1（pw 的 `kLyricsEnterScale`）。
-    /// ⚠️ **本轮没做**：那要把容器也改成"只动 transform + bounds/center"（同封面那一套），
-    /// 否则 `ensureContainer` 每拍写 `frame` 会和 transform 打架。留到下一轮。
-    private static let enterScale: CGFloat = 0.96
-
     // MARK: 封面那两个"画出来"的圆角 + 移动用的弹簧（pw `SGRTokens`）
 
     /// 全尺寸封面时的圆角（pw：`SGRRadiusArtwork = 12`）。
@@ -454,9 +449,6 @@ enum NowPlayingLyricsPlate {
 
     // 关联对象
     private static var containerKey: UInt8 = 0
-    private static var coverKey: UInt8 = 0
-    private static var toggleKey: UInt8 = 0
-    private static var titleMaskKey: UInt8 = 0
     /// 歌词区底沿那条**署名**（SL 条款 §6 要的可点署名，见 `ensureCreditLabel`）。
     private static var creditLabelKey: UInt8 = 0
     /// 记着那条署名（摘的时候不查 `lastPage`，见 `removeCreditLabel`）。

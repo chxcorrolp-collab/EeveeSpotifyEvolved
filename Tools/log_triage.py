@@ -69,8 +69,10 @@ def body(line: str) -> str:
 
 
 def section(title: str) -> None:
+    # ⚠️ 拼成一整行再 print：`--quiet` 的过滤器按 write 的整行判断，
+    #    分开传参（`print("====", title, "====")`）会把标题拆碎、只剩那两串等号。
     print()
-    print("=" * 4, title, "=" * 4)
+    print(f"==== {title} ====")
 
 
 def verdict(name: str, ok: bool, detail: str) -> None:
@@ -93,6 +95,17 @@ def triage_init(log: Log) -> dict:
     # 这一句在 `[EntityPageHeader] on — …` 那一行里
     hook_on = any("about-data hook on" in b for b in about_hook)
     print(f"  about-data hook: {'on' if hook_on else ('MISSING' if about_hook else '未打印')}")
+    verdict(
+        "§10 about-data hook 装上了吗",
+        hook_on,
+        "on（数据线这条路已启用）"
+        if hook_on
+        else (
+            "MISSING —— 类在但 hook 没装（看上面的 ORION 行）"
+            if about_hook
+            else "这一版还没有这行日志（旧 build）"
+        ),
+    )
     return {"about_data_hook": hook_on, "has_hook_line": bool(about_hook)}
 
 
@@ -384,9 +397,17 @@ def triage_errors(log: Log) -> None:
                 examples.setdefault(pattern, body(line)[:160])
     if not seen:
         print("  没有匹配到错误类关键字")
+        verdict("错误 / 警告", True, "日志里没有错误类关键字")
         return
     for pattern, count in sorted(seen.items(), key=lambda kv: -kv[1]):
         print(f"  {pattern}: {count}  ← {examples[pattern]}")
+    orion = seen.get("ORION ERROR", 0)
+    verdict(
+        "错误 / 警告",
+        orion == 0,
+        f"{sum(seen.values())} 条匹配（其中 ORION ERROR {orion} 条）"
+        + ("" if orion == 0 else " —— 2026-10-17 起那两个 9.1.88 上不存在的 Home hook 已不再装，若还有 ORION 行就是真问题"),
+    )
 
 
 def triage_timeline(log: Log) -> None:
@@ -397,10 +418,33 @@ def triage_timeline(log: Log) -> None:
     print("  ⚠️ 照片的文件时间要和这里对得上；差一分钟以上就说明不是同一场。")
 
 
+class _VerdictOnly:
+    """`--quiet`：只留小节标题与 ✔/✘ 结论行，把证据行丢掉。
+
+    这样两种模式跑的是**同一套判据**（不会出现"quiet 模式漏看 §18"这种事），
+    区别只在打印多少行。
+    """
+
+    def write(self, text: str) -> None:
+        # ⚠️ `print` 会把"内容"和末尾的 `\n` 分成两次 write ⇒ 这里按行判断、
+        #    并且**自己补换行**：`"\n"` 那次 write 会被当成空行丢掉，不能再依赖它。
+        for line in text.splitlines(keepends=True):
+            stripped = line.strip()
+            if (
+                stripped.startswith("✔")
+                or stripped.startswith("✘")
+                or stripped.startswith("====")
+            ):
+                sys.__stdout__.write(line if line.endswith("\n") else line + "\n")
+
+    def flush(self) -> None:
+        sys.__stdout__.flush()
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("log", help="日志路径（C:\\dsh\\readlog\\eeveespotify_debug_shared NN.log）")
-    parser.add_argument("--quiet", action="store_true", help="只打最后的结论")
+    parser.add_argument("--quiet", action="store_true", help="只打小节标题与 ✔/✘ 结论")
     args = parser.parse_args(argv)
 
     try:
@@ -414,21 +458,27 @@ def main(argv: list[str]) -> int:
         return 1
 
     triage_timeline(log)
-    if not args.quiet:
-        triage_init(log)
-        triage_artist_page(log)
-        triage_playlist(log)
-        triage_interlude(log)
-        triage_wrap(log)
-        triage_amll(log)
-        triage_netease(log)
-        triage_errors(log)
+
+    import contextlib
+
+    target = _VerdictOnly() if args.quiet else None
+    if target is None:
+        run_all(log)
     else:
-        triage_artist_page(log)
-        triage_playlist(log)
-        triage_interlude(log)
-        triage_wrap(log)
+        with contextlib.redirect_stdout(target):  # type: ignore[arg-type]
+            run_all(log)
     return 0
+
+
+def run_all(log: Log) -> None:
+    triage_init(log)
+    triage_artist_page(log)
+    triage_playlist(log)
+    triage_interlude(log)
+    triage_wrap(log)
+    triage_amll(log)
+    triage_netease(log)
+    triage_errors(log)
 
 
 if __name__ == "__main__":

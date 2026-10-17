@@ -88,6 +88,25 @@ enum ArtistLatestReleaseSource {
 
     /// 取这位艺人的最新一条发布；已经有缓存 / 已经有请求在飞时不重复发。
     ///
+    /// ★★ 2026-10-17（第三版，日志 111 的现场）：**只查"设备地区"那一家店是不够的**。
+    ///
+    /// ```
+    /// [Release] iTunes search — "Nanatsukaze"
+    /// [Release] "Nanatsukaze" — no usable release in the iTunes response   ← 4 秒后
+    /// [Release] no release for "Nanatsukaze" — the card stays hidden
+    /// ```
+    ///
+    /// 本机实测（2026-10-17，`entity=album&limit=10`）：
+    ///
+    /// | country | resultCount | artistName |
+    /// |---|---|---|
+    /// | `cn`（这台设备的地区） | **0** | — |
+    /// | `jp` | 10 | `ナナツカゼ`（假名，与页面上的 `Nanatsukaze` 对不上） |
+    /// | `us` | 10 | **`Nanatsukaze`** ✓ |
+    ///
+    /// ⇒ 按 **设备地区 → `us` → `jp`** 依次试，第一个能给出"艺人名对得上"的结果就用它。
+    /// 中国大陆的 iTunes 目录**根本没有这位艺人的东西**，这条链是唯一能出卡车的路。
+    ///
     /// - Note: 回调**一定**在主队列上。
     static func fetch(artist: String, completion: @escaping (ArtistLatestRelease?) -> Void) {
         let key = normalized(artist)
@@ -106,35 +125,71 @@ enum ArtistLatestReleaseSource {
         lock.unlock()
         guard !alreadyRunning else { return }
 
-        guard let url = url(for: artist) else {
+        attempt(artist: artist, key: key, countries: countryChain(), index: 0, completion: completion)
+    }
+
+    /// 要试哪几家店（去重、顺序固定）。
+    private static func countryChain() -> [String] {
+        var list: [String] = []
+        if let region = Locale.current.region?.identifier.lowercased(), !region.isEmpty {
+            list.append(region)
+        }
+        for fallback in ["us", "jp"] where !list.contains(fallback) {
+            list.append(fallback)
+        }
+        return list
+    }
+
+    /// 依次试 `countries[index...]`；拿到一条可用的就收工。
+    private static func attempt(
+        artist: String,
+        key: String,
+        countries: [String],
+        index: Int,
+        completion: @escaping (ArtistLatestRelease?) -> Void
+    ) {
+        guard index < countries.count else {
             finish(key: key, release: nil, completion: completion)
             return
         }
+        let country = countries[index]
 
-        writeDebugLog("[Release] iTunes search — \"\(artist)\"")
+        guard let url = url(for: artist, country: country) else {
+            attempt(artist: artist, key: key, countries: countries, index: index + 1, completion: completion)
+            return
+        }
+
+        writeDebugLog("[Release] iTunes search — \"\(artist)\" @ \(country)")
 
         let task = session.dataTask(with: url) { data, response, error in
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard let data, error == nil, status == 200 else {
                 writeDebugLog(
-                    "[Release] iTunes search failed for \"\(artist)\" —"
+                    "[Release] iTunes search failed for \"\(artist)\" @ \(country) —"
                         + " status \(status), error \(error.map { "\($0)" } ?? "-")"
                 )
-                finish(key: key, release: nil, completion: completion)
+                attempt(artist: artist, key: key, countries: countries, index: index + 1, completion: completion)
                 return
             }
 
-            let release = parse(data: data, artist: artist)
-            if let release {
+            let parsed = parse(data: data, artist: artist)
+            if let release = parsed.release {
                 writeDebugLog(
-                    "[Release] \"\(artist)\" → \(release.title)"
+                    "[Release] \"\(artist)\" @ \(country) → \(release.title)"
                         + " (\(release.trackCount) track(s),"
                         + " \(release.date.map { cardDateFormat.string(from: $0) } ?? "date ?"))"
                 )
-            } else {
-                writeDebugLog("[Release] \"\(artist)\" — no usable release in the iTunes response")
+                finish(key: key, release: release, completion: completion)
+                return
             }
-            finish(key: key, release: release, completion: completion)
+
+            // ★ 2026-10-17：**没对上的时候要把"对面写了什么"打出来** —— 上一轮的
+            //   `no usable release` 谁也答不了"是 0 条结果，还是艺人名对不上"。
+            writeDebugLog(
+                "[Release] \"\(artist)\" @ \(country) — no usable release (\(parsed.results) result(s),"
+                    + " artistName(s): \(parsed.artistNames))"
+            )
+            attempt(artist: artist, key: key, countries: countries, index: index + 1, completion: completion)
         }
         task.resume()
     }
@@ -151,10 +206,9 @@ enum ArtistLatestReleaseSource {
         DispatchQueue.main.async { completion(release) }
     }
 
-    private static func url(for artist: String) -> URL? {
+    private static func url(for artist: String, country: String) -> URL? {
         var components = URLComponents(string: "https://itunes.apple.com/search")
         // 国家/地区影响"这位艺人有哪些发布"（日区艺人只在 jp 目录里齐全）。
-        let country = (Locale.current.region?.identifier ?? "us").lowercased()
         components?.queryItems = [
             URLQueryItem(name: "term", value: artist),
             URLQueryItem(name: "entity", value: "album"),
@@ -166,23 +220,34 @@ enum ArtistLatestReleaseSource {
 
     // MARK: - 解析
 
-    private static func parse(data: Data, artist: String) -> ArtistLatestRelease? {
+    /// 一次搜索的解析result：`release` 是要不要用，`results` / `artistNames` 只进日志
+    /// （"0 条结果"与"有结果但都对不上"是两件完全不同的事）。
+    private static func parse(
+        data: Data,
+        artist: String
+    ) -> (release: ArtistLatestRelease?, results: Int, artistNames: String) {
         guard let raw = try? JSONSerialization.jsonObject(with: data),
               let root = raw as? [String: Any],
               let results = root["results"] as? [[String: Any]] else {
-            return nil
+            return (nil, 0, "-")
         }
 
         let wanted = normalized(artist)
         var newest: ArtistLatestRelease?
+        var seenArtists: [String] = []
 
         for item in results {
             guard let name = item["collectionName"] as? String, !name.isEmpty else { continue }
 
-            // 歌手对不上的一律不要（同名不同人是这里唯一的坑）。
             let artistName = item["artistName"] as? String ?? ""
+            if !artistName.isEmpty, !seenArtists.contains(artistName), seenArtists.count < 3 {
+                seenArtists.append(artistName)
+            }
+
+            // 歌手对不上的一律不要（同名不同人是这里唯一的坑）。
             let normalizedArtist = normalized(artistName)
-            guard !normalizedArtist.isEmpty, normalizedArtist.contains(wanted) || wanted.contains(normalizedArtist)
+            guard !normalizedArtist.isEmpty,
+                  normalizedArtist.contains(wanted) || wanted.contains(normalizedArtist)
             else { continue }
 
             let date = parseDate(item["releaseDate"] as? String)
@@ -210,7 +275,7 @@ enum ArtistLatestReleaseSource {
             }
         }
 
-        return newest
+        return (newest, results.count, seenArtists.isEmpty ? "-" : seenArtists.joined(separator: " | "))
     }
 
     /// `06/20/2025 07:00:00` —— iTunes 的固定格式（**不是**跟随地区的那一套）。

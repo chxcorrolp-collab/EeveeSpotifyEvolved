@@ -291,6 +291,7 @@ struct EeveeSettingsView: View {
                     }
                     // 分享的是**可分享的那一份**：`redactSharedLog` 开着时是假名化后的副本，
                     // 原文件一个字都不动（排查要用的真实曲目还留在本地）。
+                    // （那颗开关**2026-10-17 已搬进「调试」页** —— 默认"开"，见 `EeveeDebugSettingsView`。）
                     // 凭证/设备标识那一层不在这里 —— 它在写入口就生效了，见 `DebugLogSanitizer`。
                     //
                     // ⚠️ 脱敏版生成失败时**绝不回退到原文件**：那正好是"用户以为已经脱敏、
@@ -353,17 +354,12 @@ struct EeveeSettingsView: View {
             //   ⚠️ l10n 键（`dump_customize_body` / `dump_customize_body_description`）与
             //      `UserDefaults.dumpCustomizeBody` **都没变** ⇒ 设备上已设的值原样保留。
             
-            // 「分享日志前脱敏」：只影响**导出**这一份 → 见 `DebugLogSanitizer.redactForSharing`。
-            // 单独一个 Section（不塞进上面那个），因为上面那个的 footer 讲的是"要不要记日志"。
-            Section(footer: Text("redact_shared_log_description".localized)) {
-                Toggle(
-                    "redact_shared_log".localized,
-                    isOn: Binding<Bool>(
-                        get: { UserDefaults.redactSharedLog },
-                        set: { UserDefaults.redactSharedLog = $0 }
-                    )
-                )
-            }
+            // 「分享日志前脱敏」：**2026-10-17 用户要求搬进「调试」页**（与三个"转储"放到一条线上：
+            //   前面几个是"写进日志"，它是"发出去之前先假名化"）。它只影响**导出**的那一份
+            //   （见上面导出按钮里 `DebugLogSanitizer.sharedLogFile(from:redact:)`）。
+            //   ⚠️ l10n 键（`redact_shared_log` / `redact_shared_log_description`）与
+            //      `UserDefaults.redactSharedLog` **都没变**、默认仍是"开" ⇒ 设备上的值原样保留。
+            //   ⇒ 这里不再有那一节，别搬回来。
 
             Section(footer: Text("reset_data_description".localized)) {
                 Button {

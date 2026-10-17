@@ -1,17 +1,22 @@
 import SwiftUI
 import UIKit
 
+/// 「实验」页：只放**尚未真机定性**的功能（一律默认关，用户主动开）。
+///
+/// 准入三条（2026-10-17 与用户对齐）：
+///   ① 还没在真机上验证过效果；
+///   ② 依赖会变的外部契约（服务端 flag / 私有类 / 第三方 App）；
+///   ③ 改完要重启或清缓存才生效。
+/// 三条里占一条才进来。**行为早已定性、只是"依赖外部"的开关不属于这里** ——
+/// 「分享到 LiveContainer」因此于 2026-10-17 搬到「杂项设定」（见 `EeveeMiscellaneousSettingsView`）。
 struct EeveeExperimentsSettingsView: View {
     @State var experimentsOptions = UserDefaults.experimentsOptions
 
     var body: some View {
         List {
-            Section(footer: Text("livecontainer_sharing_description".localized)) {
-                Toggle(
-                    "livecontainer_sharing".localized,
-                    isOn: $experimentsOptions.liveContainerSharing
-                )
-            }
+            // （「分享到 LiveContainer」2026-10-17 搬到「杂项设定」。理由见文件头的准入三条：
+            //   它的行为早就定死了 —— 链接打不开就转给 LC、失败就把 URL 复制到剪贴板；
+            //   真正"没定性"的是 LC 那一侧的私有深链，不是这个开关。）
 
             // ★★ 2026-10-16：这个实验 2026-10-02 删过一次 —— 它当时挂的
             //    `SPTSharingSDK` / `SPTShare_FoundationImplProperties` 只在 Spotify 9.1.0 上存在。

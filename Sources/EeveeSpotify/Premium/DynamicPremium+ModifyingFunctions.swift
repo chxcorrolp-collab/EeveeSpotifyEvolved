@@ -795,7 +795,7 @@ private func modifyAssignedValues(_ values: inout [AssignedValue]) {
 
         // ★ 2026-10-17：新内容层的两条也跟同一个开关走（见 `propertyReplacements` 末尾）。
         if index < builtInReplacementCount,
-           replacement.name == lyricsMigrationFlagName || replacement.name == lyricsRefactorFlagName,
+           (replacement.name == lyricsMigrationFlagName || replacement.name == lyricsRefactorFlagName),
            !UserDefaults.hideSingalongLine {
             continue
         }

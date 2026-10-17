@@ -1373,6 +1373,15 @@ class NeteaseLyricsRepository: LyricsRepository {
                 + " — \(chosenArtists.isEmpty ? "?" : chosenArtists)"
                 + " \(chosenDuration)"
                 + " (ours: \(query.primaryArtist) \(spotifyDurationMs.map { "\($0)ms" } ?? "?"))"
+                // ★★ 2026-10-18：**把网易那首歌的 id 打出来**。
+                //
+                // 同一首歌在网易常有多个条目（原版 / 单曲版 / 某个署名不同的「同曲」），
+                // 而**它们的 yrc 质量差别极大** —— 现场实测「ただ声一つ」：
+                //   id=1905586708 → yrc 正文 377/381 字（完整）
+                //   id=1989044545 → yrc 正文 116/381 字（假名全丢、好几拍并成一个词）
+                // 没有 id 时，日志里 `Chosen[0]` 与 `Chosen[1]` 到底是谁**只能靠猜**
+                // （2026-10-11~17 的几份日志里那个 `?` 歌手就是同一个盲点）。
+                + " id=\(songId(from: chosen).map { "\($0)" } ?? "?")"
         )
 
         // 旧版这里还有一道"第一位时长不符就 noSuchSong"的闸门 —— 现在选歌本身已经要求
@@ -1488,33 +1497,43 @@ class NeteaseLyricsRepository: LyricsRepository {
                 var probeOrder: [Int] = []
                 for index in sameSong where !probeOrder.contains(index) { probeOrder.append(index) }
                 for index in siblings where !probeOrder.contains(index) { probeOrder.append(index) }
-                let probes = probeOrder.prefix(3)
+                let probes = probeOrder.prefix(4)
                 if !probes.isEmpty {
                     writeDebugLog(
                         "[NetEase] no usable yrc for candidate[\(chosenIndex)] — probing"
                             + " \(probes.count) sibling candidate(s)"
                     )
                 }
+                // ★★ 2026-10-18：**取正文最全的那一份**，而不是"第一条合格的"。
+                //    同一首歌的多个条目里，yrc 可能是"残的 / 更残的 / 完整的"三种同时存在
+                //    （实测「ただ声一つ」：116 字 / 377 字两档），先探到哪一条不代表它最好。
+                var best: (lines: [(offsetMs: Int, content: String, words: [LyricsWordDto])],
+                           ytlrc: String?,
+                           chars: Int)?
                 for index in probes {
                     guard let otherSongID = songId(from: songs[index]) else { continue }
                     guard let probe = try? fetchYrcRaw(songId: otherSongID) else { continue }
                     let parsed = probe.yrc.map { parseYrc($0) } ?? []
                     let usable = yrcCoversTheLrc(parsed)
+                    let chars = parsed.map(\.content).joined().count
                     writeDebugLog(
                         "[NetEase] yrc probe — candidate[\(index)]"
-                            + " \(songs[index]["name"] as? String ?? "?") →"
+                            + " \(songs[index]["name"] as? String ?? "?")"
+                            + " id=\(otherSongID) →"
                             + (parsed.isEmpty
                                 ? " absent"
-                                : " \(parsed.count) line(s), \(parsed.map(\.content).joined().count)"
-                                    + " char(s), \(usable ? "usable" : "truncated")")
+                                : " \(parsed.count) line(s), \(chars) char(s),"
+                                    + " \(usable ? "usable" : "truncated")")
                     )
-                    if usable {
-                        yrcParsed = parsed
-                        // ytlrc 必须与**采用的那一份** yrc 配对（两边的行 offset 是一套）。
-                        ytlrcText = probe.ytlrc
-                        writeDebugLog("[NetEase] adopted the yrc of candidate[\(index)]")
-                        break
+                    if usable, chars > (best?.chars ?? 0) {
+                        best = (parsed, probe.ytlrc, chars)
                     }
+                }
+                if let best {
+                    yrcParsed = best.lines
+                    // ytlrc 必须与**采用的那一份** yrc 配对（两边的行 offset 是一套）。
+                    ytlrcText = best.ytlrc
+                    writeDebugLog("[NetEase] adopted the richest yrc — \(best.chars) char(s)")
                 }
             }
 

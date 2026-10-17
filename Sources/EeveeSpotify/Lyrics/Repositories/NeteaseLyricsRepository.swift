@@ -684,6 +684,28 @@ class NeteaseLyricsRepository: LyricsRepository {
             parsed.append((offsetMs: startMs, content: content, words: words))
         }
 
+        // ★★ 2026-10-17（用户：网易云逐词**时间轴错乱 / 字数错误**，且"今天或昨天才出现"）：
+        //
+        // 现在判不了，因为唯一能看到结构的那一行 `[NetEase] yrc raw head:` **被脱敏器整段藏掉了**
+        // （里面是歌词正文）。⇒ 这里只打**数字**，一个歌词字都不带：
+        //   · `offset` = 行头起点；`words` = 这一行几个词；
+        //   · `monotonic` = 词起点是否单调不减（不是 ⇒ 时间轴必然乱跳）；
+        //   · `beforeLine` = 有多少词起点**早于行头**（>0 ⇒ 网易给的是"行内相对时间"，
+        //     而我们当绝对时间用了 —— 那正好会让整行的高亮挤在行首、后面不动）；
+        //   · `head` = 前三个词的 `start-end` 毫秒。
+        if let first = parsed.first {
+            let starts = first.words.map(\.startMs)
+            let monotonic = zip(starts, starts.dropFirst()).allSatisfy { $0 <= $1 }
+            let beforeLine = starts.filter { $0 < first.offsetMs }.count
+            let head = first.words.prefix(3)
+                .map { "\($0.startMs)-\($0.endMs ?? -1)" }
+                .joined(separator: ",")
+            writeDebugLog(
+                "[NetEase] yrc shape — line0 offset=\(first.offsetMs) words=\(first.words.count)"
+                    + " monotonic=\(monotonic) beforeLine=\(beforeLine) head=\(head)"
+            )
+        }
+
         writeDebugLog("[NetEase] yrc parsed \(parsed.count) line(s)")
         return parsed
     }

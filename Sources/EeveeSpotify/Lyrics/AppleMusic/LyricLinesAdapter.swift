@@ -290,6 +290,19 @@ extension LyricsDto {
 
     /// 词级时间轴 → 音节数组。
     ///
+    /// 一行里"音节拼起来 ≠ 行文本"只报**一次**，而且**只报字数、不写歌词内容**
+    /// （隐私与日志体积；真正要判断的也只是"长度差多少"）。
+    private static var didLogSyllableMismatch = false
+
+    private static func logSyllableMismatch(joined: String, content: String) {
+        guard !didLogSyllableMismatch else { return }
+        didLogSyllableMismatch = true
+        writeDebugLog(
+            "[Lyrics] syllables do not tile the line — joined \(joined.count) char(s) vs"
+                + " line \(content.count) char(s); that line falls back to line-synced"
+        )
+    }
+
     /// 只用**首尾都拿得到**的词构建：`endMs` 缺失的词会借用「下一个词的 startMs」，
     /// 借不到（末词）就用行时长兜底；两者都没有时返回空数组，
     /// 让调用方退回 `.lineSynchronized`（宁可整行同步，也不要编造时间轴）。
@@ -300,10 +313,39 @@ extension LyricsDto {
     ) -> [LyricSyllable] {
         guard let words = line.words, !words.isEmpty else { return [] }
 
-        var result: [LyricSyllable] = []
-        result.reserveCapacity(words.count)
+        // ★★ 2026-10-17（用户：网易云**逐词时间轴错乱 / 字数错误** —— 这条的根因）：
+        //
+        // 渲染层是按"**音节文本拼起来 = 这一行的文本**"来算每个词的字符区间的
+        // （`TimedLyricTextBuilder` 用 `syllables.map(\.text).joined()`，见下面 :309 那段注释）。
+        // 而 `romanizedForWordByWordIfEnabled()` 对**行文本**与**词文本**用的是**两套算法**：
+        //   · 行 = `romanize(整行).capitalizingFirstLetterIfAlphabetic()`（LyricsDto:612-613）；
+        //   · 词 = 逐词罗马化，而且**每个词前插一个空格**（LyricsDto:631-635）；
+        //     日文还走 `japaneseWordRomaji` 的 chunk 对齐（对齐失败才回退逐词）。
+        // 两边只要有一处不等（空格 / 大小写 / chunk 边界），字符区间就和文本错位
+        // ⇒ 用户看到的就是"字数不对、高亮前沿乱跑"。
+        //
+        // 处置分两级：
+        //   ① **只差大小写**（最确定的那一类：`capitalizingFirstLetterIfAlphabetic` 只改行文本）
+        //      ⇒ 把首词改成行首那几个字，词级时间轴原样保留；
+        //   ② 其余对不上的 ⇒ **这一行退回行级**。行级至少是对的，错的逐字比没有逐字更糟。
+        var kept = words
+        let joined = kept.reduce(into: "") { $0 += $1.text }
+        if joined != line.content {
+            if joined.caseInsensitiveCompare(line.content) == .orderedSame,
+               let head = kept.first,
+               head.text.count > 0 {
+                let capitalized = String(line.content.prefix(head.text.count))
+                kept[0] = LyricsWordDto(text: capitalized, startMs: head.startMs, endMs: head.endMs)
+            } else {
+                logSyllableMismatch(joined: joined, content: line.content)
+                return []
+            }
+        }
 
-        for (index, word) in words.enumerated() {
+        var result: [LyricSyllable] = []
+        result.reserveCapacity(kept.count)
+
+        for (index, word) in kept.enumerated() {
             // ⚠️ 这里**不能**跳过纯空白 token。
             //
             // 音节列表会被渲染层拼回行文本（`TimedLyricTextBuilder` 用
@@ -318,8 +360,8 @@ extension LyricsDto {
             let wordEnd: TimeInterval?
             if let endMs = word.endMs {
                 wordEnd = TimeInterval(endMs) / 1000
-            } else if index + 1 < words.count {
-                wordEnd = TimeInterval(words[index + 1].startMs) / 1000
+            } else if index + 1 < kept.count {
+                wordEnd = TimeInterval(kept[index + 1].startMs) / 1000
             } else {
                 wordEnd = nextStartTime
             }

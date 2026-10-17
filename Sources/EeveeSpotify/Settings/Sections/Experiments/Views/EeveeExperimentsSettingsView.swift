@@ -10,12 +10,9 @@ import UIKit
 /// 三条里占一条才进来。**行为早已定性、只是"依赖外部"的开关不属于这里** ——
 /// 「分享到 LiveContainer」因此于 2026-10-17 搬到「杂项设定」（见 `EeveeMiscellaneousSettingsView`）。
 ///
-/// ⚠️ **"默认关"有一个已记录的例外**：「NetEase 交叉验证」（2026-10-17）。
-///    它是**给非中国大陆 IP 的用户兜错歌**的，而"要不要它"取决于出口 IP 而不是
-///    用户看不看这一页 —— 默认关等于让唯一需要它的人永远发现不了它。
-///    默认值改成"地区或时区任一指向非中国大陆就默认开"，理由与代价权衡见
-///    `ExperimentsOptions.defaultNeteaseCrossValidation` 上方那段。
-///    其余实验仍然一律默认关，这条例外不外扩。
+/// ⚠️ 2026-10-17 更新：「NetEase 交叉验证」曾经是"默认关"的**唯一例外**（按地区/时区
+///    猜要不要开）；**用户当天拍板改成一律默认关** ⇒ 这一页现在**没有例外**。
+///    理由与代价见 `ExperimentsOptions.defaultNeteaseCrossValidation` 上方那段。
 struct EeveeExperimentsSettingsView: View {
     @State var experimentsOptions = UserDefaults.experimentsOptions
 

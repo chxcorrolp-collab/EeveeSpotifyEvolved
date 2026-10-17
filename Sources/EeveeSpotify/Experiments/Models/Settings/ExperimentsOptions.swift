@@ -84,44 +84,19 @@ struct ExperimentsOptions: Codable, Equatable {
 
     // MARK: - 「NetEase 交叉验证」的默认值
 
-    /// **只在"地区 + 时区都指向中国大陆"时默认关，其余一律默认开。**
+    /// ★★★ 2026-10-17（用户拍板）：「把 实验 里面的那个 ne 的设置**改成默认关闭**」。
     ///
-    /// 为什么这样定（2026-10-17 与用户对齐）：
+    /// 下面那段 2026-10-17 早先的权衡（"明确在大陆才默认关"）**作废** —— 用户是这套东西的
+    /// 唯一真机用户，他明确要求默认关，那就默认关，不再按地区/时区猜。
     ///
-    /// 1. **真正的因果变量是出口 IP**，不是时区、也不是语言 —— 网易的排序是它服务端按
-    ///    请求来源判的。设备上的地区/时区只是**代理信号**，两者都可能与真实 IP 错配
-    ///    （中国用户挂着亚洲时区在国外；外国用户在上海用英文界面）。任何代理都会误判，
-    ///    所以规则的目标不是"判准"，而是"**让误判落在便宜的那一侧**"。
+    /// 为什么听用户的也对：那套代理信号有两个代价是他在真机上真付了的 ——
+    /// ① 交叉验证会**多打 1~3 次裁判请求**，正好压在他抱怨的"播放页反应慢"上；
+    /// ② 它换候选时会把**带 yrc 的那条**换成没 yrc 的，于是"逐词退化成逐行"
+    ///    （日志 112 里 `独白` 那种现场）。
     ///
-    /// 2. **代价不对称**：默认开 ⇒ 误报的代价是"低置信度歌曲多 1~3 次裁判请求"（只是延迟）；
-    ///    默认关 ⇒ 漏报的代价是"用户继续看到别人的歌词"（内容错）。**内容错比延迟严重。**
-    ///    所以只要不是"明确在大陆"，就偏向开。
-    ///
-    /// 3. **时区比地区更接近"人在哪"**：地区（`Locale.regionCode`）是用户在设置里**手选**
-    ///    的区域格式偏好，换手机时会沿用旧值；时区通常是系统跟着定位/运营商自动走的。
-    ///    因此两者**同时**指向大陆才算"明确在大陆"。留学生把地区留成 CN、时区被系统改成
-    ///    当地 ⇒ 这里判"开"，正好是需要保护的那批人。
-    ///
-    /// 4. 这个默认值**只在首次写入时算一次**（跟着 `decodeIfPresent ?? …` 的既有约定），
-    ///    之后一直听用户的；不随旅行自动翻转 —— 一个会自己变的开关比一个定错值的开关更难查。
+    /// 想开的人自己去「实验」页打开；默认值只在**首次写入**时算一次（`decodeIfPresent ??`），
+    /// 之后一直听用户的。
     static var defaultNeteaseCrossValidation: Bool {
-        // 用 `region?.identifier`（iOS 16+）而不是 `regionCode`：后者在 16 起被标了弃用。
-        // 本仓的 iOS 底线是 16.1（见 `Makefile` / `control` / 三处 `cyan -m 16.1`）。
-        let isMainlandRegion = Locale.current.region?.identifier == "CN"
-        let isMainlandTimeZone = mainlandTimeZoneIdentifiers.contains(TimeZone.current.identifier)
-        return !(isMainlandRegion && isMainlandTimeZone)
+        false
     }
-
-    /// 中国大陆时区（含历史别名/拼法）。只用于上面那个"明确在大陆"的判断。
-    private static let mainlandTimeZoneIdentifiers: Set<String> = [
-        "Asia/Shanghai",   // 标准名（历史别名 PRC / ROC 在某些系统上也指它）
-        "Asia/Chongqing",
-        "Asia/Chungking",
-        "Asia/Harbin",
-        "Asia/Urumqi",
-        "Asia/Kashgar",
-        "Asia/Beijing",
-        "PRC",
-        "ROC",
-    ]
 }

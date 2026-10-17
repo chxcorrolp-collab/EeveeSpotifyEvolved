@@ -3278,10 +3278,15 @@ enum NowPlayingLyricsPlate {
     private static func removeCreditLabel() {
         // ⚠️ 用记下来的那个 `label` 摘，**不查 `lastPage`** —— 离页时 `lastPage` 可能已经换了人，
         //   查它会留下一条挂在上一页上的孤儿署名。
-        lastCreditLabel?.removeFromSuperview()
+        //
+        // ⚠️ 2026-10-17：清关联对象必须**在 `removeFromSuperview()` 之前**。那一下会把
+        //   `label.superview` 置成 nil ⇒ 之后 `if let page = label.superview` 永远不成立 ⇒
+        //   关联对象一直挂在 page 上，**页面永远强引用那条已经下屏的 label**（把
+        //   `lastCreditLabel` 置 nil 也没用，那是另一条弱引用）。
         if let label = lastCreditLabel, let page = label.superview {
             objc_setAssociatedObject(page, &creditLabelKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         }
+        lastCreditLabel?.removeFromSuperview()
         lastCreditLabel = nil
     }
 

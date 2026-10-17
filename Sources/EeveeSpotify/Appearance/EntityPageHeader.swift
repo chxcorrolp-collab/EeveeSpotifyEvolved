@@ -1017,6 +1017,61 @@ func eeveeFireSubControlAction(in root: UIView) -> String? {
     return nil
 }
 
+/// **pw 的 `SGRActivate` / `SGRFire` 逐行移植**（`Redesigned/Kit/SGRRestyle.m`）。
+///
+/// 用户 2026-10-17：「这三个点这部分能不能**直接抄 pw 的**」—— 能，而且本来就该抄：
+/// 他们已经把"点一颗 Spotify 自己的按钮"这件事收敛成了两条规则，我们这边却是一长串
+/// 自己发明的档位（手势 `_targets` 读不到、无障碍返回 false、子控件没 target…）。
+///
+/// pw 的做法（注释逐字）：
+/// > the first control under it, through the actions it registered, and through accessibility
+/// > for an Encore control that reads its touches from a gesture recognizer instead.
+///
+///  ① 在子树里找**第一颗 `UIControl`**（含自身）；
+///  ② 看它注册了哪些事件：**`primaryActionTriggered` 优先，其次 `touchUpInside`**，
+///     两个都没有就**什么都不发**（`SGRFire` 返回 NO）；
+///  ③ ②没发出去 ⇒ `accessibilityActivate()`（Encore 那一族很多就把"点一下"实现成它）。
+///
+/// 与 `eeveeFire` 的分工：`eeveeFire` 那串档位保留作**兜底**（手势 / 祖先 / cell 选中），
+/// 而**先**走这一个 —— 它才是 pw 在真机上验证过的那条。
+///
+/// - Returns: 走了哪一档（只进日志）。
+@discardableResult
+func eeveeActivate(_ source: UIView?) -> String? {
+    guard let source else { return nil }
+
+    // ① 子树里第一颗 UIControl（含自身）。
+    var control: UIControl?
+    var queue: [UIView] = [source]
+    var visited = 0
+    while !queue.isEmpty, visited < 120 {
+        let view = queue.removeFirst()
+        visited += 1
+        if let found = view as? UIControl {
+            control = found
+            break
+        }
+        queue.append(contentsOf: view.subviews)
+    }
+
+    // ② pw 的 `SGRFire`：primary action → touch up inside → 什么都不发。
+    if let control {
+        let events: [(UIControl.Event, String)] = [
+            (.primaryActionTriggered, "primaryActionTriggered"),
+            (.touchUpInside, "touchUpInside"),
+        ]
+        for (event, label) in events where eeveeHasTargets(control, event) {
+            control.sendActions(for: event)
+            return "activate.\(label)(\(NSStringFromClass(type(of: control))))"
+        }
+    }
+
+    // ③ 无障碍那一条（pw：`[target accessibilityActivate]`，target = control ?: source）。
+    let target: UIView = control ?? source
+    let activated = target.accessibilityActivate()
+    return "activate.accessibility(\(activated))"
+}
+
 /// 只进日志：一颗控件到底"为什么点不动"——target/action、手势、`UIMenu`、子控件各有哪些。
 ///
 /// ★★ 2026-10-18（用户：「右上角的三个点的按钮点击无反应」）：上一版已经跳过 `sendActions`

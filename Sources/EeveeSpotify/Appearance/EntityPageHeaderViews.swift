@@ -212,17 +212,37 @@ final class EntityPageHeaderButton: UIControl {
                 "[EntityPageHeader] ⋯ clickability — \(eeveeDescribeClickability(target ?? source))"
             )
         }
-        // ★ 2026-10-16：三档都带 `skippingControlAction` —— 右上角那颗 `⋯` 靠它跳过"送 target/action"
-        //   那一档（Spotify 的 `⋯` 不吃 `sendActions`，见 `skipsControlAction` 的说明）。
+        // ★★ 2026-10-17（用户：「这三个点这部分能不能**直接抄 pw 的**」）：
+        //    `⋯` 现在**只走 pw 那条** —— `eeveeActivate` 是 `SGRActivate` / `SGRFire` 的逐行移植
+        //    （子树里第一颗 `UIControl` → `primaryActionTriggered` → `touchUpInside` → 无障碍）。
+        //    它只要发出过任何一个**控制事件**就算这一档用掉了：**不再叠**我们自己那串档位，
+        //    否则一次点击会变成两次；只有它连事件都没发（只拿到 `activate.accessibility(false)`）时，
+        //    才退回 `eeveeFire` / `eeveeFireWide` 那串兜底（手势 / 祖先 / cell 选中）。
+        //
+        //    为什么不再用"跳过 target/action"那条（`skipsControlAction`）：日志 109 逐字
+        //    `targets=[touchUpInside=…]` 而 `fired: NOTHING` —— 是我们跳过了唯一有注册的那一档。
+        // ★ 2026-10-16：其余按钮仍走老三档（play / shuffle / follow 本来就通，不冒险改）。
         var path = target == nil
             ? "NOTHING (no target at all — this button has no source)"
             : "NOTHING (the target has no action and no tap recogniser)"
         if let target {
             if scrollsSourceIntoView { scrolled = eeveeScrollIntoView(target) }
-            // ★★ 2026-10-18：那颗 `i` 走"宽转发"（祖先链上的 tap + cell 的选中回调），见 `eeveeFireWide`。
-            path = (firesDeep
-                ? eeveeFireWide(target, skippingControlAction: skipsControlAction)
-                : eeveeFire(target, skippingControlAction: skipsControlAction)) ?? path
+
+            if role == "more", let pw = eeveeActivate(target) {
+                path = pw
+                let sentControlEvent = pw.hasPrefix("activate.primaryActionTriggered")
+                    || pw.hasPrefix("activate.touchUpInside")
+                if !sentControlEvent {
+                    path = (firesDeep
+                        ? eeveeFireWide(target, skippingControlAction: true)
+                        : eeveeFire(target, skippingControlAction: true)) ?? path
+                }
+            } else {
+                // ★★ 2026-10-18：那颗 `i` 走"宽转发"（祖先链上的 tap + cell 的选中回调），见 `eeveeFireWide`。
+                path = (firesDeep
+                    ? eeveeFireWide(target, skippingControlAction: skipsControlAction)
+                    : eeveeFire(target, skippingControlAction: skipsControlAction)) ?? path
+            }
         } else if scrollsSourceIntoView {
             // 目标那一段还没建出来（懒加载）⇒ 把页面往下滚一屏让它出现，**不转发**。
             scrolled = eeveeScrollPageDown(from: self)

@@ -257,6 +257,8 @@ enum EntityPageAppearance {
     private static var didReportContainerClear = false
     /// "藏掉了页头那层 wash"只报一次（见 `concealAlbumWash`）。
     private static var didReportAlbumWash = false
+    /// "这一页有哪些色层"也只报一次 —— 按**页**记（换页要重新出清单）。
+    private static weak var washProbePage: UIView?
     private static var lastLoggedHex: String?
 
     // MARK: - 入口
@@ -1282,6 +1284,14 @@ enum EntityPageAppearance {
         let widthFloor = pageWidth * 0.85
         let bottomCeiling = pageHeight * 0.8
 
+        // ★ 2026-10-17：**每页一次**的"这层色到底是谁画的"清单 —— 只按类名认
+        //（Gradient / Blur / Backdrop / Wash / Scrim），不管它过不过几何判据。
+        // 上一次只知道"藏了 1 块"，结果用户照样看见那层粉 ⇒ 下一份日志要能回答"还有谁"。
+        // 一行都找不到时会明写"不是 Gradient/Blur 视图"——那就说明那层色其实是我们的 field。
+        let probe = washProbePage !== page
+        if probe { washProbePage = page }
+        var probeLines: [String] = []
+
         var queue: [(view: UIView, insideHeader: Bool, depth: Int)] = page.subviews.map { ($0, false, 1) }
         var visited = 0
         var taken = 0
@@ -1293,6 +1303,22 @@ enum EntityPageAppearance {
 
             let name = NSStringFromClass(type(of: view))
             let identifier = view.accessibilityIdentifier ?? ""
+
+            if probe, probeLines.count < 4 {
+                let looksLikeWash = ["Gradient", "Blur", "Backdrop", "Wash", "Scrim"]
+                    .contains { name.contains($0) }
+                if looksLikeWash {
+                    let frame = view.convert(view.bounds, to: page)
+                    if frame.maxY > 1, frame.minY < bottomCeiling {
+                        let parent = String(describing: type(of: view.superview ?? view))
+                        probeLines.append(
+                            "\(name) \(frameDescription(frame))"
+                                + " id=\(identifier.isEmpty ? "-" : identifier) parent=\(parent)"
+                        )
+                    }
+                }
+            }
+
             // ① 页头：类名带 HeaderView，**或者 id 带 Header**（`CreativeWorkHeader` / `PL.Header`）。
             let isHeaderRoot = (name.contains("HeaderView") && !name.contains("NavigationBar"))
                 || (identifier.contains("Header") && !identifier.contains("NavigationBar"))
@@ -1326,6 +1352,19 @@ enum EntityPageAppearance {
 
             guard depth < 12 else { continue }
             queue.append(contentsOf: view.subviews.map { ($0, inHeader, depth + 1) })
+        }
+
+        // ★ 2026-10-17：这一页的"色层清单"（每页一次，见上面的 `probe`）。
+        if probe {
+            if probeLines.isEmpty {
+                writeDebugLog(
+                    "[\(logTag)] wash probe — no Gradient/Blur/Backdrop view in the top 80% of this"
+                        + " page; the colour band there is not one of those (look at our own field)"
+                )
+            } else {
+                let list = probeLines.joined(separator: " ;; ")
+                writeDebugLog("[\(logTag)] wash probe — \(list)")
+            }
         }
 
         guard taken > 0, !didReportAlbumWash else { return }

@@ -387,13 +387,77 @@ def main(argv: list[str]) -> int:
     candidate_names -= SWIFT_KEYWORDS
     candidate_names -= {"newValue", "oldValue"}   # 隐式 setter 参数，不是常量
     #
+    # ③0 ★ 2026-10-17：**多文件 extension 要算作用域**（把大类型拆成 `+Xxx.swift` 之后必须懂）。
+    #
+    # 一个类型被拆到多个文件后，**extension 里裸引用本类型的成员是合法的**：
+    # `extension NowPlayingLyricsPlate { … maxNodes … }` 里的 `maxNodes` 解析到那个 enum 的
+    # `static let maxNodes`（声明在主文件里，跨文件合法）。规则 ③ 原先只看"别的文件里有没有
+    # 同名 private"，于是把这种写法整片误报（拆完播放器那层当场 7 条）。
+    #
+    # 只加"能判准"的那一半：本文件**声明或 extension 了**某个类型，而那个类型在**全仓库**有
+    # 一个**非 private** 的同名成员 ⇒ 裸引用必然解析得到 ⇒ 跳过。
+    # 真错不受影响：`DeclutterChrome` 里的 `maxNodes` 照旧报 —— 它既没声明也没 extension
+    # `NowPlayingLyricsPlate`，那个 internal 成员不在它的作用域里（2026-10-11 那条实证仍是红的）。
+    #
+    # 成员识别走缩进（本仓库统一 4 空格）：顶层 `class/struct/enum/actor/extension X {` 之后、
+    # **恰好一级缩进**的 `var/let/func/…` 就是 X 的成员；再深一层的是嵌套类型的成员，不算。
+    # 宁可漏（漏了只是继续按严格判），不会凭空放过：跳过只发生在"名字确实是该文件所声明 /
+    # 所扩展类型的非 private 成员"时。
+    TOP_SCOPE_RE = re.compile(
+        r"^(?:@\w+(?:\([^)]*\))?\s*)*"
+        r"(?:(?:public|internal|private|fileprivate|open|final|indirect)\s+)*"
+        r"(class|struct|enum|actor|extension)\s+([A-Za-z_][A-Za-z0-9_]*)[^\n]*\{\s*$"
+    )
+    MEMBER_RE = re.compile(
+        r"^[ \t]+(?P<prefix>(?:(?:@\w+(?:\([^)]*\))?|public|internal|private|fileprivate|"
+        r"open|final|static|class|override|mutating|lazy|weak|unowned|convenience|required)\s+)*)"
+        r"(?P<kind>var|let|func|subscript|typealias|struct|enum|class|actor)\s+"
+        r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+    )
+    internal_members_by_type: dict[str, set[str]] = {}
+    file_scopes: dict[Path, set[str]] = {}
+    for f, src in per_file_src.items():
+        current_type: str | None = None
+        scopes: set[str] = set()
+        for line in src.split("\n"):
+            scope = TOP_SCOPE_RE.match(line)
+            if scope:
+                current_type = scope.group(2)
+                scopes.add(current_type)
+                continue
+            if line.startswith("}"):
+                current_type = None
+                continue
+            if current_type is None:
+                continue
+            member = MEMBER_RE.match(line)
+            if not member:
+                continue
+            indent = line[:len(line) - len(line.lstrip())]
+            if indent not in ("    ", "\t"):
+                continue          # 8 空格 / 两级以上 = 嵌套类型的成员
+            prefix = member.group("prefix")
+            if "private" in prefix or "fileprivate" in prefix:
+                continue
+            internal_members_by_type.setdefault(current_type, set()).add(member.group("name"))
+        file_scopes[f] = scopes
+
+    resolvable_by_file: dict[Path, set[str]] = {}
+    for f, scopes in file_scopes.items():
+        names: set[str] = set()
+        for t in scopes:
+            names |= internal_members_by_type.get(t, set())
+        resolvable_by_file[f] = names
+
+    #
     # ⚠️ 性能：第一版是"每个候选名 × 每个文件"都跑几条全文件正则 —— 仓库里有上千个
     #    private 名字、三百多个文件 ⇒ 上百万次扫描，**脚本直接跑不完**（2026-10-11 实测）。
     #    改成：每个文件先做**一次**标识符扫描，取交集；再为这个文件拼**一条** alternation
     #    正则扫一遍。
     for f, src in per_file_src.items():
         present = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", src))
-        suspects = sorted((candidate_names & present) - private_names_by_file[f])
+        suspects = sorted((candidate_names & present) - private_names_by_file[f]
+                          - resolvable_by_file.get(f, set()))
         if not suspects:
             continue
 

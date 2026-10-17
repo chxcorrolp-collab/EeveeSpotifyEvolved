@@ -1214,6 +1214,36 @@ class NeteaseLyricsRepository: LyricsRepository {
             "[NetEase] candidate order — \(titleAndDurationOK.count) title + duration match(es)"
                 + " in relevance order (rolled back to last week's rule)"
         )
+        // ★★ 2026-10-18（用户：「网易云还有返回错误歌词的情况（正常来讲即使是模糊搜索，
+        //    最后结果也应该是对的）」）：**翻唱 / 伴奏那一类条目排到最后**。
+        //
+        // 现场（日志 333）：Kotone 那首选成了
+        //   `だれかの心臓になれたなら（翻自 GUMI） — 水野あかり`
+        // —— 标题闸门用的是 `contains`（两个方向），而翻唱版的名字**包含**我们的标题
+        // ⇒ 照样过闸门。⇒ 名字里带这些标记的一律排到"普通条目"之后。
+        // **不丢掉**：整个搜索里只有翻唱时，有词的翻唱也比"没有歌词"强。
+        let variantMarkers = [
+            "翻自", "翻唱", "cover", "カバー", "伴奏", "off vocal", "inst.",
+            "女声版", "男声版", "合唱版", "钢琴版", "抖音",
+        ]
+        func isVariant(_ song: [String: Any]) -> Bool {
+            candidateTitles(song).contains { title in
+                let lowered = title.lowercased()
+                return variantMarkers.contains { lowered.contains($0) }
+            }
+        }
+        var variantIndices: [Int] = []
+        var plainIndices: [Int] = []
+        for index in titleAndDurationOK {
+            if isVariant(songs[index]) { variantIndices.append(index) } else { plainIndices.append(index) }
+        }
+        if !variantIndices.isEmpty {
+            orderedCandidateIndices = plainIndices + variantIndices
+            writeDebugLog(
+                "[NetEase] \(variantIndices.count) cover/karaoke candidate(s) moved to the end —"
+                    + " index \(variantIndices)"
+            )
+        }
         // ★★ 2026-10-18：第三档（歌手 + 时长，跨书写系统）排在"只有标题+时长对上"之前，
         //    理由见 `closeDurationCandidates` 的说明。
         if !closeDurationCandidates.isEmpty {
@@ -1477,6 +1507,22 @@ class NeteaseLyricsRepository: LyricsRepository {
             //   · 覆盖率 = yrc 正文总字数 ÷ lrc 正文总字数，< 90% 当残；
             //   · 残了就跟"没有 yrc"一样：把 yrc 丢掉（先保证**正文正确**，走行级），
             //     再向同歌其它候选各要一次（最多 3 条，同曲优先）。
+            // ★★★ 2026-10-18（用户这一轮补的两条现场，其实是**同一个原因**）：
+            //
+            //   「ただ声一つ 本身的歌词也不对。ただ这种日语全不见了，只剩下了中文字符，
+            //     还有不知道从哪来的错误中文字符」+「歌词翻译全丢」
+            //
+            // 就是那条**残 yrc** 干的两件事（公开接口实测，同一首歌两个条目）：
+            //
+            //   id=1989044545（残）
+            //     yrc : 続時間欠片集 / 過余白書 / **答?** / 小感情 / 愛 / 夜咲温度灯   ← 假名全丢 + 怪字符
+            //     ytlrc: **只有 4 行**（对 35 行主歌词）                              ← 翻译全丢
+            //   id=1905586708（完整）
+            //     yrc : 続く時間の欠片 / を集めているただ / 過ぎるノートの余白に書く / 「答えは、いつ？」
+            //     ytlrc: **32 行**
+            //
+            // ⇒ 判据从"只有 yrc 残"扩成"**yrc 残 或 译文稀**"。译文稀 = 行级 tlyric 明明有，
+            //    而 ytlrc 的译行数不到主歌词行数的一半。
             let lrcBody = parseLrc(lrc).map(\.content).joined()
 
             func yrcCoversTheLrc(
@@ -1489,11 +1535,41 @@ class NeteaseLyricsRepository: LyricsRepository {
                 return body.count >= Int(Double(lrcBody.count) * 0.9)
             }
 
-            if preferWordByWord, !yrcParsed.isEmpty, !yrcCoversTheLrc(yrcParsed) {
+            /// 译文稀不稀（只有行级 tlyric 存在时才判 —— 网易压根没给翻译就没什么可比）。
+            func translationIsSparse(lineCount: Int, ytlrc: String?) -> Bool {
+                guard lineCount >= 8 else { return false }
+                guard let tlyric = raw.tlyric,
+                      !tlyric.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else { return false }
+                guard let ytlrc else { return true }
+                let translated = parseLrc(ytlrc).filter { !$0.content.isEmpty }.count
+                return translated < lineCount / 2
+            }
+
+            let yrcTruncated = !yrcParsed.isEmpty && !yrcCoversTheLrc(yrcParsed)
+            let ytlrcSparse = !yrcParsed.isEmpty
+                && translationIsSparse(lineCount: yrcParsed.count, ytlrc: ytlrcText)
+            // 只是译文稀、yrc 本身是好的 ⇒ 先把这一对留着：探不到更好的就还用它。
+            var keptPair: (lines: [(offsetMs: Int, content: String, words: [LyricsWordDto])],
+                           ytlrc: String?,
+                           chars: Int,
+                           translated: Int)?
+            if ytlrcSparse, !yrcTruncated {
+                keptPair = (
+                    yrcParsed,
+                    ytlrcText,
+                    yrcParsed.map(\.content).joined().count,
+                    ytlrcText.map { parseLrc($0).filter { !$0.content.isEmpty }.count } ?? 0
+                )
+            }
+
+            if preferWordByWord, yrcTruncated || ytlrcSparse {
+                let yrcChars = yrcParsed.map(\.content).joined().count
+                let translated = ytlrcText.map { parseLrc($0).filter { !$0.content.isEmpty }.count } ?? 0
                 writeDebugLog(
-                    "[NetEase] yrc looks truncated for candidate[\(chosenIndex)] —"
-                        + " \(yrcParsed.map(\.content).joined().count) char(s) vs lrc \(lrcBody.count)"
-                        + " char(s); dropping it and probing siblings"
+                    "[NetEase] the yrc/ytlrc pair of candidate[\(chosenIndex)] is not good enough —"
+                        + " yrc \(yrcChars)/\(lrcBody.count) char(s),"
+                        + " translation \(translated)/\(yrcParsed.count) line(s); probing siblings"
                 )
                 yrcParsed = []
                 ytlrcText = nil
@@ -1526,18 +1602,22 @@ class NeteaseLyricsRepository: LyricsRepository {
                             + " \(probes.count) sibling candidate(s)"
                     )
                 }
-                // ★★ 2026-10-18：**取正文最全的那一份**，而不是"第一条合格的"。
+                // ★★ 2026-10-18：**取"yrc 最全 + 译文最全"的那一份**，而不是"第一条合格的"。
                 //    同一首歌的多个条目里，yrc 可能是"残的 / 更残的 / 完整的"三种同时存在
-                //    （实测「ただ声一つ」：116 字 / 377 字两档），先探到哪一条不代表它最好。
+                //    （实测「ただ声一つ」：116 字 + 4 行译文 / 377 字 + 32 行译文），
+                //    先探到哪一条不代表它最好；而且**只按字数挑会漏掉译文**（用户报的"翻译全丢"）。
                 var best: (lines: [(offsetMs: Int, content: String, words: [LyricsWordDto])],
                            ytlrc: String?,
-                           chars: Int)?
+                           chars: Int,
+                           translated: Int)?
                 for index in probes {
                     guard let otherSongID = songId(from: songs[index]) else { continue }
                     guard let probe = try? fetchYrcRaw(songId: otherSongID) else { continue }
                     let parsed = probe.yrc.map { parseYrc($0) } ?? []
                     let usable = yrcCoversTheLrc(parsed)
                     let chars = parsed.map(\.content).joined().count
+                    let translated = probe.ytlrc
+                        .map { parseLrc($0).filter { !$0.content.isEmpty }.count } ?? 0
                     writeDebugLog(
                         "[NetEase] yrc probe — candidate[\(index)]"
                             + " \(songs[index]["name"] as? String ?? "?")"
@@ -1545,17 +1625,31 @@ class NeteaseLyricsRepository: LyricsRepository {
                             + (parsed.isEmpty
                                 ? " absent"
                                 : " \(parsed.count) line(s), \(chars) char(s),"
+                                    + " \(translated) translated,"
                                     + " \(usable ? "usable" : "truncated")")
                     )
-                    if usable, chars > (best?.chars ?? 0) {
-                        best = (parsed, probe.ytlrc, chars)
+                    guard usable else { continue }
+                    let current = (best?.translated ?? -1, best?.chars ?? 0)
+                    if translated > current.0 || (translated == current.0 && chars > current.1) {
+                        best = (parsed, probe.ytlrc, chars, translated)
                     }
                 }
                 if let best {
                     yrcParsed = best.lines
                     // ytlrc 必须与**采用的那一份** yrc 配对（两边的行 offset 是一套）。
                     ytlrcText = best.ytlrc
-                    writeDebugLog("[NetEase] adopted the richest yrc — \(best.chars) char(s)")
+                    writeDebugLog(
+                        "[NetEase] adopted the richest pair — \(best.chars) char(s),"
+                            + " \(best.translated) translated line(s)"
+                    )
+                } else if let keptPair {
+                    // 只是译文稀、yrc 本来没问题，而兄弟候选一个都不比它好 ⇒ 用回原来那一对。
+                    yrcParsed = keptPair.lines
+                    ytlrcText = keptPair.ytlrc
+                    writeDebugLog(
+                        "[NetEase] no sibling beats the chosen pair — keeping it"
+                            + " (\(keptPair.chars) char(s), \(keptPair.translated) translated)"
+                    )
                 }
             }
 

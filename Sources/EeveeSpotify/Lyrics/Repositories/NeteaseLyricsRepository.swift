@@ -1033,6 +1033,38 @@ class NeteaseLyricsRepository: LyricsRepository {
             return false
         }
 
+        /// 一首歌的**主干标题**：括号 / 破折号之前的那些字。
+        ///
+        /// ★★ 2026-10-17（日志 112 的现场：MIMI 那首「找不到歌词」被判 `noSuchSong`）：
+        /// 候选[0] 是 `ヒミツ (feat. 可不)`、150085ms（Spotify 150000ms）、歌手 `MIMI / 可不` 对上，
+        /// 而 Spotify 那边标题尾注写的是别的（`(Secret)`）—— `normalizeTitle` 是**把括号当字符删掉**，
+        /// 两边尾巴不同 ⇒ `contains` 两个方向都不成立 ⇒ 本质上同一首歌被判成"没有候选"。
+        /// 主干都是 `ヒミツ`。
+        func baseTitle(_ text: String) -> String {
+            var head = text
+            for marker in ["（", "(", "[", "【", "《", "〈", " - ", " — ", " – ", "-", "—", "–"] {
+                if let range = head.range(of: marker) {
+                    head = String(head[..<range.lowerBound])
+                }
+            }
+            return normalizeTitle(head)
+        }
+
+        /// 主干标题相同（**不**含尾注）。
+        ///
+        /// ⚠️ 只在"歌手也对上、时长也对上"时才当准入用（见下面那个循环）——
+        /// 单看主干会把 `Song (Live)` / `Song (Remix)` 混成一锅。
+        func baseTitleMatches(_ song: [String: Any]) -> Bool {
+            let wantedBase = baseTitle(query.title)
+            guard wantedBase.count >= 2 else { return false }
+            for title in candidateTitles(song) {
+                let candidate = baseTitle(title)
+                guard candidate.count >= 2 else { continue }
+                if candidate == wantedBase { return true }
+            }
+            return false
+        }
+
         // MARK: 候选排序（2026-10-17 重写：从"挑一个"改成"排一串"）
         //
         // 旧版在这里选出一个 `chosen` 就直接去取词。改成一串的原因只有一个：
@@ -1058,28 +1090,41 @@ class NeteaseLyricsRepository: LyricsRepository {
             }
             guard durationOK else { continue }
 
-            // ★ 标题是**新的硬闸门**：标题不对，时长再接近也不选（那正是日志 108 的错误来源）。
-            guard titleMatches(song) else { continue }
+            let artistOK = artistMatches(song)
+            let titleOK = titleMatches(song)
+            // ★ 标题是硬闸门（日志 108 的错误来源），但"**只差尾注**"不算差：
+            //   歌手对上、时长对上、主干相同（见 `baseTitle`）⇒ 同一首歌的两种写法。
+            //   ★★ 2026-10-17（日志 112）：`ヒミツ (feat. 可不)` vs `ヒミツ (Secret)` 就是这种。
+            let baseOK = !titleOK && artistOK == .some(true) && baseTitleMatches(song)
+            guard titleOK || baseOK else { continue }
 
-            switch artistMatches(song) {
-            case .some(true):
+            if artistOK == .some(true) {
                 strictlyMatchedIndices.append(index)
-            case .some(false), .none:
-                // 标题对、时长对，但**歌手对不上**（翻唱 / 同曲异名）或**网易没给歌手名** ——
-                // 记下来当"最差可用"，优先继续找歌手也对得上的。
-                //
-                // ★★ 2026-10-16：**按时长差取最近的那一个**，不再取"相关度排序里的第一个"。
-                //    排序是**按地区**变的（同一首歌 180s，日志 102 一次 Chosen[6]、一次 Chosen[0]），
-                //    而"哪一条和 Spotify 的时长最接近"跟地区无关 —— 同一个母带的时长是一样的。
-                //    这条兜底只在"歌手闸门也过不去"时才走（例如 Spotify 写 `Natsunose`、
-                //    网易写 `ナツノセ`，跨书写系统认不出来），所以它越确定越好。
+                if baseOK {
+                    writeDebugLog(
+                        "[NetEase] candidate[\(index)] matched by base title"
+                            + " (尾注不同、主干相同、歌手与时长都对上)"
+                    )
+                }
+                continue
+            }
+
+            // 标题对、时长对，但**歌手对不上**（翻唱 / 同曲异名）或**网易没给歌手名** ——
+            // 记下来当"最差可用"，优先继续找歌手也对得上的。
+            //
+            // ★★ 2026-10-16：**按时长差取最近的那一个**，不再取"相关度排序里的第一个"。
+            //    排序是**按地区**变的（同一首歌 180s，日志 102 一次 Chosen[6]、一次 Chosen[0]），
+            //    而"哪一条和 Spotify 的时长最接近"跟地区无关 —— 同一个母带的时长是一样的。
+            //    这条兜底只在"歌手闸门也过不去"时才走（例如 Spotify 写 `Natsunose`、
+            //    网易写 `ナツノセ`，跨书写系统认不出来），所以它越确定越好。
+            if titleOK {
                 if let spotifyDurationMs, let ms = candidateDuration(song) {
                     durationOnlyCandidates.append((index, abs(ms - spotifyDurationMs)))
                 } else if firstDurationOnlyWithoutDelta == nil {
                     firstDurationOnlyWithoutDelta = index
                 }
-                continue
             }
+            continue
         }
 
         // 把两条排序拼成一条有序候选表（见上面「候选排序」段的 ①②）。
@@ -1099,7 +1144,8 @@ class NeteaseLyricsRepository: LyricsRepository {
                 let ms = candidateDuration(song).map { "\($0)ms" } ?? "?"
                 writeDebugLog(
                     "[NetEase] candidate[\(index)] \(name) — \(artists.isEmpty ? "?" : artists)"
-                        + " \(ms) title=\(titleMatches(song)) artist=\(artistMatches(song) ?? false)"
+                        + " \(ms) title=\(titleMatches(song)) base=\(baseTitleMatches(song))"
+                        + " artist=\(artistMatches(song) ?? false)"
                 )
             }
             if let spotifyDurationMs {

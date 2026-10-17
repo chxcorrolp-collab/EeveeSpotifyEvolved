@@ -255,14 +255,18 @@ final class ArtistBioSheet: UIView {
         writeDebugLog("[ArtistBio] wikipedia link opened")
     }
 
-    /// **社交链接胶囊**（维基 / 推特 / …）：转发给从"关于艺人"那块卡里收下来的**原控件**。
-    ///
-    /// 为什么转发而不是自己拼 URL：我们要的是**艺人真正的条目 / 账号** —— 那个地址只存在
-    /// Spotify 自己的按钮里（它的"打开"走 `linkDispatcher`，不是 `UIApplication.open`）。
-    /// 控件已经被回收（weak 变 nil）时才退兜底：维基走搜索页，其余只打日志。
+    /// **社交链接胶囊**（维基 / 推特 / …）：优先用**读到的真链接**直接打开；
+    /// 读不到才转发给从"关于艺人"那块卡里收下来的**原控件**（走 Spotify 自己的打开逻辑）；
+    /// 控件也没了（weak 变 nil）才退兜底：维基走搜索页，其余只打日志。
     @objc private func linkTapped(_ sender: UIButton) {
         guard linkRefs.indices.contains(sender.tag) else { return }
         let link = linkRefs[sender.tag]
+        if let url = link.url {
+            UIApplication.shared.open(url, options: [:], completionHandler: nil)
+            // 只记主机名：日志里不留整条外部链接（与仓库其它处的做法一致）。
+            writeDebugLog("[ArtistBio] link tapped — \(link.kind) → opened \(url.host ?? "-")")
+            return
+        }
         if let control = link.control {
             let path = eeveeFire(control) ?? "NOTHING (no action, no tap recogniser)"
             writeDebugLog("[ArtistBio] link tapped — \(link.kind) → \(path)")
@@ -272,7 +276,7 @@ final class ArtistBioSheet: UIView {
             UIApplication.shared.open(url, options: [:], completionHandler: nil)
         }
         writeDebugLog(
-            "[ArtistBio] link tapped — \(link.kind) (its control is gone; opened the fallback)"
+            "[ArtistBio] link tapped — \(link.kind) (no URL, no control; opened the fallback)"
         )
     }
 
@@ -468,15 +472,18 @@ final class ArtistBioSheet: UIView {
 extension ArtistBioSheet: UIGestureRecognizerDelegate {}
 
 /// 「关于艺人」那块卡里的一条**社交链接**：认出来的是什么（`kind`）、画在胶囊上的短名（`title`）、
-/// 以及**那个控件本身**（weak —— cell 一回收就自动失效，见 `ArtistBioSheet.linkTapped`）。
+/// **从控件/它的 model 上读到的真链接**（`url`，读不到就是 nil），以及**那个控件本身**
+/// （weak —— cell 一回收就自动失效，见 `ArtistBioSheet.linkTapped`）。
 final class ArtistBioLinkRef {
     let kind: String
     let title: String
+    let url: URL?
     weak var control: UIView?
 
-    init(kind: String, title: String, control: UIView?) {
+    init(kind: String, title: String, url: URL? = nil, control: UIView?) {
         self.kind = kind
         self.title = title
+        self.url = url
         self.control = control
     }
 }

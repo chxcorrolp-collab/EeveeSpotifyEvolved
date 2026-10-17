@@ -457,6 +457,108 @@ private let eeveeArtistBioUILabels: Set<String> = [
     "About", "More", "Show more", "Read more", "See more", "Play", "Follow", "Following", "Share",
 ]
 
+/// 「关于艺人」卡里那些**不是简介**的整块 UI —— 按**类名 / 无障碍 id** 认（语言无关）。
+///
+/// ★★ 2026-10-18：名字是从**解压后的 9.1.88 主二进制**（`C:\dsh\ipa\Payload\Spotify.app\Spotify`）
+/// 里挖出来的真名 —— `ArtistAbout_CommonUIKit` 那一族：
+///   · `SPTArtistAboutListenersView` + id `artist-about-listeners`（"每月有 x 名听众"那一行，
+///     文案 key `sArtistListenersSubtitleText`，见二进制 @179424128）；
+///   · `SPTArtistAboutRankView`      + id `artist-about-rank`（排行榜那一行，key `sArtistRankSubtitleText`）。
+/// 这两块都是 Spotify 画在"关于艺人"里的**附加信息**，不是简介正文 ⇒ 拼正文时整块跳过。
+///
+/// 为什么再按类名认一遍：下面 `eeveeSanitizedArtistBio` 那两条文字判据（带数字 + "听众/listener"）
+/// 碰到没列到的语言就漏；类名与 id 与语言无关，是**第一道**判据。
+func eeveeIsArtistBioNonBodyChrome(_ view: UIView) -> Bool {
+    let className = NSStringFromClass(type(of: view))
+    if className.contains("ArtistAboutListenersView") || className.contains("ArtistAboutRankView") {
+        return true
+    }
+    if let identifier = view.accessibilityIdentifier,
+       identifier == "artist-about-listeners" || identifier == "artist-about-rank" {
+        return true
+    }
+    return false
+}
+
+/// 社交链接那一颗的**类名特征** —— 二进制 @200596249 逐字：`SPTArtistExternalSocialLinkButton`
+/// （同处还有 `SPTArtistExternalSocialLinkButtonViewModel` / `SPTArtistSocialLink`，
+/// 以及委托方法 `externalSocialLinkTappedForType:`）。
+///
+/// 按**类名**认是与语言无关的那条判据（文字判据只当兜底：有的版本只画图标、没有文字）。
+let eeveeArtistSocialLinkClassFragment = "ArtistExternalSocialLinkButton"
+
+/// 能在控件 / 它的 model 上读链接的候选键（**先 `responds(to:)` 再问** ——
+/// KVC 撞到不存在的键会抛 ObjC 异常，Swift 接不住，那就是崩溃）。
+private let eeveeSocialLinkURLKeys = [
+    "url", "URL", "linkURL", "link", "webURL", "externalURL", "urlString", "targetURL",
+]
+/// 一跳：按钮把 model 挂在哪个键上（同样是候选，逐一试）。
+private let eeveeSocialLinkModelKeys = [
+    "viewModel", "model", "socialLink", "linkModel", "viewModelObject",
+]
+
+/// **认一颗社交链接控件** —— 类名优先（`SPTArtistExternalSocialLinkButton`，语言无关），
+/// 其次是文字 / URL 主机名。认不出返回 nil。
+///
+/// 返回值里的 `url` 是**从控件或它的 model 上读到的真链接**（读不到就是 nil ⇒
+/// `ArtistBioSheet` 退回"把点击转发给控件本身"）。
+func eeveeArtistBioLink(from view: UIView) -> (kind: String, title: String, url: URL?)? {
+    let className = NSStringFromClass(type(of: view))
+    let classHit = className.contains(eeveeArtistSocialLinkClassFragment)
+
+    var text = (view.accessibilityLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    if text.isEmpty, classHit || view is UIControl || !(view.gestureRecognizers ?? []).isEmpty {
+        text = eeveeControlText(of: view).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    let url = eeveeSocialLinkURL(in: view)
+    // 文字 / 主机名里认类型（类名命中但读不到任何文字时，交给 URL 主机名或兜底的 "link"）。
+    let haystack = (text + " " + (url?.host ?? "")).lowercased()
+    let kinds: [(kind: String, title: String, needles: [String])] = [
+        ("wikipedia", "维基百科", ["wikipedia", "维基", "ウィキ"]),
+        ("twitter", "Twitter", ["twitter", "推特", "x.com"]),
+        ("instagram", "Instagram", ["instagram"]),
+        ("facebook", "Facebook", ["facebook"]),
+        ("tiktok", "TikTok", ["tiktok", "抖音"]),
+        ("whatsapp", "WhatsApp", ["whatsapp", "wa.me"]),
+        ("website", "网站", ["official site", "official website", "官网", "官方网站", "website", "网站"]),
+    ]
+    let match = kinds.first { entry in entry.needles.contains { haystack.contains($0) } }
+    guard classHit || match != nil || url != nil else { return nil }
+
+    let kind = match?.kind ?? "link"
+    let title = match?.title ?? (text.isEmpty ? (url?.host ?? "链接") : text)
+    return (kind, title, url)
+}
+
+/// 在控件自己、以及它挂着的 model 上**逐键试**着读一个链接。
+///
+/// ⚠️ 每一次 `value(forKey:)` 之前都要 `responds(to:)`：KVC 撞到不存在的键会抛
+/// ObjC 异常，Swift 的 `try` 接不住 —— 那是崩溃，不是错误。
+private func eeveeSocialLinkURL(in view: UIView) -> URL? {
+    if let direct = eeveeSocialLinkURL(on: view as NSObject) { return direct }
+    for key in eeveeSocialLinkModelKeys {
+        guard view.responds(to: NSSelectorFromString(key)),
+              let model = view.value(forKey: key) as? NSObject else { continue }
+        if let nested = eeveeSocialLinkURL(on: model) { return nested }
+    }
+    return nil
+}
+
+private func eeveeSocialLinkURL(on object: NSObject) -> URL? {
+    for key in eeveeSocialLinkURLKeys {
+        guard object.responds(to: NSSelectorFromString(key)),
+              let value = object.value(forKey: key) else { continue }
+        if let url = value as? URL { return url }
+        if let string = value as? String,
+           let url = URL(string: string),
+           url.scheme != nil {
+            return url
+        }
+    }
+    return nil
+}
+
 /// 「关于艺人」那一块里那些**不是简介**的整行文字 —— 存正文之前按**整行**跳过。
 ///
 /// ★★ 2026-10-18（用户看照片 141：「点击 i 会**多出来**一些其他东西，比如艺人名字 /
@@ -546,6 +648,10 @@ func eeveeArtistBioBlockText(in card: UIView) -> String? {
     while !queue.isEmpty, visited < 300 {
         let view = queue.removeFirst()
         visited += 1
+
+        // ★★ 2026-10-18："每月有 x 名听众" / 排行榜那两块**整块**跳过（按类名 / id 认，
+        //    见 `eeveeIsArtistBioNonBodyChrome`）—— 它们不是简介，而且与语言无关。
+        if eeveeIsArtistBioNonBodyChrome(view) { continue }
 
         var raw: String?
         if let label = view as? UILabel { raw = label.text }

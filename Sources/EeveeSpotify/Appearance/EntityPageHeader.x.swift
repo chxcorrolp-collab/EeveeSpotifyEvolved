@@ -104,16 +104,9 @@ enum EntityPageHeaderManager {
 
     /// 认得出哪几种社交链接：`needles` 在控件文字 / 无障碍标签里做**子串**匹配
     /// （大小写不敏感），`title` 是画在胶囊上的短名。
-    private static let artistBioLinkKinds: [(kind: String, title: String, needles: [String])] = [
-        ("wikipedia", "维基百科", ["wikipedia", "维基", "ウィキ"]),
-        ("twitter", "Twitter", ["twitter", "推特"]),
-        ("instagram", "Instagram", ["instagram"]),
-        ("facebook", "Facebook", ["facebook"]),
-        ("tiktok", "TikTok", ["tiktok", "抖音"]),
-        ("whatsapp", "WhatsApp", ["whatsapp"]),
-        ("website", "网站", ["official site", "official website", "官网", "官方网站", "website", "网站"]),
-    ]
-
+    ///
+    /// ★★ 2026-10-18：判据已搬到 `eeveeArtistBioLink(from:)`（**类名优先**：二进制的
+    /// `SPTArtistExternalSocialLinkButton`，再退文字 / URL 主机名）—— 这里不再各留一份。
     /// 在"关于艺人"那块卡里把社交链接**认下来**（有界：400 个节点、最多 6 条）。
     ///
     /// 认下来只记引用、不做任何跳转 —— 点不点得到交给 `ArtistBioSheet`（它会打日志）。
@@ -127,24 +120,13 @@ enum EntityPageHeaderManager {
             let view = queue.removeFirst()
             visited += 1
 
-            // ⚠️ 先判"这颗能不能点"再挖文字 —— `eeveeControlText` 自己会走最多 200 个节点，
-            //    对卡里每一个子视图都调一遍就是 O(n²)（这一段是露头那一刻同步跑的）。
-            let isTappable = view is UIControl || !(view.gestureRecognizers ?? []).isEmpty
-            if isTappable {
-                let label = (view.accessibilityLabel ?? "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                var haystack = label.lowercased()
-                if haystack.isEmpty {
-                    haystack = eeveeControlText(of: view)
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                        .lowercased()
-                }
-                if !haystack.isEmpty,
-                   let match = artistBioLinkKinds.first(where: { entry in
-                       entry.needles.contains { haystack.contains($0) }
-                   }) {
-                    refs.append(ArtistBioLinkRef(kind: match.kind, title: match.title, control: view))
-                }
+            if let hit = eeveeArtistBioLink(from: view),
+               // 同一个 kind 只收一条：类名片段会同时命中那颗按钮与它的容器，
+               // 不去重的话同一颗维基会画出两张胶囊。
+               !refs.contains(where: { hit.kind != "link" && $0.kind == hit.kind }) {
+                refs.append(
+                    ArtistBioLinkRef(kind: hit.kind, title: hit.title, url: hit.url, control: view)
+                )
             }
             queue.append(contentsOf: view.subviews)
         }
@@ -153,6 +135,14 @@ enum EntityPageHeaderManager {
         bioLinks[name] = refs
         let kinds = refs.map(\.kind).joined(separator: ",")
         writeDebugLog("[ArtistBio] links found — \(kinds) (\(refs.count) control(s))")
+        // ★★ 2026-10-18：**读没读到真链接**必须一眼看得出来（下一轮据此决定是继续转发点击、
+        //    还是改去 hook `SPTArtistAboutDataLoader` 的 `…links`）。
+        for ref in refs {
+            writeDebugLog(
+                "[ArtistBio] link \(ref.kind) — url \(ref.url == nil ? "not readable" : "read")"
+                    + ", title \(ref.title)"
+            )
+        }
     }
 
     /// 这一页的艺人简介**已经读到过**了吗 —— `EntityPageSectionDrop` 折叠「关于艺人」那一格之前要问它。

@@ -1357,7 +1357,13 @@ enum EntityPageHeaderManager {
     ///   （多语言各写一条，与 `isPickHeading` 同一个思路）。
     private static func isSectionFooter(_ control: UIControl) -> Bool {
         if (control.accessibilityIdentifier ?? "").contains("ListSectionFooter") { return true }
-        let texts = [control.accessibilityLabel ?? "", control.accessibilityValue ?? ""]
+        // 文字两处都看：无障碍标签是一处，`UIButton.titleLabel` / 子树里的 UILabel 是另一处
+        //（`eeveeControlText` 就是取后者 —— 自绘的 Encore 按钮往往只有它）。
+        let texts = [
+            control.accessibilityLabel ?? "",
+            control.accessibilityValue ?? "",
+            eeveeControlText(of: control),
+        ]
         let needles = [
             "显示更多", "显示全部", "展開",
             "show more", "show all", "see more", "see all",

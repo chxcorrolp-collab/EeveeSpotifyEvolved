@@ -431,6 +431,8 @@ enum EntityPageHeaderManager {
     private static var pinnedMore: EntityPageHeaderButton?
     /// ★ 2026-10-16：我们那颗 `⋯` 还在屏上、可 Spotify 的源已经没了 —— 只报一次（见 `pinMoreButton`）。
     private static var didReportPinnedMoreMissing = false
+    /// ★ 2026-10-18：`⋯` 挂到 window 之后，只报一次几何/可交互性（用来判断"点不到"是位置还是层级）。
+    private static var didReportPinnedMoreGeometry = false
 
     /// 尾部按钮的兜底字形：**做成常量**（原来每一拍都 `UIImage(systemName:)` 造一张新的，
     /// 而这一拍在折叠的每一帧都会走到 —— 与"字形只取一次"同一条纪律）。
@@ -821,7 +823,23 @@ enum EntityPageHeaderManager {
     /// 也就是"藏 header 里的东西不能碰 hidden"这条**在我们机器上同样成立**，不是 pw 的机器特异。
     static func applyToArtistPage(_ page: UIView) {
         guard isEnabled, !applying else { return }
-        guard page.accessibilityIdentifier == "creator-page" else { return }
+        guard page.accessibilityIdentifier == "creator-page" else {
+            // ★ 2026-10-18（图片 142：进页面后仍是原生左对齐页头 + 黑底）：先分清"这一页
+            //    不是艺人页"与"它是艺人页、但根 id 不叫 creator-page"。后者是我们漏接管，
+            //    下一份日志里这一行会直接给出真实 id。
+            if eeveeFindView(
+                page,
+                identifier: "Curation.FollowButtonElementKit.FollowButton",
+                maxNodes: 800
+            ) != nil {
+                let rootID = page.accessibilityIdentifier ?? "nil"
+                logOnce(
+                    "artistRootMismatch",
+                    "artist-like page ignored — root id is \(rootID), not creator-page"
+                )
+            }
+            return
+        }
         guard page.bounds.width > 120, page.bounds.height > 200 else { return }
         guard let header = artistHeaderContainer(in: page), header.bounds.height > 80 else { return }
 
@@ -876,6 +894,7 @@ enum EntityPageHeaderManager {
         }
         if headerView.frame != header.bounds { headerView.frame = header.bounds }
         // ★★ 2026-10-18：Follow 状态复查要能找回"这一页 / 这个页头"（见 `refreshArtistFollow`）。
+        if lastArtistPage !== page { tapMaterialisedPages.removeAll() }
         lastArtistPage = page
         lastArtistHeaderView = headerView
         if headerView.onTrailingTapped == nil {
@@ -1061,6 +1080,16 @@ enum EntityPageHeaderManager {
         )
     }
 
+    /// ★ 2026-10-18（用户：「还是只能往下划到原本的艺人模块再划回去，点击 i 才有用」）：
+    /// **一次点击最多扫一趟列表**。`eeveeMaterialiseBio` 会把列表逐屏翻一遍再回到原位，
+    /// 每点一次都扫一遍会很卡；按页面记，第一次点击才允许扫。
+    private static var tapMaterialisedPages = Set<ObjectIdentifier>()
+
+    static func beginTapMaterialise(for page: UIView?) -> Bool {
+        guard let page else { return false }
+        return tapMaterialisedPages.insert(ObjectIdentifier(page)).inserted
+    }
+
     /// ★ 2026-10-18：设置页改了「艺人页」那两格之后，如果艺人页还在下面，**当场重跑一遍**。
     ///
     /// 设置页是盖在艺人页上的；它自己不一定会让下面的页面再布局一次。没有这一句的话，
@@ -1120,16 +1149,27 @@ enum EntityPageHeaderManager {
         captureBioLinks(from: view, name: name)
 
         guard bioTexts[name] == nil, bioTexts.count < 32 else { return }
-        // 先按 id 精确那颗 label 读（`3e91ac3` 那条，**任何长度都收** —— 四个字母的简介也认），
-        // 认不出那张 label 才退"在卡片里按位置把文字拼起来"（见 `eeveeArtistBioBlockText`：
-        // 段之间的空行因此回来，短简介也不再被字数门槛丢掉）。
-        let raw = eeveeArtistBioText(in: view) ?? eeveeArtistBioBlockText(in: view)
-        guard let raw, !raw.isEmpty else { return }
+        // ★★ 2026-10-18（用户：「那个 i 点击之后，艺人简介在内可能会有分行，现在没有」）：
+        //    同一张卡有两条读法：
+        //      · `eeveeArtistBioText` —— 按 id 读**一颗** label，最准，但 Spotify 有时把整段
+        //        塞进一个 label（段之间的换行只剩视觉段距，字符串里没有 `\n`）；
+        //      · `eeveeArtistBioBlockText` —— 把卡里**每一颗** label 按位置拼起来，段与段之间
+        //        天然有 `\n`（照片 141 那些分行就是它）。
+        //    以前是"label 优先" ⇒ 一旦 label 读得到，就永远轮不到会有分行的 block。
+        //    现在**两边都读，选换行更多的那一份**（内容由 `eeveeSanitizedArtistBio` 再收拾）。
+        let labelText = eeveeArtistBioText(in: view)
+        let blockText = eeveeArtistBioBlockText(in: view)
+        let picked = Self.richerBioText(label: labelText, block: blockText)
+        guard let raw = picked.text, !raw.isEmpty else { return }
         // ★★ 2026-10-18：**存之前先收拾** —— 卡里那两行"艺人名 / 每月有 x 名听众"不是简介
         //    （用户看照片 141 点名的"多出来一些其他东西"），见 `eeveeSanitizedArtistBio`。
         let text = eeveeSanitizedArtistBio(raw, artistName: name)
         guard !text.isEmpty else { return }
         bioTexts[name] = text
+        writeDebugLog(
+            "[ArtistBio] capture source — \(picked.source), label \(Self.lineCount(labelText)) line(s),"
+                + " block \(Self.lineCount(blockText)) line(s), chose \(Self.lineCount(text)) line(s)"
+        )
         writeDebugLog(
             "[EntityPageHeader] about-artist captured on sight — \(name), \(text.count) char"
                 + (text.count == raw.count ? "" : " (cleaned from \(raw.count) char)")
@@ -1137,6 +1177,25 @@ enum EntityPageHeaderManager {
         if let page = eeveeAncestor(withIdentifier: "creator-page", of: view) {
             relayoutAfterBioCapture(in: page)
         }
+    }
+
+    /// 简介的两条读法里**换行更多**的那一份（见 `captureBioTextOnSight` 的说明）。
+    private static func richerBioText(label: String?, block: String?) -> (text: String?, source: String) {
+        switch (label, block) {
+        case let (label?, block?):
+            return lineCount(block) > lineCount(label) ? (block, "block") : (label, "label")
+        case let (label?, nil):
+            return (label, "label")
+        case let (nil, block?):
+            return (block, "block")
+        default:
+            return (nil, "none")
+        }
+    }
+
+    private static func lineCount(_ text: String?) -> Int {
+        guard let text else { return 0 }
+        return text.components(separatedBy: "\n").count
     }
 
     /// 往上找页面根那个 `creator-page`（与 `EntityPageAppearance.isArtistPage` 同一个判据）。
@@ -1392,21 +1451,37 @@ enum EntityPageHeaderManager {
                     + " (AM's corner; Spotify keeps its own ⋯ hidden in the row)"
             )
         }
-        if more.superview !== headerRoot {
-            headerRoot.addSubview(more)
-        } else if headerRoot.subviews.last !== more {
-            headerRoot.bringSubviewToFront(more)
+        // ★★ 2026-10-18（用户：「**歌单页点击三点无反应**；艺人页点击三点会崩溃」）：
+        //    **挂到 window 上，不再塞进页头**。日志 105 的 `[HeaderProbe] page ids:` 里
+        //    歌单页那一段**根本没有 `eevee-pinned-more`**，而艺人页有 —— 说明它在歌单页
+        //    要么被页头/导航栏盖住、要么根本不在一条能收到触摸的链上。
+        //    window 是最后加、最上面的一层：位置用 window 坐标算，不会再被页头折叠带走。
+        //    离开实体页时由 `EntityPageAppearance.restore` 调 `removePinnedMore()` 收走。
+        guard let host = headerRoot.window else { return }
+        if more.superview !== host {
+            host.addSubview(more)
+        } else if host.subviews.last !== more {
+            host.bringSubviewToFront(more)
         }
 
-        // 与左上角那颗返回键同高：页头的 y=0 就是状态栏那一条的上沿，所以要让出安全区。
-        let top = (headerRoot.window?.safeAreaInsets.top ?? 0) + 4
+        // 与左上角那颗返回键同高：window 坐标 + 安全区。
+        let top = host.safeAreaInsets.top + 4
         let frame = CGRect(
-            x: headerRoot.bounds.width - side - 16,
+            x: host.bounds.width - side - 16,
             y: top,
             width: side,
             height: side
         )
         if more.frame != frame { more.frame = frame }
+        if !didReportPinnedMoreGeometry {
+            didReportPinnedMoreGeometry = true
+            let inWindow = more.convert(more.bounds, to: host)
+            writeDebugLog(
+                "[EntityPageHeader] pinned ⋯ geometry — host window \(Int(host.bounds.width))x\(Int(host.bounds.height)),"
+                    + " safeTop \(Int(host.safeAreaInsets.top)), button at \(Int(inWindow.minX)),\(Int(inWindow.minY)),"
+                    + " interactive \(more.isUserInteractionEnabled), hidden \(more.isHidden)"
+            )
+        }
         more.feed(from: menu)
         // ★★ 2026-10-16（用户：「右上角那个**点不动**的三点」）：三件事一起补上 ——
         //   ① `role = "more"`：日志里那颗原来一直是默认的 `side button`，分不出是谁（见 `tapped`）；
@@ -1422,6 +1497,19 @@ enum EntityPageHeaderManager {
         more.firesDeep = true
 
         eeveeConceal(wrapperFor(menu, in: headerRoot))
+    }
+
+    /// ★ 2026-10-18：离开实体页时把挂在 window 上的 `⋯` 收走（见 `pinMoreButton`）。
+    static func removePinnedMore(reason: String = "") {
+        guard let more = pinnedMore else { return }
+        more.removeFromSuperview()
+        pinnedMore = nil
+        didReportPinnedMoreMissing = false
+        didReportPinnedMoreGeometry = false
+        writeDebugLog(
+            "[EntityPageHeader] pinned ⋯ removed"
+                + (reason.isEmpty ? "" : " (\(reason))")
+        )
     }
 
     /// 专辑页的文字：**按明确的 id 读**（pw 的 `applyHeader` 用同样这三个 id）。

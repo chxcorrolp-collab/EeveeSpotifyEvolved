@@ -167,6 +167,18 @@ final class EntityPageHeaderButton: UIControl {
                 EntityPageHeaderManager.artistBiographyAppeared(card)
                 text = EntityPageHeaderManager.cachedBioText(for: name)
             }
+            // ★★ 2026-10-18（用户：「还是只能往下划到原本的艺人模块再划回去，点击 i 才有用」）：
+            //    卡片是懒加载的 ⇒ 零滚动找不到时，**在这一次点击里**静默扫一趟列表把它建出来，
+            //    再回到原位（`eeveeMaterialiseBio` 已经这么做）。每页只做一次，避免连点连扫。
+            if text == nil {
+                let page = eeveeAncestor(withIdentifier: "creator-page", of: self)
+                if EntityPageHeaderManager.beginTapMaterialise(for: page) {
+                    if let card = eeveeMaterialiseBio(from: self) {
+                        EntityPageHeaderManager.artistBiographyAppeared(card)
+                    }
+                    text = EntityPageHeaderManager.cachedBioText(for: name)
+                }
+            }
             ArtistBioSheet.present(
                 name: name,
                 text: text,
@@ -268,18 +280,15 @@ final class EntityPageHeaderButton: UIControl {
     }
 }
 
-/// 中间那颗播放键。**和左右两颗同一套**：透明玻璃圆 + 白描边线条字形。
+/// 中间那颗播放键。**和左右两颗同一套**：透明玻璃圆 + 实心三角字形。
 ///
 /// ★★ 2026-10-18（用户：「回退点击播放按键的播放按钮变透明的设计（设计成和旁边那两个按键
-///    一样的透明背景，只有线条吧）」）：
-///    这颗原来是**实心白圆盘 + 黑色实心/中空三角形**（照片 138），两侧却是 44pt 的浅色玻璃圆 +
-///    白色线条字形 —— 同一行三颗，只有中间那颗像块补丁。现在把白底去掉、玻璃圆留下，
-///    字形改成**白色中空三角**（`eeveeHollowPlayTriangle`），三颗的材质、描边与字形粗细一致。
-///    ⚠️ 玻璃仍是 `eeveeMakeLightGlassView`（和两侧同一个函数），不是为了"半透明白"另写一套。
+///    一样的透明背景，只有线条吧）」→ 随后「这个播放按钮的图标太丑了，换回之前那个图标」）：
+///    第一版把字形画成**中空描边三角**，用户看真机后觉得太丑 ⇒ **字形换回 SF Symbol
+///    `play.fill`（实心三角）**；背景仍保持用户点名要的"和两侧一样的透明玻璃圆"，
+///    不再恢复白色圆盘。
+///    ⚠️ 玻璃仍是 `eeveeMakeLightGlassView`（和两侧同一个函数），不是另写一套。
 final class EntityPageHeaderPlay: UIControl {
-
-    /// 中空三角形按多大画（圆形态给的是 52pt 的画布，见 `layoutSubviews`；缩放交给 `contentMode`）。
-    static let hollowGlyphSide: CGFloat = 52
 
     private let glyphView = UIImageView()
     private let wordLabel = UILabel()
@@ -299,10 +308,9 @@ final class EntityPageHeaderPlay: UIControl {
         glyphView.contentMode = .scaleAspectFit
         // 两侧字形用的是 `.label`（深色界面上就是白）—— 中间这颗跟它们走，不再用黑色。
         glyphView.tintColor = .label
-        // ★★ 2026-10-18（用户：「这中间的播放按键三角形没做成透明的」，照片 138 逐字：那颗 ▶ 还是
-        //    实心黑）：**不再用 `play.fill`**，改画我们自己的中空三角形（见 `eeveeHollowPlayTriangle`）。
-        glyphView.image = eeveeHollowPlayTriangle(side: Self.hollowGlyphSide)
-            .withRenderingMode(.alwaysTemplate)
+        // ★★ 2026-10-18：字形回到**实心三角**（`play.fill`）。上一版的中空描边三角用户看真机后
+        //    说"太丑"，这里不再自己画图，直接用系统符号（加粗一档，放在 52pt 画布里分量够）。
+        glyphView.image = Self.playGlyphImage()
         glyphView.isUserInteractionEnabled = false
         addSubview(glyphView)
 
@@ -320,14 +328,18 @@ final class EntityPageHeaderPlay: UIControl {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    /// 实心播放三角（`play.fill`）。只造一次 —— `layoutSubviews` / `feed` 都会走到。
+    private static func playGlyphImage() -> UIImage? {
+        let configuration = UIImage.SymbolConfiguration(pointSize: 44, weight: .bold)
+        return UIImage(systemName: "play.fill", withConfiguration: configuration)?
+            .withRenderingMode(.alwaysTemplate)
+    }
+
     func feed(from control: UIView?) {
         source = control
-        // ★★ 2026-10-18：**字形不再取自源控件** —— Spotify 那颗 `play.fill` 是实心的，
-        //    照抄过来就把上面画好的中空三角形盖掉了（照片 138 那颗实心 ▶ 就是这么来的）。
-        //    这颗按钮的形状永远是我们自己的中空三角形，`feed` 现在只负责记下"点它要转发给谁"。
+        // 字形固定是我们自己的实心三角；`feed` 只负责记下"点它要转发给谁"。
         if glyphView.image == nil {
-            glyphView.image = eeveeHollowPlayTriangle(side: Self.hollowGlyphSide)
-                .withRenderingMode(.alwaysTemplate)
+            glyphView.image = Self.playGlyphImage()
         }
     }
 

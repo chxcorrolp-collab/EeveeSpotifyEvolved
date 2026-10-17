@@ -42,6 +42,10 @@ enum EeveeSettingsLauncher {
     /// 打开设置页。返回是否成功（**认不出就什么都不做** —— 不猜、不崩，与本仓库同一条纪律）。
     @discardableResult
     static func open(from view: UIView, reason: String) -> Bool {
+        // ★ 2026-10-18：`⋯` 现在挂在 window 上（见 `EntityPageHeaderManager.pinMoreButton`）——
+        //    设置页是 push/present 上来的，那颗 window 级按钮会浮在设置页上面。打开设置前先收走；
+        //    退回实体页时，那一页的布局拍会重新把它挂回去。
+        EntityPageHeaderManager.removePinnedMore(reason: "settings opened")
         guard let owner = viewController(of: view) else {
             writeDebugLog("[Settings] \(reason): no view controller above that view — nothing was opened")
             return false

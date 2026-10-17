@@ -522,17 +522,6 @@ enum NowPlayingControlsPlate {
         return showing
     }
 
-    /// **中空的播放三角形**（只描边、不填充）—— 「播放页那个三角形能不能做成中空的」那条要求的画法。
-    ///
-    /// 为什么不直接用 SF Symbol：`play` 与 `play.fill` 都是**实心**的，系统没有描边版。
-    ///
-    /// ★★ 2026-10-18：画法**与艺人页那颗共用一份**（`eeveeHollowPlayTriangle`，见 `EntityPageHeader.swift`）
-    /// —— 两处各留一份拷贝的话，下次改线宽/形状就会漂（艺人页那颗是照片 138 里中间那颗 ▶）。
-    /// 颜色仍然由调用方的 `tintColor`（白）决定（那张图是 **template**）。
-    private static func hollowPlayImage(size: CGFloat) -> UIImage {
-        eeveeHollowPlayTriangle(side: size).withRenderingMode(.alwaysTemplate)
-    }
-
     /// 在**按钮的兄弟层**上叠一个我们自己的字形（**不吃触摸** —— 按钮的动作原样生效）。
     ///
     /// ★ **为什么不再是按钮的子视图**（2026-10-05 重做）：整颗按钮的 layer 被钉住了
@@ -549,17 +538,10 @@ enum NowPlayingControlsPlate {
         hidden: Bool = false
     ) {
         let configuration = UIImage.SymbolConfiguration(pointSize: size, weight: .medium)
-        // ★★ 2026-10-16（用户：「**播放页的那个三角形能不能做成中空的**」）：能。
-        //    SF Symbols 里 `play` 与 `play.fill` **都是实心**三角形（没有描边版）⇒ 自己画一个：
-        //    只描边、不填充。暂停（两条竖杠）与跳过键**不动** —— 它们本来就是实心形状，
-        //    用户只点名了那颗三角形。
-        let image: UIImage?
-        if systemName == "play" || systemName == "play.fill" {
-            image = hollowPlayImage(size: size)
-        } else {
-            image = UIImage(systemName: systemName, withConfiguration: configuration)
-        }
-        guard let image else { return }
+        // ★★ 2026-10-18（用户：「这个播放按钮的图标太丑了，换回之前那个图标」）：
+        //    上一版把播放/暂停那颗画成**中空描边三角**，用户看真机后否掉了 ⇒ 回到 SF Symbol
+        //    的实心 `play.fill`（与暂停 / 跳过键同一套系统字形）。跳过键本来就没动过。
+        guard let image = UIImage(systemName: systemName, withConfiguration: configuration) else { return }
         guard let host = button.superview else { return }
 
         let glyph: UIImageView

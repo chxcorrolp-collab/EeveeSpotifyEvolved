@@ -100,39 +100,6 @@ func eeveeInsertGlass(in host: UIView, interactive: Bool) -> UIVisualEffectView 
     return glass
 }
 
-// MARK: - 自己的字形
-
-/// **中空的播放三角形**（只描边、不填充）。
-///
-/// ★★ 2026-10-18（用户：「**这中间的播放按键三角形没做成透明的**」，照片 138：艺人页中间那颗
-///    白圆里的 ▶ 还是**实心黑**）：SF Symbols 的 `play` / `play.fill` **都是实心**，没有描边版
-///    ⇒ 和听歌页那颗一样自己画一个等边三角形再描边，标成 **template** 让调用方的 `tintColor`
-///    接着管颜色。
-///
-/// ⚠️ `UIBezierPath` 的连线圆角属性叫 **`lineJoinStyle`**（`CGLineJoin`）—— 写成 `lineJoin`
-///    是「没有这个成员」的编译错（2026-10-17 那次 IPA build 就是这么红的）。
-func eeveeHollowPlayTriangle(side: CGFloat) -> UIImage {
-    let lineWidth = max(1.5, side * 0.09)      // 52pt ⇒ 4.7pt
-    let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
-    return renderer.image { _ in
-        let inset = lineWidth / 2
-        let edge = side - inset * 2
-        let height = edge * 0.866              // 等边三角形的高
-        let top = (side - height) / 2
-
-        let path = UIBezierPath()
-        path.move(to: CGPoint(x: inset, y: top))
-        path.addLine(to: CGPoint(x: inset + edge, y: top + height / 2))
-        path.addLine(to: CGPoint(x: inset, y: top + height))
-        path.close()
-        path.lineWidth = lineWidth
-        path.lineJoinStyle = .round
-
-        UIColor.white.setStroke()
-        path.stroke()
-    }
-}
-
 // MARK: - 藏 / 找 / 点
 
 /// 把 Spotify 的视图**藏死**。三个动作缺一不可：
@@ -1121,7 +1088,12 @@ func eeveeFireRecognizers(of view: UIView) -> String? {
     let targetKey = NSSelectorFromString("target")
     let actionKey = NSSelectorFromString("action")
     for recognizer in view.gestureRecognizers ?? [] where recognizer is UITapGestureRecognizer {
-        guard let pairs = recognizer.value(forKey: "_targets") as? [AnyObject] else { continue }
+        // ★★ 2026-10-18（崩溃 `Spotify-2026-10-17-150419.ips`）：
+        //    `value(forKey: "_targets")` 在**没有这个键**的 `UITapGestureRecognizer`（子类 / 系统
+        //    自绘手势）上会抛 `valueForUndefinedKey:` —— 那是 ObjC 异常，Swift 接不住，直接 abort。
+        //    先 `responds(to:)` 再读；没有就跳过这一颗，绝不拿 KVC 去赌。
+        guard recognizer.responds(to: NSSelectorFromString("_targets")),
+              let pairs = recognizer.value(forKey: "_targets") as? [AnyObject] else { continue }
         for pair in pairs {
             guard let object = pair as? NSObject,
                   object.responds(to: targetKey), object.responds(to: actionKey),

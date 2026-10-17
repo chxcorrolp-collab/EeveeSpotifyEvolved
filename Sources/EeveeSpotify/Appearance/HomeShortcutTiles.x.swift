@@ -466,9 +466,17 @@ enum HomeTileTint {
 
 struct HomeShortcutTilesGroup: HookGroup {}
 
+/// ★★ 2026-10-17：**9.1.88 上不存在的两个类**单独一组。
+///
+/// 它们原来并进 `HomeShortcutTilesGroup` ⇒ Orion 每次启动都会各刷一条
+/// `[ORION ERROR] Could not compute target class for hook …`（日志 104 实测：3 次启动 × 2 条 = 6 条）。
+/// 平时无害，但**真正装不上的 hook 会被这些噪声埋掉** —— 而这个项目的排障全靠日志。
+/// 现在：两个类都在才装这一组（缺一个就都不装），代码留着给以后版本。
+struct HomeShortcutSpeculativeHookGroup: HookGroup {}
+
 /// 每一张卡自己的那一拍（`layoutSubviews` 一定会在卡片出现/换内容时来）。
 class HomeShortcutCardHook: ClassHook<UIView> {
-    typealias Group = HomeShortcutTilesGroup
+    typealias Group = HomeShortcutSpeculativeHookGroup
     static let targetName = "_TtC27Home_AnchorsAndShortcutsKit22ShortcutsCardElementUI"
 
     func layoutSubviews() {
@@ -479,7 +487,7 @@ class HomeShortcutCardHook: ClassHook<UIView> {
 
 /// 网格那一拍：卡自己那拍万一不来，靠这里扫一遍孩子（并且把结构打进日志）。
 class HomeShortcutGridHook: ClassHook<UIView> {
-    typealias Group = HomeShortcutTilesGroup
+    typealias Group = HomeShortcutSpeculativeHookGroup
     static let targetName = "_TtC27Home_AnchorsAndShortcutsKit22ShortcutsGridElementUI"
 
     func layoutSubviews() {
@@ -525,6 +533,16 @@ func activateHomeShortcutTiles() {
     }
 
     HomeShortcutTilesGroup().activate()
+    // ⚠️ 两个"9.1.88 上不存在"的类**分开装**（见 `HomeShortcutSpeculativeHookGroup`）：
+    //    两个都在才装 —— 否则每条 `[ORION ERROR]` 都会混进真问题的排障视野里。
+    if NSClassFromString(HomeShortcutCardHook.targetName) != nil,
+       NSClassFromString(HomeShortcutGridHook.targetName) != nil {
+        HomeShortcutSpeculativeHookGroup().activate()
+    } else {
+        writeDebugLog(
+            "[HomeTiles] speculative hooks skipped — ShortcutsCard/GridElementUI not in this build"
+        )
+    }
     writeDebugLog(
         "[HomeTiles] on — hooked \(present.count)/\(targets.count)"
             + " (\(present.joined(separator: ", ")));"

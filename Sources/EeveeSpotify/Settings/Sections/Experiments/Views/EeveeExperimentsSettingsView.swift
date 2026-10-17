@@ -10,9 +10,9 @@ import UIKit
 /// 三条里占一条才进来。**行为早已定性、只是"依赖外部"的开关不属于这里** ——
 /// 「分享到 LiveContainer」因此于 2026-10-17 搬到「杂项设定」（见 `EeveeMiscellaneousSettingsView`）。
 ///
-/// ⚠️ 2026-10-17 更新：「NetEase 交叉验证」曾经是"默认关"的**唯一例外**（按地区/时区
-///    猜要不要开）；**用户当天拍板改成一律默认关** ⇒ 这一页现在**没有例外**。
-///    理由与代价见 `ExperimentsOptions.defaultNeteaseCrossValidation` 上方那段。
+/// ⚠️ 2026-10-18：「NetEase 交叉验证」与「PetitLyrics 回退 NetEase」两个实验**已整体撤掉**
+///    （用户拍板：这周关于网易云的改动全部回退，NE 目前只在来源说明里标注"不推荐非中国用户使用"）。
+///    这一页现在只留 Instagram 分享位、AMLL 模糊搜索、SpicyLyrics 交叉验证、Apple 官方 TTML。
 struct EeveeExperimentsSettingsView: View {
     @State var experimentsOptions = UserDefaults.experimentsOptions
 
@@ -59,30 +59,10 @@ struct EeveeExperimentsSettingsView: View {
                 )
             }
 
-            Section(footer: Text("petit_fallback_netease_description".localized)) {
-                Toggle(
-                    "petit_fallback_netease".localized,
-                    isOn: $experimentsOptions.petitLyricsNetEaseFallback
-                )
-            }
-
             Section(footer: Text("amll_fuzzy_search_description".localized)) {
                 Toggle(
                     "amll_fuzzy_search".localized,
                     isOn: $experimentsOptions.amllFuzzySearch
-                )
-            }
-
-            // ★ 2026-10-17：NetEase 交叉验证。
-            //   开关本身只改一个 Bool —— 判据与执行全在
-            //   `NetEaseCrossValidation.swift` / `NeteaseCrossValidationRunner.swift`，
-            //   接在 `NeteaseLyricsRepository.getLyrics` 的选歌那一步上。
-            //   footer 里那句"会增加歌曲请求用时"是用户要求写进去的，也是真的：
-            //   只有**低置信度候选**才会去问裁判源（高置信度一律零开销）。
-            Section(footer: Text("netease_cross_validation_description".localized)) {
-                Toggle(
-                    "netease_cross_validation".localized,
-                    isOn: $experimentsOptions.neteaseCrossValidation
                 )
             }
 

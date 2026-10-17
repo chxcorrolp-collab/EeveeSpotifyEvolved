@@ -48,7 +48,7 @@ spicylyrics_key_invalid_popup = "Spicy Lyrics 拒绝了这个 API 密钥。请�
 lyrics_made_by = "制作者";
 lyrics_uploaded_by = "上传者";
 lyrics_source_unknown = "来源未知";
-netease_description = "NetEase：歌词大部分带时间轴。但对非中国大陆用户的支持较差，且可能出现时间轴不对齐等情况。";
+netease_description = "NetEase：目前不推荐非中国用户使用此歌词来源。因为尚未解决有关于NetEase的一些影响使用的问题。";
 amll_description = "AMLL：提供高质量逐词歌词和丰富的歌词结构。具体介绍可前往amll.dev查看。";
 
 musixmatch_user_token = "Musixmatch 用户令牌";
@@ -96,14 +96,8 @@ experiments_page_warning = "请注意：以下功能要么未经测试，要么�
 show_instagram_destination = "显示 Instagram 分享目标";
 show_instagram_destination_description = "始终把 Instagram 作为分享目标。%@";
 
-petit_fallback_netease = "PetitLyrics 回退 NetEase";
-petit_fallback_netease_description = "选项生效需要歌词来源选择为 PetitLyrics。此选项开启且保持「AMLL 优先」和「Genius 回退」这两个功能开启后，歌词回退链会额外增加 NetEase，即：AMLL → PetitLyrics → NetEase → Genius。";
-
 amll_fuzzy_search = "AMLL 模糊搜索";
 amll_fuzzy_search_description = "选项生效需要开启「AMLL 优先」或歌词来源选择 AMLL。选项开启后，AMLL 的歌词搜索会从精确搜索转换为模糊搜索；原有的高质量逐词时间轴与「只接受逐词歌词」的特色不会改变。";
-
-netease_cross_validation = "NetEase交叉验证";
-netease_cross_validation_description = "此选项开启后可能会缓解/解决非中国大陆用户使用 NetEase 歌词源时，NetEase 不会正确返回歌曲歌词的问题。但选项开启后会增加歌曲请求用时。";
 
 spicy_cross_validation = "SpicyLyrics交叉验证";
 spicy_cross_validation_description = "选项开启后会解决SpicyLyrics返回的歌词可能被和谐的问题，歌词请求用时会加长。";

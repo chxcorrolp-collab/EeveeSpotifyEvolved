@@ -229,19 +229,6 @@ jobs:
                  -o lrclib-line-splitting-tests
           ./lrclib-line-splitting-tests
 
-      # 2026-10-17：「NetEase 交叉验证」的**判据**（`NeteaseCrossValidation`）。
-      # 非中国大陆 IP 下网易的搜索排序按地区变，而"从排名列表里挑哪一条"是我们做的
-      # ⇒ 会挑到另一首歌的词。修法是拿一级裁判源（身份锚在 Spotify Track ID 上）的
-      # 文本核对；这一步钉住判据本身，**尤其钉住"判不了就不判"那一侧** ——
-      # 误判成"选错歌"会害得本来对的候选被丢掉（罗马字 vs 原文就是最典型的反例）。
-      # 纯 Foundation（无网络、无 DTO），所以能进这里；执行层要仓库的依赖链，进不来。
-      - name: NetEase cross-validation verdicts
-        run: |
-          swiftc Sources/EeveeSpotify/Lyrics/NetEaseCrossValidation.swift \
-                 Tests/NeteaseCrossValidation/main.swift \
-                 -o netease-cross-validation-tests
-          ./netease-cross-validation-tests
-
       # 2026-10-17：「SpicyLyrics 交叉验证」的**补词判据**（`LyricsCensorFill`）。
       # 三件事必须钉住：
       #   ① 检测正则 —— 上游的 `\b\*{3,}\b` 实测只命中 `f***k`，`my **** line` 一个都

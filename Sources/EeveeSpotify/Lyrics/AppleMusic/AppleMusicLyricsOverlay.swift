@@ -29,13 +29,14 @@ func seekToTappedLyricLine(_ time: TimeInterval) {
     WordByWordSeeker.seek(toMs: Int((time * 1000).rounded()) + 5)
 }
 
-// MARK: - 每帧时间源
+// MARK: - 挂载管理
 
-/// 播放时间的发布者。
+/// 把 `AppleMusicLyricsOverlayView` 挂到 Spotify 的歌词容器上，并在换歌 / 切屏时就地更新。
 ///
-/// **不自带 CADisplayLink**：由宿主（`WordByWordPlaybackClock`）每帧调用 `submit`，
-/// 这样新渲染层和旧 overlay 共用同一个时钟，不存在两套时钟互相错拍的问题。
+/// ⚠️ `@MainActor` 是**必须**的，拆分时别丢：它持有 `UIHostingController` 与 SwiftUI
+/// 状态，而 `WordByWordHost` 那些调用点全在主线程上（见 `LyricsChromeVisibility` 的说明）。
 @available(iOS 26.0, *)
+@MainActor
 final class AppleMusicLyricsOverlayHost {
 
     static let shared = AppleMusicLyricsOverlayHost()
@@ -441,7 +442,3 @@ final class AppleMusicLyricsOverlayHost {
         )
     }
 }
-
-// MARK: - 背景
-
-@available(iOS 26.0, *)

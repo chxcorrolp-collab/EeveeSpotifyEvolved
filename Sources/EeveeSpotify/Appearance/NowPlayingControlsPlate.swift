@@ -41,16 +41,24 @@ import ObjectiveC.runtime
 
 // MARK: - Hook（可选的加速落点）
 
-let playButtonTapSelector = NSSelectorFromString("uiButtonTapped")
-
-/// 播放键**被点的那一下** —— pw 的 `playTapped()` 靠它把字形"在触摸那一刻就翻过去"。
+/// 播放键**被点的那一下**用的选择器 —— pw 的 `playTapped()` 靠它把字形"在触摸那一刻就翻过去"。
 ///
 /// ⚠️ 这个选择器的来源是 **pw v0.21.1 的 `PlayerControls.x`**
 /// （`%hook _TtC28EncoreConsumerMobile_BaseKit14PlayButtonView` + `- (void)uiButtonTapped`）。
 /// 本仓库**没有在 9.1.88 上验证过它**（符号表查不到方法名），所以：
-///   · 激活前用 `class_getInstanceMethod` 探测（见 `activateNowPlayingControls`）；
-///   · 探测不到就整组不挂，绝不留给 Orion 报非致命错误；
-///   · 那个类同时挂在迷你条 / 吸顶头 / 全屏歌词页上，所以**必须**在门面里按对象比对。
+///   · 激活前用 `class_getInstanceMethod` 探测（见 `installTapTargetIfNeeded`）；
+///   · 探测不到就走"给内部 `UIControl` 加 target"那条路，绝不因为探测失败而丢功能。
+let playButtonTapSelector = NSSelectorFromString("uiButtonTapped")
+
+// MARK: - 门面
+
+/// 「控制键换成本地字形」的门面。
+///
+/// ⚠️ **整个 enum 标 `@MainActor`**：它下面用的 `AppleMusicLyricsPlaybackProjection` 是
+/// `@MainActor` 的，而所有入口（hook 的布局回合 / 进页面 apply / 复查节拍 / 设置页 binding）
+/// 本来就都在主线程。不标的话编译器会逐行报"非隔离上下文里引用 MainActor 成员"
+/// （2026-10-04 CI 抓到：`init(positionProvider:)` / `refresh()` / `isPlaying`）。
+@MainActor
 enum NowPlayingControlsPlate {
 
     static let logTag = "NPVControls"

@@ -2,6 +2,10 @@
 import SwiftUI
 import UIKit
 
+// ⚠️ `@available(iOS 26.0, *)` 不能丢：这个时钟只服务于 iOS 26 那一层自绘歌词
+// （`AppleMusicLyricsOverlayHost` 就是 `@available(iOS 26.0, *)` 的）。
+// 2026-10-17 的拆分把这条属性漏在了原文件末尾，CI 直接报 "expected declaration"。
+@available(iOS 26.0, *)
 final class AppleMusicLyricsClock: ObservableObject {
     /// 当前播放时间（秒）。每帧更新，驱动整页重绘。
     @Published var playbackTime: TimeInterval = 0

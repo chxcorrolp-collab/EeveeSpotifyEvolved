@@ -2,6 +2,10 @@
 import SwiftUI
 import UIKit
 
+// ⚠️ `@available(iOS 26.0, *)` 必须留着：这个视图用的是 iOS 26 才有的
+// `attributedTextFormattingDefinition` 那条自定义 TextAttribute 路径
+// （见 `LyricAttributedText.swift`）。2026-10-17 的拆分漏了它，CI 直接报 availability。
+@available(iOS 26.0, *)
 struct AppleMusicLyricsOverlayView: View {
 
     /// 行模型。换歌时由外部替换。
@@ -349,8 +353,3 @@ struct AppleMusicLyricsOverlayView: View {
         }
     }
 }
-
-// MARK: - 挂载管理
-
-@available(iOS 26.0, *)
-@MainActor

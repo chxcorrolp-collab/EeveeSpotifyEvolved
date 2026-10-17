@@ -10,8 +10,10 @@ struct NowPlayingControlsGroup: HookGroup {}
 /// 已经能跑的 `PlaybackControlsElementsUnit` 钩子一起关掉。
 struct NowPlayingTapGroup: HookGroup {}
 
-/// 探测/日志共用的选择器。放在**文件作用域**，让 hook 类里只留 Orion 认的那几样
-/// （`typealias Group` / `targetName` / 覆写方法）—— 与仓库其它 hook 保持同一形状。
+/// 播放键那个类上的 `uiButtonTapped` 钩子（**探测到才挂**，见 `installTapTargetIfNeeded`）。
+///
+/// ⚠️ 实测在 9.1.88 上**从不触发**：真正生效的是挂在播放键内部 `UIControl` 上的
+/// `NowPlayingPlayTapTarget` 那条。留着它只是多一次 `class_getInstanceMethod` 探测的代价。
 class PlayButtonTapHook: ClassHook<UIView> {
     typealias Group = NowPlayingTapGroup
     static var targetName = "_TtC28EncoreConsumerMobile_BaseKit14PlayButtonView"
@@ -62,14 +64,10 @@ class PlaybackControlsUnitHook: ClassHook<UIView> {
     }
 }
 
-// MARK: - 门面
-
-/// 「控制键换成本地字形」的门面。
+/// 挂在播放键内部 `UIControl` 上的触摸目标（真正生效的那条点击路）。
 ///
-/// ⚠️ **整个 enum 标 `@MainActor`**：它下面用的 `AppleMusicLyricsPlaybackProjection` 是
-/// `@MainActor` 的，而所有入口（hook 的布局回合 / 进页面 apply / 复查节拍 / 设置页 binding）
-/// 本来就都在主线程。不标的话编译器会逐行报"非隔离上下文里引用 MainActor 成员"
-/// （2026-10-04 CI 抓到：`init(positionProvider:)` / `refresh()` / `isPlaying`）。
+/// ⚠️ `@MainActor` 必须留着：它回调的 `NowPlayingControlsPlate` 整个是 main-actor
+/// 隔离的，而 `onMainThreadSync` 里的 `MainActor.assumeIsolated` 也要求闭包在 main actor 上。
 @MainActor
 final class NowPlayingPlayTapTarget: NSObject {
 

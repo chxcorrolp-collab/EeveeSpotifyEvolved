@@ -138,7 +138,23 @@ enum EntityPageHeaderManager {
 
         guard !links.isEmpty else { return }
         var refs = bioLinks[name] ?? []
-        for link in links where !refs.contains(where: { $0.kind == link.kind && $0.url != nil }) {
+        for link in links {
+            // 同一个 kind 只留一条。原来的判据是"已有一条**带 URL** 的就跳过" —— 那样
+            // 「页面扫描先存下一条读不到 URL 的 wikipedia → 模型这一轮再进一条带真地址的
+            // wikipedia」会**变成两条**，卡片上就是两颗"维基百科"（而卡片只取前三颗，
+            // 还会把别的链接顶掉）。现在：同 kind 已存在时**用模型这条覆盖**（真地址只有
+            // 模型有），已有真地址的则严格不再加。
+            if let index = refs.firstIndex(where: { $0.kind == link.kind }) {
+                if refs[index].url == nil {
+                    refs[index] = ArtistBioLinkRef(
+                        kind: link.kind,
+                        title: eeveeArtistBioLinkTitle(for: link.kind),
+                        url: link.url,
+                        control: refs[index].control
+                    )
+                }
+                continue
+            }
             refs.append(
                 ArtistBioLinkRef(
                     kind: link.kind,

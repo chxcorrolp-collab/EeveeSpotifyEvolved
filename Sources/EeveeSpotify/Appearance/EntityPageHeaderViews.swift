@@ -178,6 +178,13 @@ final class EntityPageHeaderButton: UIControl {
                     }
                     text = EntityPageHeaderManager.cachedBioText(for: name)
                 }
+                // ★★ 2026-10-17（用户：「艺人页还是**不手动往下滑过**，`i` 的就不会展示艺人简介」）：
+                //    这一趟扫描在"列表还在长"的那一两秒里经常白跑 ⇒ **补扫两次**（0.6s / 1.6s）。
+                //    补扫成功时正文会进 `bioTexts`，已经开着的这张卡片由 `watchForNativeText`
+                //    那 6 秒的盯梢写上去 —— 用户不需要先手动滑到那一块。
+                if text == nil {
+                    EntityPageHeaderManager.retryMaterialiseBio(from: page ?? self)
+                }
             }
             ArtistBioSheet.present(
                 name: name,

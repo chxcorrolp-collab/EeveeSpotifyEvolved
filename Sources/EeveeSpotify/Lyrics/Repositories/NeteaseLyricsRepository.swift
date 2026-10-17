@@ -867,6 +867,18 @@ class NeteaseLyricsRepository: LyricsRepository {
     // MARK: - LyricsRepository
 
     func getLyrics(_ query: LyricsSearchQuery, options: LyricsOptions) throws -> LyricsDto {
+        // ★★ 2026-10-17（用户：「netEase 交叉验证似乎未生效」，日志 109 里**一条** CV 行都没有）：
+        //    **状态行挪到入口**。以前它挂在"候选过闸之后"（第 1126 行附近），而这台设备上
+        //    NetEase 那几首**一条候选都没过闸门** ⇒ 直接 `noSuchSong` 抛出去，那一行**永远打不出来**
+        //    ⇒ 日志里分不清"开关没开"和"开了但没触发"。每次启动只打一次，位置必须在这里。
+        if !NeteaseLyricsRepository.didLogCrossValidationState {
+            NeteaseLyricsRepository.didLogCrossValidationState = true
+            writeDebugLog(
+                "[NetEase] cross-validation "
+                    + (UserDefaults.experimentsOptions.neteaseCrossValidation ? "ON" : "OFF")
+            )
+        }
+
         writeDebugLog("[NetEase] Fetching lyrics for \"\(query.title)\" - \(query.primaryArtist)")
         let cacheKey = String(query.hashValue)
         if let cached = lyricsCache.object(forKey: cacheKey as NSString) {
@@ -1098,6 +1110,14 @@ class NeteaseLyricsRepository: LyricsRepository {
             } else {
                 writeDebugLog("[NetEase] no usable candidate (\(songs.count) results) — noSuchSong")
             }
+            // ★★ 2026-10-17：交叉验证**没事可做**时也要留一行 —— 否则"开关开着"与"开了但一条候选
+            //    都没过闸门"在日志里长得一模一样（日志 109 就是这么误判成"未生效"的）。
+            writeDebugLog(
+                "[NetEase] cross-validation "
+                    + (UserDefaults.experimentsOptions.neteaseCrossValidation
+                        ? "had nothing to check — no candidate reached the gate"
+                        : "is OFF")
+            )
             throw LyricsError.noSuchSong
         }
 
@@ -1123,13 +1143,10 @@ class NeteaseLyricsRepository: LyricsRepository {
         //
         // 判错的处置：**不弃用 NetEase**，而是换下一条候选（用户看中它的 yrc 逐字 /
         // 翻译 / 罗马音，换源等于赢了正确性、输了功能）。全换不出来才交下一个源。
+        //
+        // ⚠️ 2026-10-17：状态那行**已经挪到 `getLyrics` 入口**（见那里的说明）—— 它挂在这里时，
+        //    "一条候选都没过闸门"那条路会在上半段就 `throw`，于是那一行永远打不出来。
         let crossValidationEnabled = UserDefaults.experimentsOptions.neteaseCrossValidation
-        if !NeteaseLyricsRepository.didLogCrossValidationState {
-            NeteaseLyricsRepository.didLogCrossValidationState = true
-            writeDebugLog(
-                "[NetEase] cross-validation " + (crossValidationEnabled ? "ON" : "OFF")
-            )
-        }
 
         var chosenIndex = -1
         var chosenRaw: (lrc: String?, tlyric: String?, romalrc: String?)?

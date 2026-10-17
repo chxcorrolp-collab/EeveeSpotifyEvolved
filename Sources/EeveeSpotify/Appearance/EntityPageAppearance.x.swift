@@ -255,6 +255,8 @@ enum EntityPageAppearance {
     private static var didReport = false
     /// "清掉了一个页面容器"只报一次（见 `clearPageContainers`）。
     private static var didReportContainerClear = false
+    /// "藏掉了页头那层 wash"只报一次（见 `concealAlbumWash`）。
+    private static var didReportAlbumWash = false
     private static var lastLoggedHex: String?
 
     // MARK: - 入口
@@ -402,6 +404,10 @@ enum EntityPageAppearance {
         timer.tolerance = 0.2
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+        // ★★ 2026-10-17（用户：图片 142「刚进入艺人页可能会有 spotify 的原黑色底」）：
+        //    **进来先跑一拍**。定时器 0.6s 才响 ⇒ 那一帧里页面还是 Spotify 自己的黑底，
+        //    然后我们的底才"跳"上来。先 tick 一次，取色底与页头就跟着第一帧一起出现。
+        tick()
         writeDebugLog(
             "[\(logTag)] armed — Melox page look \(UserDefaults.entityPageDissolve ? "ON" : "OFF"),"
                 + " hiding Spotify's repeated buttons \(UserDefaults.entityPageHideChrome ? "ON" : "OFF")"
@@ -433,6 +439,11 @@ enum EntityPageAppearance {
         if target.page !== currentPage {
             restore(reason: "another page")
             currentPage = target.page
+            // ★★ 2026-10-17（用户：图片 142「刚进入艺人页可能会有 spotify 的原黑色底」）：
+            //    换页这一拍**立刻再跑一次**（`currentPage` 已更新 ⇒ 不会递归）。
+            //    定时器最坏要等 0.6s，那一段里页面还是 Spotify 自己的黑底/原生页头。
+            tick()
+            return
         }
         // ⚠️ `EntityPageRepaint.root = target.page` 原来**就写在这里**，2026-10-16 挪到下面
         //    "取色底画完之后"（原因见那一处注释：照片 137 的下半页整片黑）。
@@ -1221,14 +1232,50 @@ enum EntityPageAppearance {
     /// 这里直接复用 `concealWash(on:)`：它拿参数的 **superview** 当容器递归 —— 传 GradientView 进去，
     /// 容器就是那个 HeaderView，正好是它要清的那一块。
     private static func concealAlbumWash(in page: UIView) {
-        for sub in page.subviews {
-            let name = NSStringFromClass(type(of: sub))
-            guard name.contains("HeaderView"), !name.contains("NavigationBar") else { continue }
-            for inner in sub.subviews where NSStringFromClass(type(of: inner)).contains("GradientView") {
-                concealWash(on: inner)
-                return
+        // ★★ 2026-10-17（用户：图片 144「专辑页可能会是图片这个样子」—— 页头一层**粉色渐变**压在我们的
+        //    取色底上、内容区却已经是我们的平色，同一页两段颜色、中间一条硬边）：
+        //
+        //    根因就是 **Spotify 自己的 wash 没被藏掉**：那是 `HeaderView` 里的一块 `GradientView`。
+        //    旧判据只看**页面的直接子视图**、再只看它的**直接子视图**、而且**命中第一个就 return**
+        //    ⇒ 专辑页（`CreativeWorkTemplateView`）的 wash 一旦不是那个形状（或不止一块），
+        //    它就整块留着，压在我们的底上。
+        //
+        //    现在：从页面往下**有界 BFS**（深 10 / 600 节点），凡是"在 HeaderView 子树上"的
+        //    `GradientView` 都藏掉（最多 8 块）；`eevee-` 前缀与我们自己的 field / scrim / hero
+        //    一律跳过 —— 那几块是**要显示**的。
+        var queue: [(view: UIView, insideHeader: Bool, depth: Int)] = page.subviews.map { ($0, false, 1) }
+        var visited = 0
+        var taken = 0
+
+        while !queue.isEmpty, visited < 600, taken < 8 {
+            let (view, insideHeader, depth) = queue.removeFirst()
+            visited += 1
+
+            let name = NSStringFromClass(type(of: view))
+            let identifier = view.accessibilityIdentifier ?? ""
+            let isHeaderRoot = name.contains("HeaderView") && !name.contains("NavigationBar")
+            let inHeader = insideHeader || isHeaderRoot
+
+            if inHeader,
+               name.contains("GradientView"),
+               !identifier.hasPrefix("eevee-"),
+               view !== field,
+               view !== scrim,
+               !(sharpHero.map { view === $0 } ?? false) {
+                concealWash(on: view)
+                taken += 1
+                continue
             }
+
+            guard depth < 10 else { continue }
+            queue.append(contentsOf: view.subviews.map { ($0, inHeader, depth + 1) })
         }
+
+        guard taken > 0, !didReportAlbumWash else { return }
+        didReportAlbumWash = true
+        writeDebugLog(
+            "[\(logTag)] album wash — concealed \(taken) GradientView(s) inside the page header"
+        )
     }
 
     /// pw 的 `applyBackground` 逐字：沿**封面的祖先链**找 id = `_backgroundViewContainer` 的容器，

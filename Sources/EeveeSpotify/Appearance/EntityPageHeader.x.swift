@@ -1184,6 +1184,36 @@ enum EntityPageHeaderManager {
         return tapMaterialisedPages.insert(ObjectIdentifier(page)).inserted
     }
 
+    /// ★★ 2026-10-17（用户：「艺人页还是**不手动往下滑过**，`i` 的就不会展示艺人简介」）：
+    /// 点 `i` 时那一趟扫描**可能白跑** —— 卡片是懒加载的（不滚到它就不会被建出来），
+    /// 而列表在刚进页面的一两秒里还在长（`contentSize` 边滚边变）⇒ 一次扫空就永远空着。
+    ///
+    /// 现在：扫空之后**再补扫两次**（0.6s / 1.6s）。每次只看两种情况 —— 已经拿到正文就停；
+    /// 页面已经离开就停。`eeveeMaterialiseBio` 自己会回到原位，所以补扫不会把页面留在下面。
+    static func retryMaterialiseBio(from view: UIView, remaining: Int = 2) {
+        guard remaining > 0 else { return }
+        let name = currentArtistName
+        let delay: TimeInterval = remaining == 2 ? 0.6 : 1.6
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak view] in
+            guard let view, view.window != nil else { return }
+            if !name.isEmpty, cachedBioText(for: name) != nil { return }
+
+            if let card = eeveeMaterialiseBio(from: view) {
+                artistBiographyAppeared(card)
+                writeDebugLog(
+                    "[EntityPageHeader] about-artist retry found the card (\(remaining) retry/retries left)"
+                )
+                return
+            }
+
+            writeDebugLog(
+                "[EntityPageHeader] about-artist retry still empty (\(remaining) retry/retries left)"
+            )
+            retryMaterialiseBio(from: view, remaining: remaining - 1)
+        }
+    }
+
     /// ★ 2026-10-18：设置页改了「艺人页」那两格之后，如果艺人页还在下面，**当场重跑一遍**。
     ///
     /// 设置页是盖在艺人页上的；它自己不一定会让下面的页面再布局一次。没有这一句的话，
@@ -1581,16 +1611,29 @@ enum EntityPageHeaderManager {
         //   ① `role = "more"`：日志里那颗原来一直是默认的 `side button`，分不出是谁（见 `tapped`）；
         //   ② **`fireTarget = menu`**：转发目标从**弱引用** `source` 换成这颗真实控件 ——
         //      `source` 一旦被回收（Spotify 重建页头）就变成一颗**静默失效**的按钮；
-        //   ③ **`skipsControlAction = true` + `firesDeep = true`**：Spotify 的 `⋯` 是
-        //      `Encore.Button`，菜单靠自己的交互弹，不吃 `sendActions`
-        //      （日志 100：`fired: UIControl.touchUpInside` 而界面一动没动）
-        //      ⇒ 跳过那一档、直接走手势/更宽那一档（就是让艺人页那颗 `i` 走通的路）。
+        //   ③ `firesDeep = true`：前三档都落空时再往祖先链/选中回调那一档找（见 `eeveeFireWide`）。
+        //
+        // ★★ 2026-10-17 第六轮（用户：「艺人页／专辑页右上角三个点还是点不动」，日志 109 判决）：
+        //    **不再跳过 target/action**（`skipsControlAction = false`），而且**不再把源控件藏死**。
+        //
+        //    日志 109 的两行是关键：
+        //      · `⋯ clickability — targets=[touchUpInside=EncoreControlEventHandler…]` ⇒ 它**有** target；
+        //      · `more tapped — … fired: NOTHING (no action and no tap recogniser)` ⇒ 我们**跳过了**那一档，
+        //        而手势那一档失败（它的 `UITapGestureRecognizer` 读不出 `_targets`）。
+        //    pw 的 `SGRFire`（`Kit/SGRRestyle.m`）走的正是我们跳过的那一档：
+        //      `primaryActionTriggered` → `touchUpInside` → 都没有才 `accessibilityActivate`；
+        //    而且 pw 藏东西只加**空 mask**（`blank()` 逐字："Not hidden — the header's OverflowStackView
+        //    traps when a view in it hides, and a hidden view is one the redesign still has to read and fire"）。
+        //    我们原来用 `eeveeConceal`（`layer.isHidden` + 空 mask）⇒ 一个 **hidden** 的视图，
+        //    UIKit 侧拿不到可用的锚点，菜单自然弹不出来（日志 100 那句"发成功了但界面一动没动"）。
         more.role = "more"
         more.fireTarget = menu
-        more.skipsControlAction = true
+        more.skipsControlAction = false
         more.firesDeep = true
 
-        eeveeConceal(wrapperFor(menu, in: headerRoot))
+        // ★★ 2026-10-17：**只遮不藏**（`eeveeBlank`：空 mask + 关交互 + 关无障碍，`isHidden` 一个都不碰）。
+        //   见上面 pw 那段引文 —— 这颗按钮**必须还是一个"活着"的控件**，菜单才弹得出来。
+        eeveeBlank(wrapperFor(menu, in: headerRoot))
     }
 
     /// ★ 2026-10-18（用户：「歌单页进入后还是能往上接着划……进入的位置可以上移吗」）：

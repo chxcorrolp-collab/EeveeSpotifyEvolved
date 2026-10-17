@@ -506,8 +506,14 @@ func eeveeArtistBioLink(from view: UIView) -> (kind: String, title: String, url:
     let className = NSStringFromClass(type(of: view))
     let classHit = className.contains(eeveeArtistSocialLinkClassFragment)
 
-    var text = (view.accessibilityLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-    if text.isEmpty, classHit || view is UIControl || !(view.gestureRecognizers ?? []).isEmpty {
+    // ⚠️ 先做**便宜的早退**：这一支会被页面里每一拍每个节点调用（有界 800 节点 × 若干拍），
+    //    而下面的 `eeveeControlText` 自己最多走 200 个节点 —— 不加这一道就是 O(n²)。
+    let label = (view.accessibilityLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let isTappable = view is UIControl || !(view.gestureRecognizers ?? []).isEmpty
+    guard classHit || isTappable || !label.isEmpty else { return nil }
+
+    var text = label
+    if text.isEmpty, classHit || isTappable {
         text = eeveeControlText(of: view).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

@@ -102,30 +102,37 @@ enum EntityPageHeaderManager {
 
     private static var bioLinks: [String: [ArtistBioLinkRef]] = [:]
 
-    /// 认得出哪几种社交链接：`needles` 在控件文字 / 无障碍标签里做**子串**匹配
-    /// （大小写不敏感），`title` 是画在胶囊上的短名。
+    /// 在**一块子树**里把社交链接**认下来**（有界：默认 800 个节点、最多 6 条；空表不落库，
+    /// 下一拍还能再试）。
     ///
-    /// ★★ 2026-10-18：判据已搬到 `eeveeArtistBioLink(from:)`（**类名优先**：二进制的
-    /// `SPTArtistExternalSocialLinkButton`，再退文字 / URL 主机名）—— 这里不再各留一份。
-    /// 在"关于艺人"那块卡里把社交链接**认下来**（有界：400 个节点、最多 6 条）。
+    /// ★★ 2026-10-18（用户：「原本有的维基 / 推特链接之类的没显示」）：Spotify 自己那块里就有
+    /// 这些链接按钮（二进制 @200596249 逐字：`SPTArtistExternalSocialLinkButton` /
+    /// `…ButtonViewModel` / `SPTArtistSocialLink`；点它走委托 `externalSocialLinkTappedForType:`），
+    /// 我们把整块折掉之后它们一起消失。现在**露头那一刻就记下这些控件**（weak 引用），
+    /// `ArtistBioSheet` 用它们画胶囊、点下去优先用读到的真链接。
     ///
-    /// 认下来只记引用、不做任何跳转 —— 点不点得到交给 `ArtistBioSheet`（它会打日志）。
-    private static func captureBioLinks(from card: UIView, name: String) {
-        guard bioLinks[name] == nil else { return }
+    /// ⚠️ 起点给**页面根**（`eeveeArtistBioSearchRoot`）而不是只给那张卡：艺人页的
+    /// `CreatorBiographyCardLayout`（二进制 @182189882）里只有 bio / 头部 / 粉丝数 / "显示更多"，
+    /// **没有**社交链接按钮 —— 只扫卡片会一条都收不到。
+    private static func captureBioLinks(from root: UIView, name: String, limit: Int = 800) {
+        var refs = bioLinks[name] ?? []
+        guard refs.count < 6 else { return }
 
-        var refs: [ArtistBioLinkRef] = []
-        var queue: [UIView] = [card]
+        var queue: [UIView] = [root]
         var visited = 0
-        while !queue.isEmpty, visited < 400, refs.count < 6 {
+        while !queue.isEmpty, visited < limit, refs.count < 6 {
             let view = queue.removeFirst()
             visited += 1
-
             if let hit = eeveeArtistBioLink(from: view),
                // 同一个 kind 只收一条：类名片段会同时命中那颗按钮与它的容器，
                // 不去重的话同一颗维基会画出两张胶囊。
-               !refs.contains(where: { hit.kind != "link" && $0.kind == hit.kind }) {
+               !refs.contains(where: { $0.control === view || (hit.kind != "link" && $0.kind == hit.kind) }) {
                 refs.append(
                     ArtistBioLinkRef(kind: hit.kind, title: hit.title, url: hit.url, control: view)
+                )
+                writeDebugLog(
+                    "[ArtistBio] link \(hit.kind) — url \(hit.url == nil ? "not readable" : "read")"
+                        + ", title \(hit.title)"
                 )
             }
             queue.append(contentsOf: view.subviews)
@@ -135,14 +142,6 @@ enum EntityPageHeaderManager {
         bioLinks[name] = refs
         let kinds = refs.map(\.kind).joined(separator: ",")
         writeDebugLog("[ArtistBio] links found — \(kinds) (\(refs.count) control(s))")
-        // ★★ 2026-10-18：**读没读到真链接**必须一眼看得出来（下一轮据此决定是继续转发点击、
-        //    还是改去 hook `SPTArtistAboutDataLoader` 的 `…links`）。
-        for ref in refs {
-            writeDebugLog(
-                "[ArtistBio] link \(ref.kind) — url \(ref.url == nil ? "not readable" : "read")"
-                    + ", title \(ref.title)"
-            )
-        }
     }
 
     /// 这一页的艺人简介**已经读到过**了吗 —— `EntityPageSectionDrop` 折叠「关于艺人」那一格之前要问它。
@@ -173,6 +172,9 @@ enum EntityPageHeaderManager {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak page] in
             guard let page, page.window != nil else { return }
+            // ★★ 2026-10-18：这一拍顺手也把**社交链接**扫一遍（见 `captureBioLinks`）——
+            //    链接按钮与正文各出现各的，两边都从**页面根**起扫（有界 800 节点）。
+            captureBioLinks(from: eeveeArtistBioSearchRoot(from: page), name: name)
             let text = readBioWithoutScrolling(in: page, name: name)
             guard !didReportBioSweep else { return }
             didReportBioSweep = true
@@ -201,7 +203,16 @@ enum EntityPageHeaderManager {
         //    （滚动那一版会把列表滚一整趟再滚回来，用户看得见；见 `readBioWithoutScrolling`）。
         for attempt in 2...11 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5 * Double(attempt)) { [weak page] in
-                guard let page, page.window != nil, bioTexts[name] == nil else { return }
+                guard let page, page.window != nil else { return }
+                // ★★ 2026-10-18：**正文与社交链接各走各的** —— 以前读到正文就不再进这一拍，
+                //    而链接按钮常常比那张卡晚出现 ⇒ 一条都收不到。现在：
+                //    · 每一拍都先扫一遍链接（有界；正文读到之后也继续扫）；
+                //    · 正文只读到为止；两样都齐了 ⇒ 直接收工（不再白跑剩下的拍）。
+                if bioTexts[name] != nil, !(bioLinks[name] ?? []).isEmpty { return }
+                // 每一拍**先扫链接**（有界；收满 6 条就自己返回），再决定要不要读正文 ——
+                // 两边都不重复扫。
+                captureBioLinks(from: eeveeArtistBioSearchRoot(from: page), name: name)
+                guard bioTexts[name] == nil else { return }
                 guard let text = readBioWithoutScrolling(in: page, name: name) else { return }
                 writeDebugLog(
                     "[EntityPageHeader] about-artist captured late — \(name), \(text.count) char"

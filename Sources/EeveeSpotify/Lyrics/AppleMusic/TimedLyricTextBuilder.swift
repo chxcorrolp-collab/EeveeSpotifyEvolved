@@ -363,11 +363,30 @@ enum TimedLyricTextBuilder {
             measuredTextWidth(source: source, font: layoutFont)
         )
 
+        // ★★ 2026-10-18：**复核之后最宽那一段**（= 渲染时真的会占多宽）。
+        //    它 ≤ layout ⇒ 折行与渲染终于用同一把尺子；> layout ⇒ 复核器没修掉（贴日志来）。
+        let characters = Array(source)
+        let widestSegment = String(
+            format: "%.1f",
+            LyricLineBreakFitting.segments(count: characters.count, breaks: lineBreakOffsets)
+                .map { range in
+                    range.upperBound <= characters.count
+                        ? measuredTextWidth(
+                            source: String(characters[range]),
+                            fontSize: fontSize,
+                            fontWeight: fontWeight
+                        )
+                        : 0
+                }
+                .max() ?? 0
+        )
+
         writeDebugLog(
             "[LyricWrap] fs=\(String(format: "%.1f", fontSize))"
                 + " w=\(constrainedWidth.map { String(format: "%.1f", $0) } ?? "nil")"
                 + " layout=\(layoutWidth)"
                 + " text=\(textWidth)"
+                + " fit=\(widestSegment)"
                 + " ct=\(layoutWidthMeasured) (\(layoutFontName) / \(uiFont.fontName))"
                 + " breaks=[\(breaks)]"
                 + " \"\(marked(source, at: lineBreakOffsets))\""
@@ -633,7 +652,31 @@ enum TimedLyricTextBuilder {
                 result.insert(characterOffset)
             }
         }
-        return result
+
+        // ★★ 2026-10-18（日志 104 的 Starboy 现场）：**按渲染那把尺子复核 CoreText 的断点**。
+        //
+        //    现场：`text=394.4 layout=331.8 breaks=[]` —— 按 331.8pt 的预算本该折的行，
+        //    CoreText 一个断点都没给；而给了断点的 5 行 text 都在 405~557pt ⇒ 折行那一侧
+        //    与渲染/诊断那一侧不是同一把尺子（`CTFontCreateWithName(uiFont.fontName)` vs
+        //    `UIFont.systemFont`）。断点太靠右 ⇒ 第一段仍超宽 ⇒ 渲染器再折一次 ⇒ 屏幕上多一行。
+        //
+        //    复核器只**加**断点、不删（见 `LyricLineBreakFitting`）：CoreText 说对了的行逐字不动，
+        //    说漏了的行会被切开。下一份日志的 `fit=` 就是复核后**最宽那一段**的宽度 —— 它应当
+        //    小于等于 layout。
+        let characters = Array(source)
+        return LyricLineBreakFitting.verifiedBreaks(
+            text: source,
+            count: characters.count,
+            layoutWidth: layoutWidth,
+            coreTextBreaks: result
+        ) { range in
+            guard range.lowerBound >= 0, range.upperBound <= characters.count else { return 0 }
+            return measuredTextWidth(
+                source: String(characters[range]),
+                fontSize: fontSize,
+                fontWeight: fontWeight
+            )
+        }
     }
 
     private static func effectiveLayoutWidth(

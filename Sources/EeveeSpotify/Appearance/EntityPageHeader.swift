@@ -480,8 +480,7 @@ func eeveeIsArtistBioNonBodyChrome(_ view: UIView) -> Bool {
     return false
 }
 
-/// 社交链接那一颗的**类名特征** —— 二进制 @200596249 逐字：`SPTArtistExternalSocialLinkButton`
-/// （同处还有 `SPTArtistExternalSocialLinkButtonViewModel` / `SPTArtistSocialLink`，
+/// 社交链接那一颗的**类名特征** —— 二进制 @200596249 逐字：`SPTArtistExternalSocialLinkButton`/// （同处还有 `SPTArtistExternalSocialLinkButtonViewModel` / `SPTArtistSocialLink`，
 /// 以及委托方法 `externalSocialLinkTappedForType:`）。
 ///
 /// 按**类名**认是与语言无关的那条判据（文字判据只当兜底：有的版本只画图标、没有文字）。
@@ -561,6 +560,125 @@ private func eeveeSocialLinkURL(on object: NSObject) -> URL? {
            url.scheme != nil {
             return url
         }
+    }
+    return nil
+}
+
+/// 一颗社交链接的**短名**（画在胶囊上）。
+func eeveeArtistBioLinkTitle(for kind: String) -> String {
+    switch kind {
+    case "wikipedia": return "维基百科"
+    case "twitter": return "Twitter"
+    case "instagram": return "Instagram"
+    case "facebook": return "Facebook"
+    case "tiktok": return "TikTok"
+    case "whatsapp": return "WhatsApp"
+    case "website": return "网站"
+    default: return "链接"
+    }
+}
+
+// MARK: - Spotify 自己的「关于艺人」数据模型（`SPTArtistAbout`）
+
+/// 从 `SPTArtistAbout` 上读**姓名**。
+///
+/// ★★ 2026-10-18：下面这几个读法全部对着**二进制的类 → 方法表**写（`SPTArtistAbout` 的方法
+///    逐字：`artistName` / `biographyText` / `socialLinks` / `monthlyListenersCount` /
+///    `globalChartPosition` / `isRegistered` / `artistFactDictionaries`）。
+func eeveeArtistAboutName(from about: NSObject) -> String? {
+    guard about.responds(to: NSSelectorFromString("artistName")),
+          let name = about.value(forKey: "artistName") as? String else { return nil }
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+}
+
+/// 从 `SPTArtistAbout` 上读**完整简介** —— 这是"关于艺人"的**权威正文**。
+///
+/// 为什么这才是正解（用户：「解决方法总不能是正则式匹配字吧」）：界面那张卡里除了正文还画着
+/// 艺人名与收听人数，**任何**从界面拼文字的方案都得靠"猜哪一行不是正文"；而这个字段就是
+/// 正文本身，一个字都不多。它同时不受界面那条
+/// `is_async_biography_truncation_enabled` 截断的影响。
+func eeveeArtistAboutBiography(from about: NSObject) -> String? {
+    guard about.responds(to: NSSelectorFromString("biographyText")),
+          let raw = about.value(forKey: "biographyText") as? String else { return nil }
+    let cleaned = eeveePlainArtistAboutText(raw)
+    return cleaned.isEmpty ? nil : cleaned
+}
+
+/// `SPTArtistAbout.socialLinks` → 一串 `(kind, 真链接)`。
+///
+/// ★★ `SPTArtistSocialLink` 的方法表（同一份 dump）：`twitter` / `facebook` / `instagram` /
+///    `wikipedia` / `whatsapp` / `tiktok`，属性类型全是 **`NSURL *`**，另有
+///    `urlForSocialLinkType:`。⇒ 用户要的"维基 / 推特链接"在这里是**现成的地址**，
+///    不用点、不用转发、也不用拼搜索页。
+func eeveeArtistAboutLinks(from about: NSObject) -> [(kind: String, url: URL)] {
+    guard about.responds(to: NSSelectorFromString("socialLinks")),
+          let links = about.value(forKey: "socialLinks") as? NSObject else { return [] }
+
+    var out: [(kind: String, url: URL)] = []
+    let kinds = ["wikipedia", "twitter", "instagram", "facebook", "tiktok", "whatsapp"]
+    for kind in kinds {
+        guard links.responds(to: NSSelectorFromString(kind)),
+              let value = links.value(forKey: kind) else { continue }
+        if let url = value as? URL {
+            out.append((kind, url))
+        } else if let string = value as? String,
+                  let url = URL(string: string),
+                  url.scheme != nil {
+            out.append((kind, url))
+        }
+    }
+    return out
+}
+
+/// `SPTArtistAbout.biographyText` 是**带标记的纯文本** —— 按 Spotify 自己的规则落地成纯文本。
+///
+/// 那三条规则在二进制里逐字可读（@184282728）：
+/// ```
+/// (\r\n|\n)
+/// <br>
+/// <a href="spotify:search:[^"]+">([^<]+)</a>   →  $1
+/// ```
+/// 这里是**同一件事的 Swift 写法**：`<br>` 折算成换行、锚点只留标签文字、其余标签去掉。
+/// ⚠️ 这与"靠文字猜哪一行是正文"是两回事：这里处理的字段**本来就只有正文**。
+func eeveePlainArtistAboutText(_ raw: String) -> String {
+    var text = raw
+    text = text.replacingOccurrences(of: "\r\n", with: "\n")
+    text = text.replacingOccurrences(of: "\r", with: "\n")
+    for token in ["<br>", "<br/>", "<br />", "</p>", "</div>"] {
+        text = text.replacingOccurrences(of: token, with: "\n", options: .caseInsensitive)
+    }
+    if let anchors = try? NSRegularExpression(pattern: "<a [^>]*>([^<]*)</a>", options: .caseInsensitive) {
+        let range = NSRange(text.startIndex..., in: text)
+        text = anchors.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1")
+    }
+    if let tags = try? NSRegularExpression(pattern: "<[^>]+>", options: []) {
+        let range = NSRange(text.startIndex..., in: text)
+        text = tags.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+    }
+    let entities = [
+        ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&nbsp;", " "),
+    ]
+    for (entity, value) in entities {
+        text = text.replacingOccurrences(of: entity, with: value)
+    }
+    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+/// 在**活着的对象**里找那个"关于艺人"的模型（`SPTArtistAbout`）—— 不 hook、不联网，
+/// 只是问一句"你响应 `biographyText` 吗"。
+///
+/// ★★ 2026-10-18：给数据线没接上时留一条**零风险**的备用路（比如那一页的 loader 没被创建）。
+///    有界（默认 600 个节点）；每一步都先 `responds(to:)`，不存在的方法名不会被问。
+func eeveeArtistAboutModel(in root: UIView, limit: Int = 600) -> NSObject? {
+    let selector = NSSelectorFromString("biographyText")
+    var queue: [UIView] = [root]
+    var visited = 0
+    while !queue.isEmpty, visited < limit {
+        let view = queue.removeFirst()
+        visited += 1
+        if view.responds(to: selector) { return view }
+        queue.append(contentsOf: view.subviews)
     }
     return nil
 }

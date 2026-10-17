@@ -92,6 +92,67 @@ enum EntityPageHeaderManager {
     /// 读到的简介（没有就是 nil）。
     static func cachedBioText(for name: String) -> String? { bioTexts[name] }
 
+    /// ★★ 2026-10-18：**Spotify 自己那条数据线**（`SPTArtistAboutDataLoader`）把
+    /// `SPTArtistAbout` 交出来了 —— 这是"关于艺人"的**权威正文 + 真链接**。
+    ///
+    /// 与"从界面拼文字"的区别（用户：「解决方法总不能是正则式匹配字吧」）：
+    ///   · **正文** = 模型的 `biographyText` 字段本身 ⇒ 艺人名 / "每月有 x 名听众"那两行
+    ///     **根本不在里面**，不需要任何"猜哪一行不是正文"的判据；
+    ///   · **完整**：界面 label 会被 `is_async_biography_truncation_enabled` 截断，这个字段不会；
+    ///   · **链接** = `SPTArtistSocialLink` 上的 `wikipedia` / `twitter` / … 都是 `NSURL` ⇒
+    ///     直接就是艺人真地址，不用点、不用转发、也不用拼搜索页。
+    ///
+    /// 线程：completion 可能在后台队列 ⇒ 只在这儿读模型（纯 ObjC 读，安全），
+    /// 落库一律切主线程（`bioTexts` / `bioLinks` 的其它读点都在主线程）。
+    static func artistAboutDidLoad(_ about: AnyObject?) {
+        guard let about = about as? NSObject else { return }
+        // completion 可能在后台队列 ⇒ 只在这儿读模型（纯 ObjC 读，安全），落库切主线程。
+        if Thread.isMainThread {
+            storeArtistAbout(about)
+        } else {
+            DispatchQueue.main.async { storeArtistAbout(about) }
+        }
+    }
+
+    /// 把模型落库（`bioTexts` / `bioLinks` 的其它读点都在主线程 ⇒ 这里必须主线程调）。
+    private static func storeArtistAbout(_ about: NSObject) {
+        let modelName = eeveeArtistAboutName(from: about)
+        let biography = eeveeArtistAboutBiography(from: about)
+        let links = eeveeArtistAboutLinks(from: about)
+        let name = modelName ?? artistNameStorage
+        guard !name.isEmpty else { return }
+
+        if let biography {
+            let previous = bioTexts[name]?.count ?? 0
+            // 已经有一份更长的（比如上次那页读到的）就不覆盖；否则以数据线为准。
+            if biography.count >= previous {
+                bioTexts[name] = biography
+            }
+            writeDebugLog(
+                "[ArtistBio] loader — \(name), biography \(biography.count) char"
+                    + " (was \(previous))"
+            )
+        } else {
+            writeDebugLog("[ArtistBio] loader — \(name), biographyText missing on the model")
+        }
+
+        guard !links.isEmpty else { return }
+        var refs = bioLinks[name] ?? []
+        for link in links where !refs.contains(where: { $0.kind == link.kind && $0.url != nil }) {
+            refs.append(
+                ArtistBioLinkRef(
+                    kind: link.kind,
+                    title: eeveeArtistBioLinkTitle(for: link.kind),
+                    url: link.url,
+                    control: nil
+                )
+            )
+        }
+        bioLinks[name] = refs
+        let kinds = links.map(\.kind).joined(separator: ",")
+        writeDebugLog("[ArtistBio] loader links — \(kinds) (from the model, real URLs)")
+    }
+
     /// 「关于艺人」那块里找到的**社交链接**（维基 / 推特 / …）—— 按艺人名存。
     ///
     /// ★★ 2026-10-18（用户：「原本有的维基 / 推特链接之类的没显示」）：Spotify 自己那一块里
@@ -209,6 +270,12 @@ enum EntityPageHeaderManager {
                 //    · 每一拍都先扫一遍链接（有界；正文读到之后也继续扫）；
                 //    · 正文只读到为止；两样都齐了 ⇒ 直接收工（不再白跑剩下的拍）。
                 if bioTexts[name] != nil, !(bioLinks[name] ?? []).isEmpty { return }
+                // ★★ 2026-10-18：**零风险的那条备用路** —— 数据线 hook 万一没装上/没响，
+                //    就问一遍页面里有没有活着的 `SPTArtistAbout`（它的 `biographyText` 是权威正文、
+                //    `socialLinks` 是真链接）。找不到就是找不到，不猜、不崩。
+                if let model = eeveeArtistAboutModel(in: page) {
+                    storeArtistAbout(model)
+                }
                 // 每一拍**先扫链接**（有界；收满 6 条就自己返回），再决定要不要读正文 ——
                 // 两边都不重复扫。
                 captureBioLinks(from: eeveeArtistBioSearchRoot(from: page), name: name)
@@ -1570,6 +1637,42 @@ class ArtistBiographyViewHook: ClassHook<UIView> {
 /// `activatePlayerCardsDeclutter` 同一条纪律）⇒ 最坏情况只是少这一条事件线，日志里写着 MISSING。
 struct ArtistBioCardHookGroup: HookGroup {}
 
+/// ★★ 2026-10-18：**Spotify 自己那条"关于艺人"的数据线**（`SPTArtistAboutDataLoader`）。
+///
+/// 二进制的类 → 方法表（`objc_dump` 脚本解出来的，逐字）：
+/// ```
+/// - (void)fetchArtistAboutForArtist:(id)artist
+///                    withCompletion:(void (^)(SPTArtistAbout *, NSError *))completion
+/// 类型编码 v32@0:8@16@?24         ← 第 3 个参数 @? = block
+/// 块签名   v24@?0@"SPTArtistAbout"8@"NSError"16
+/// ```
+/// 装得成 ⇒ `ArtistBioSheet` 的正文与链接直接来自模型（见 `artistAboutDidLoad`），
+/// 不再依赖"界面上那张卡建出来没有"。
+///
+/// ⚠️ 两条如实说：
+///   · 这是本仓库**第一个"带 block 参数、还要把替身 block 交给 `orig`"**的 hook —— 参数个数与
+///     位置已按类型编码核对（第 3 个是块、第 2 个是对象），但**只有真机能验**；
+///   · 所以它**自己一组**、装之前先问 `NSClassFromString`（与 `ArtistBioCardHookGroup` 同一条纪律）
+///     ⇒ 类不在/换名 = 只是少这条线，绝不连累页头那一组。
+struct ArtistAboutDataHookGroup: HookGroup {}
+
+class SPTArtistAboutDataLoaderHook: ClassHook<NSObject> {
+    typealias Group = ArtistAboutDataHookGroup
+    static let targetName = "SPTArtistAboutDataLoader"
+
+    func fetchArtistAbout(
+        forArtist artist: AnyObject,
+        withCompletion completion: @escaping (AnyObject?, Error?) -> Void
+    ) {
+        orig.fetchArtistAbout(forArtist: artist) { about, error in
+            // 只读：先把模型交给管理器（它自己切主线程），再把结果**原样**转发给 Spotify ——
+            // 我们不改这次请求的任何语义。
+            EntityPageHeaderManager.artistAboutDidLoad(about)
+            completion(about, error)
+        }
+    }
+}
+
 class ArtistBiographyCardLayoutHook: ClassHook<UIView> {
     typealias Group = ArtistBioCardHookGroup
     static let targetName =
@@ -1609,6 +1712,11 @@ func activateEntityPageHeader() {
     // ⚠️ 这一组**单独装**（见 `ArtistBioCardHookGroup` 的说明）：名字里带私有哈希，
     //    换一版就可能解析不到 —— 解析不到就只是少一条事件线，不能连累共用组。
     if bioCard { ArtistBioCardHookGroup().activate() }
+    // ★★ 2026-10-18：Spotify 自己的「关于艺人」数据线（`SPTArtistAboutDataLoader`）——
+    //    装得上就等于"一进页面就有**完整正文 + 真链接**"；装不上就退回界面读文字那条老路
+    //    （走的是哪一条，日志里都写清楚）。
+    let aboutLoader = NSClassFromString(SPTArtistAboutDataLoaderHook.targetName) != nil
+    if aboutLoader { ArtistAboutDataHookGroup().activate() }
     writeDebugLog(
         "[EntityPageHeader] on — AM header \(EntityPageHeaderManager.isEnabled ? "ON" : "OFF"),"
             + " page look \(EntityPageAppearance.isEnabled ? "ON" : "OFF")"
@@ -1617,5 +1725,6 @@ func activateEntityPageHeader() {
             + (artist ? " + artist pages)" : "; artist hook missing")
             + (bio ? "; about-artist hook on" : "; about-artist hook MISSING")
             + (bioCard ? " + card-layout hook on" : " + card-layout hook MISSING")
+            + (aboutLoader ? " + about-data hook on" : " + about-data hook MISSING")
     )
 }

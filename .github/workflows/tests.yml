@@ -192,6 +192,21 @@ jobs:
                  -o lyrics-door-phase-tests
           ./lyrics-door-phase-tests
 
+      # 2026-10-18：**折行复核器**（`LyricLineBreakFitting`）—— 日志 104 的 Starboy 现场：
+      # `text=394.4 layout=331.8 breaks=[]`（按预算本该折，CoreText 一个断点都没给）⇒ 折行那一侧
+      # 量与渲染那一侧不是同一把尺子，断点太靠右 ⇒ 第一段仍超宽 ⇒ 渲染再折一次 ⇒ 屏幕上多出一行
+      # （用户报的"额外换行"）。
+      #
+      # 复核器是**纯逻辑**（只吃一个"量这段宽度"的闭包）所以能进这里；真正调用它的
+      # `TimedLyricTextBuilder` 要 UIKit/CoreText，进不来 —— 但"只加断点不删"与
+      # "复核后每一段都放得下"这两条不变量在这里被钉住。
+      - name: Lyric line break fitting (no extra line breaks)
+        run: |
+          swiftc Sources/EeveeSpotify/Lyrics/AppleMusic/LyricLineBreakFitting.swift \
+                 Tests/LyricLineBreakFitting/main.swift \
+                 -o lyric-line-break-fitting-tests
+          ./lyric-line-break-fitting-tests
+
       # 2026-10-16：打开后"没词可画时写哪一句"的判定（`LyricsNoticePolicy`）。四种"没词"必须
       # 分开说 —— 混档就是用户能看见的误报（"歌词明明有、我们却说未找到"）。纯 Foundation。
       - name: Lyrics notice policy (what we say when there is nothing to draw)

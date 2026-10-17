@@ -915,6 +915,18 @@ enum EntityPageHeaderManager {
         //    ⇒ 姓名与那三颗整体下移 14pt，与 AM 的照片 118 对齐（见 `contentBottom` 那段）。
         if headerView.contentBottom != 0 { headerView.contentBottom = 0 }
 
+        // ★★ 2026-10-17（用户：图片 136 那张「最新发布」小卡片）：取这一位艺人的最新发布。
+        //
+        //    优先级（用户原话：「优先展示**艺人之选**，没有艺人之选再展示最新发布」）：
+        //      · 艺人之选是 **Spotify 自己的**板块，只能从页面里读（`captureArtistPick`，见下方说明）；
+        //      · 读不到（多半是没滚到 / 这位艺人没有那一块）⇒ 退回 `ArtistLatestReleaseSource`
+        //        （iTunes 目录；实测与图片 136 逐字一致，且**不需要令牌**）。
+        scheduleLatestRelease(for: headerView, name: name)
+        // 「艺人之选」优先：它就在同一页上（懒加载板块），滚到那一块时读一次就换掉卡片内容。
+        captureArtistPick(in: page)
+        // 卡片要占 ~106pt ⇒ 页头容器得跟着长高（用户选 A：卡片画在我们自己的页头里）。
+        makeRoomForReleaseCard(in: header)
+
         // Spotify 那一列：**空 mask 藏**（不碰 hidden —— 见函数头那段）。照片归 `EntityPageAppearance`。
         let cover = find("Components.Header.UI.ArtworkImage", in: header, cache: &cachedArtistCover)
         blankArtistChrome(in: header, avoiding: cover, skipping: headerView)
@@ -1212,6 +1224,245 @@ enum EntityPageHeaderManager {
             )
             retryMaterialiseBio(from: view, remaining: remaining - 1)
         }
+    }
+
+    // MARK: - 「艺人之选」/「最新发布」卡片（艺人页三颗按钮下面那张）
+
+    /// 「艺人之选」读到的样子（标题 + 副标题 + 封面）。
+    private struct ArtistPick {
+        let title: String
+        let meta: String?
+        let artwork: UIImage?
+    }
+
+    private static var artistPickCache: [String: ArtistPick] = [:]
+    private static var didLogArtistPick = false
+    /// 每一位艺人只发一次"最新发布"请求（数据源自己还有 TTL 缓存与在飞去重）。
+    private static var releaseArtist: String?
+
+    /// 用户 2026-10-17：**优先「艺人之选」，没有它再展示「最新发布」**。
+    ///
+    /// 艺人之选是 **Spotify 自己的**板块（日志 109：`[ArtistPageProbe] matches y=996 — … [艺人之选]`），
+    /// 苹果目录里没有 ⇒ 只能从页面里读。它和其它懒加载板块一样：**没滚到就不存在**，所以这里每拍
+    /// 做一次**有界**尝试（≤ 900 节点 / 深 12）：找到标题就取它**下面那一格**（同 section 的下一格，
+    /// 或下一个 section 的第一格）的封面 + 最长的一段文字 + 次长的一段；找到才换，找不到就继续用
+    /// 最新发布（**绝不拿猜出来的东西冒充**）。
+    static func captureArtistPick(in page: UIView) {
+        let name = currentArtistName
+        guard !name.isEmpty else { return }
+        if artistPickCache[name] != nil {
+            if !didLogArtistPick, let pick = artistPickCache[name] {
+                didLogArtistPick = true
+                writeDebugLog("[Release] artist pick cached — \(pick.title)")
+            }
+            return
+        }
+
+        var queue: [(view: UIView, depth: Int)] = [(page, 0)]
+        var visited = 0
+        var heading: UILabel?
+        while !queue.isEmpty, visited < 900, heading == nil {
+            let (view, depth) = queue.removeFirst()
+            visited += 1
+            if let label = view as? UILabel,
+               let text = label.text,
+               isPickHeading(text) {
+                heading = label
+                break
+            }
+            guard depth < 12 else { continue }
+            queue.append(contentsOf: view.subviews.map { ($0, depth + 1) })
+        }
+        guard let heading else { return }
+
+        guard let cell = enclosingCell(of: heading),
+              let collection = eeveeEnclosingCollectionView(of: cell),
+              let indexPath = collection.indexPath(for: cell) else { return }
+
+        var candidates: [IndexPath] = []
+        if indexPath.item + 1 < collection.numberOfItems(inSection: indexPath.section) {
+            candidates.append(IndexPath(item: indexPath.item + 1, section: indexPath.section))
+        }
+        if indexPath.section + 1 < collection.numberOfSections,
+           collection.numberOfItems(inSection: indexPath.section + 1) > 0 {
+            candidates.append(IndexPath(item: 0, section: indexPath.section + 1))
+        }
+
+        for candidate in candidates {
+            guard let next = collection.cellForItem(at: candidate),
+                  let pick = makePick(from: next) else { continue }
+            artistPickCache[name] = pick
+            writeDebugLog(
+                "[Release] artist pick — \(pick.title)"
+                    + " (from \(candidate.section),\(candidate.item))"
+            )
+            if let headerView = lastArtistHeaderView, currentArtistName == name {
+                applyPick(pick, to: headerView)
+            }
+            return
+        }
+    }
+
+    /// 卡片高度（含与按钮行之间的间距）—— 页头排版与"页头长高"共用同一个数。
+    private static let releaseCardRoom: CGFloat =
+        EntityPageHeaderReleaseCard.height + EntityPageHeaderReleaseCard.spacing
+
+    private static var headerBaseHeightKey: UInt8 = 0
+    private static var didLogReleaseRoom = false
+
+    /// ★★ 2026-10-17（用户二选一里选了 **A**：卡片画在我们自己的页头里）：
+    /// 把艺人页的页头容器**加高**一张卡的高度。
+    ///
+    /// 为什么必须加高：`EntityPageHeaderView` 是**贴底排**的（`y = bounds.height - contentBottom -
+    /// contentHeight`），内容一旦超过页头高度，整块会**向上溢出**，名字直接被顶出页头上面。
+    ///
+    /// ⚠️ 容器高度是 Spotify 自己算的 ⇒ 这里只改 `frame`，而且**每一拍补一次**（跟着
+    /// `applyToArtistPage` 的频率）。第一次改时打一行 `[Release] header room — base → wanted`；
+    /// 如果日志里看到它每拍都被写回去，说明那一层归 Auto Layout 管，就得换成
+    /// "卡片挂在页头下缘 + 列表 `contentInset.top`"那条（交接文档 §5.2 的 B 方案）。
+    private static func makeRoomForReleaseCard(in header: UIView) {
+        guard let headerView = objc_getAssociatedObject(header, &entityPageHeaderKey) as? EntityPageHeaderView,
+              headerView.hasReleaseCard else { return }
+        guard header.bounds.height > 80 else { return }
+
+        // ★ 只按**静止态**的页头量"原本多高"：缩成导航栏（100pt）那一拍量出来的值不能当底，
+        //   否则写回去会把导航栏撑成一屏高。等下一次静止态再量。
+        let stored = (objc_getAssociatedObject(header, &headerBaseHeightKey) as? NSNumber)?.doubleValue
+        let base: CGFloat
+        if let stored, stored > 200 {
+            base = CGFloat(stored)
+        } else if header.bounds.height > 200 {
+            base = header.bounds.height
+            objc_setAssociatedObject(
+                header,
+                &headerBaseHeightKey,
+                NSNumber(value: Double(base)),
+                .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+            )
+        } else {
+            return
+        }
+
+        let wanted = base + releaseCardRoom
+        guard abs(header.bounds.height - wanted) > 0.5 else { return }
+
+        var frame = header.frame
+        frame.size.height = wanted
+        header.frame = frame
+
+        if !didLogReleaseRoom {
+            didLogReleaseRoom = true
+            writeDebugLog(
+                "[Release] header room — \(Int(base)) → \(Int(wanted))pt for the card"
+            )
+        }
+    }
+
+    /// 每一位艺人只取一次「最新发布」（缓存优先 ⇒ 同步就能画）。
+    private static func scheduleLatestRelease(for headerView: EntityPageHeaderView, name: String) {
+        // 已经有"艺人之选"⇒ 卡片归它（用户：优先展示艺人之选）。
+        if let pick = artistPickCache[name] {
+            applyPick(pick, to: headerView)
+            return
+        }
+
+        if let cached = ArtistLatestReleaseSource.cached(for: name) {
+            applyLatestRelease(cached, to: headerView)
+            return
+        }
+
+        // 换艺人那一拍先把上一张藏掉（名字变了、卡片还印着上一张最难看）。
+        if releaseArtist != name {
+            headerView.updateRelease(title: nil, date: nil, meta: nil)
+        }
+        guard releaseArtist != name else { return }
+        releaseArtist = name
+
+        ArtistLatestReleaseSource.fetch(artist: name) { release in
+            guard let release,
+                  let current = lastArtistHeaderView,
+                  currentArtistName == name else { return }
+            applyLatestRelease(release, to: current)
+            writeDebugLog("[Release] card shows the latest release for \"\(name)\"")
+        }
+    }
+
+    private static func applyLatestRelease(_ release: ArtistLatestRelease, to headerView: EntityPageHeaderView) {
+        let date = release.date.map { ArtistLatestReleaseSource.cardDateFormat.string(from: $0) }
+        let meta = release.trackCount > 0
+            ? String(format: "artist_latest_release_tracks".localized, release.trackCount)
+            : nil
+        headerView.updateRelease(
+            title: release.title,
+            date: date,
+            meta: meta,
+            artworkURL: release.artworkURL
+        )
+    }
+
+    private static func applyPick(_ pick: ArtistPick, to headerView: EntityPageHeaderView) {
+        headerView.updateRelease(
+            title: pick.title,
+            date: nil,
+            meta: pick.meta,
+            artwork: pick.artwork
+        )
+    }
+
+    /// 标题行的文字是不是"艺人之选"这一块（多语言各写一条 —— Spotify 的 UI 跟着 App 语言走）。
+    private static func isPickHeading(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        let needles = [
+            "艺人之选",
+            "artist's pick",
+            "artists pick",
+            "artist pick",
+            "アーティストのピックアップ",
+            "アーティストピック",
+        ]
+        return needles.contains { lowered.contains($0) }
+    }
+
+    /// 往上找最近的 collection/table cell（标题行 → 装它的那一格）。
+    private static func enclosingCell(of view: UIView) -> UIView? {
+        var node: UIView? = view
+        var levels = 0
+        while let current = node, levels < 12 {
+            if current is UICollectionViewCell || current is UITableViewCell { return current }
+            node = current.superview
+            levels += 1
+        }
+        return nil
+    }
+
+    /// 从"下一格"里抠出 pick：**最长的一段文字当标题**，另一段当副标题，第一张像样的图当封面。
+    private static func makePick(from cell: UIView) -> ArtistPick? {
+        var image: UIImage?
+        var texts: [String] = []
+        var queue: [UIView] = [cell]
+        var visited = 0
+
+        while !queue.isEmpty, visited < 120 {
+            let view = queue.removeFirst()
+            visited += 1
+            if image == nil, let imageView = view as? UIImageView,
+               let found = imageView.image, found.size.width > 40 {
+                image = found
+            }
+            if let label = view as? UILabel,
+               let text = label.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !text.isEmpty, text.count <= 120 {
+                texts.append(text)
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+
+        var unique: [String] = []
+        for text in texts where !unique.contains(text) { unique.append(text) }
+
+        guard let title = unique.max(by: { $0.count < $1.count }) else { return nil }
+        let meta = unique.first { $0 != title }
+        return ArtistPick(title: title, meta: meta, artwork: image)
     }
 
     /// ★ 2026-10-18：设置页改了「艺人页」那两格之后，如果艺人页还在下面，**当场重跑一遍**。

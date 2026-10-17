@@ -439,6 +439,155 @@ final class EntityPageHeaderPlay: UIControl {
     }
 }
 
+// MARK: - 「最新发布」小卡片
+
+/// AM 艺人页三颗按钮下面那张卡片（用户 2026-10-17，图片 136）：
+///
+/// ```
+/// ┌────────────────────────────────────┐
+/// │ [封面]  2026年8月22日               │
+/// │         空耳 - Single               │
+/// │         2 首歌曲                     │
+/// └────────────────────────────────────┘
+/// ```
+///
+/// 数据在 `ArtistLatestReleaseSource`（iTunes 目录，**不需要令牌**，实测与图片 136 逐字一致）。
+/// 这一颗只负责画：**不是按钮**（我们不伪造一个点不动的"链接"）—— 没有箭头、没有高亮。
+/// 优先展示「艺人之选」时，调用方直接把那份数据塞进来即可（见 `update(_:)`）。
+final class EntityPageHeaderReleaseCard: UIView {
+
+    /// 高度与"卡片之间的间距"（`EntityPageHeaderView` 排版要用）。
+    static let height: CGFloat = 96
+    static let spacing: CGFloat = 10
+
+    private let artworkView = UIImageView()
+    private let dateLabel = UILabel()
+    private let titleLabel = UILabel()
+    private let metaLabel = UILabel()
+
+    private static let artworkSide: CGFloat = 68
+    private static let artworkInset: CGFloat = 13
+    private static let textGap: CGFloat = 14
+    private static let textInset: CGFloat = 12
+
+    /// 图片缓存（同一张封面在页面重建时会再要一次）。
+    private static let imageCache = NSCache<NSURL, UIImage>()
+    private static let imageSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 12
+        configuration.timeoutIntervalForResource = 16
+        return URLSession(configuration: configuration)
+    }()
+    private var imageTask: URLSessionDataTask?
+    private var imageURL: URL?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = UIColor.white.withAlphaComponent(0.10)
+        layer.cornerRadius = 16
+        layer.cornerCurve = .continuous
+        isUserInteractionEnabled = false
+
+        artworkView.contentMode = .scaleAspectFill
+        artworkView.clipsToBounds = true
+        artworkView.layer.cornerRadius = 8
+        artworkView.layer.cornerCurve = .continuous
+        artworkView.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        addSubview(artworkView)
+
+        dateLabel.font = .systemFont(ofSize: 12)
+        dateLabel.textColor = .secondaryLabel
+        dateLabel.lineBreakMode = .byTruncatingTail
+        addSubview(dateLabel)
+
+        titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
+        titleLabel.textColor = .label
+        titleLabel.numberOfLines = 1
+        titleLabel.lineBreakMode = .byTruncatingTail
+        addSubview(titleLabel)
+
+        metaLabel.font = .systemFont(ofSize: 12)
+        metaLabel.textColor = .secondaryLabel
+        metaLabel.lineBreakMode = .byTruncatingTail
+        addSubview(metaLabel)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// 塞一份数据；`nil` 就清空（卡片本身由调用方显隐）。
+    ///
+    /// - Parameter artwork: 已经拿到的图（"艺人之选"那条从页面里直接读到 `UIImage`）。
+    /// - Parameter artworkURL: 还没拿到的图（"最新发布"那条用 iTunes 的 URL，卡片自己下）。
+    func update(
+        title: String,
+        date: String?,
+        meta: String?,
+        artwork: UIImage?,
+        artworkURL: URL?
+    ) {
+        dateLabel.text = date
+        titleLabel.text = title
+        metaLabel.text = meta
+        accessibilityLabel = [date, title, meta].compactMap { $0 }.joined(separator: ", ")
+
+        if let artwork {
+            imageTask?.cancel()
+            imageTask = nil
+            imageURL = nil
+            artworkView.image = artwork
+        } else {
+            loadArtwork(artworkURL)
+        }
+        setNeedsLayout()
+    }
+
+    private func loadArtwork(_ url: URL?) {
+        imageTask?.cancel()
+        imageTask = nil
+
+        guard let url else {
+            imageURL = nil
+            artworkView.image = nil
+            return
+        }
+        imageURL = url
+        if let cached = Self.imageCache.object(forKey: url as NSURL) {
+            artworkView.image = cached
+            return
+        }
+
+        let task = Self.imageSession.dataTask(with: url) { [weak self] data, _, _ in
+            guard let data, let image = UIImage(data: data) else { return }
+            Self.imageCache.setObject(image, forKey: url as NSURL)
+            DispatchQueue.main.async {
+                guard let self, self.imageURL == url else { return }
+                self.artworkView.image = image
+            }
+        }
+        imageTask = task
+        task.resume()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+
+        let side = Self.artworkSide
+        artworkView.frame = CGRect(
+            x: Self.artworkInset,
+            y: round((bounds.height - side) / 2),
+            width: side,
+            height: side
+        )
+
+        let textX = Self.artworkInset + side + Self.textGap
+        let textWidth = max(0, bounds.width - textX - Self.textInset)
+
+        dateLabel.frame = CGRect(x: textX, y: 15, width: textWidth, height: 15)
+        titleLabel.frame = CGRect(x: textX, y: 33, width: textWidth, height: 22)
+        metaLabel.frame = CGRect(x: textX, y: 57, width: textWidth, height: 15)
+    }
+}
+
 // MARK: - 页头本体
 
 /// 那一块文字与按钮。输入永远是"文本 + Spotify 自己的控件"，自己不持有任何 Spotify 状态。
@@ -467,6 +616,8 @@ final class EntityPageHeaderView: UIView {
     private let shuffleButton = EntityPageHeaderButton()
     private let playButton = EntityPageHeaderPlay()
     private let trailingButton = EntityPageHeaderButton()
+    /// 「最新发布」小卡片（艺人页）。默认隐藏 —— 只在那页、且数据到了才显示。
+    private let releaseCard = EntityPageHeaderReleaseCard()
 
     /// 创建者那一行背后那个 Spotify 控件（点了打开作者页）——被藏起来、只负责响应。
     private weak var creatorLink: UIView?
@@ -504,6 +655,12 @@ final class EntityPageHeaderView: UIView {
             button.accessibilityIdentifier = "eevee-entity-header-button"
             addSubview(button)
         }
+
+        // ★★ 2026-10-17（用户：图片 136「AM 的那个 最新发布 小卡片」）：卡片贴在按钮行**下面**。
+        //    它是**内容**、不是按钮 —— 不吃触摸，也不参与 `hitTest` 的那条白名单。
+        releaseCard.isHidden = true
+        releaseCard.accessibilityIdentifier = "eevee-entity-header-release"
+        addSubview(releaseCard)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -582,6 +739,47 @@ final class EntityPageHeaderView: UIView {
         trailingButton.refreshTintNow()
     }
 
+    /// ★★ 2026-10-17：**「最新发布」小卡片**（艺人页三颗按钮下面那张）。
+    ///
+    /// 数据由 `EntityPageHeaderManager` 取（`ArtistLatestReleaseSource`，iTunes 目录、不要令牌）；
+    /// 这一侧只管"有没有东西要显示"：`title` 空 ⇒ 藏起来并让排版重算。
+    ///
+    /// ⚠️ 卡片**不是按钮**：我们不知道它在 Spotify 里该跳到哪一页（那是苹果目录里的 id），
+    /// 所以它没有箭头、没有高亮，也不进 `hitTest` 的白名单 —— 不留"看得见、点不动"的控件。
+    func updateRelease(
+        title: String?,
+        date: String?,
+        meta: String?,
+        artwork: UIImage? = nil,
+        artworkURL: URL? = nil
+    ) {
+        guard let title, !title.isEmpty else {
+            if !releaseCard.isHidden {
+                releaseCard.isHidden = true
+                setNeedsLayout()
+            }
+            return
+        }
+
+        releaseCard.update(
+            title: title,
+            date: date,
+            meta: meta,
+            artwork: artwork,
+            artworkURL: artworkURL
+        )
+        if releaseCard.isHidden {
+            releaseCard.isHidden = false
+            setNeedsLayout()
+        }
+    }
+
+    /// 卡片现在是不是显示着（`contentHeight` / `layoutSubviews` 共用这一条判据）。
+    private var showsReleaseCard: Bool { !releaseCard.isHidden }
+
+    /// 外面（`EntityPageHeaderManager`）要据此把**页头容器加高**一张卡的高度。
+    var hasReleaseCard: Bool { !releaseCard.isHidden }
+
     /// ★★ 2026-10-17：**长按播放键 = 随机播放**（见 `EntityPageHeaderPlay.feedLongPress` 的说明）。
     /// 三个页面都接上：歌单/专辑页左边本来就是 shuffle，多一个入口无害；艺人页那颗位置让给 `i` 之后，
     /// 这里就是随机播放唯一的入口。
@@ -641,6 +839,10 @@ final class EntityPageHeaderView: UIView {
         if previous != nil { height += EntityPageHeaderMetrics.rowAbove }
         // ★ 2026-10-13（照 AM）：按钮行的高度取三颗里**最高**的那颗（中间那颗比两侧大一档）。
         height += max(EntityPageHeaderMetrics.rowHeight, EntityPageHeaderMetrics.playSide)
+        // ★★ 2026-10-17：「最新发布」卡片占的高度（见 `updateRelease`）。
+        if showsReleaseCard {
+            height += EntityPageHeaderReleaseCard.spacing + EntityPageHeaderReleaseCard.height
+        }
         if !aboutLabel.isHidden {
             height += EntityPageHeaderMetrics.aboutAbove
             height += ceil(aboutLabel.sizeThatFits(CGSize(width: text, height: .greatestFiniteMagnitude)).height)
@@ -732,6 +934,18 @@ final class EntityPageHeaderView: UIView {
             x: play.maxX + EntityPageHeaderMetrics.rowSpacing, y: y, width: side, height: side
         )
         y += max(side, big)
+
+        // ★★ 2026-10-17：卡片贴在按钮行下面（AM 的 136 就是这个名字 / 三颗 / 卡片 / 列表的顺序）。
+        if showsReleaseCard {
+            y += EntityPageHeaderReleaseCard.spacing
+            releaseCard.frame = CGRect(
+                x: EntityPageHeaderMetrics.side,
+                y: y,
+                width: max(0, width - 2 * EntityPageHeaderMetrics.side),
+                height: EntityPageHeaderReleaseCard.height
+            )
+            y += EntityPageHeaderReleaseCard.height
+        }
 
         if !aboutLabel.isHidden {
             y += EntityPageHeaderMetrics.aboutAbove

@@ -638,3 +638,4 @@ apple_music_official_ttml_token_missing_inline = "还没填令牌 —— 这个�
 apple_music_token_missing = "未填写 Apple Music 登录令牌";
 apple_music_token_invalid = "Apple Music 登录令牌无效或已过期";
 apple_music_token_popup = "Apple Music 官方歌词需要你自己的登录令牌：请在「设置 → 实验 → 启用Apple Music官方TTML歌词」里填入 media-user-token（浏览器：music.apple.com → 开发者工具 → 应用 → Cookie）。";
+artist_latest_release_tracks = "%d 首歌曲";

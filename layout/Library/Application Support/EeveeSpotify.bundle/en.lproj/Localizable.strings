@@ -651,3 +651,4 @@ apple_music_official_ttml_token_missing_inline = "No token yet — this source c
 apple_music_token_missing = "Apple Music sign-in token is missing";
 apple_music_token_invalid = "Apple Music sign-in token is invalid or expired";
 apple_music_token_popup = "Apple Music official lyrics need your own sign-in token. Go to Settings > Experiments > \"Apple Music official TTML lyrics\" and paste a media-user-token (browser: music.apple.com > Developer Tools > Application > Cookies).";
+artist_latest_release_tracks = "%d songs";

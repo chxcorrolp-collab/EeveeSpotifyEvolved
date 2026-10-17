@@ -2,122 +2,33 @@ import Foundation
 import UIKit
 import ObjectiveC.runtime
 
+
 /// 听歌页「一屏」：把播放器下面那些卡片**全部折起来**，并把列表**钉在它自己的顶部** ——
-/// 也就是 Music app / kumone 那种"一屏一首歌、滚不动"。
+/// Music app / kumone 那种"一屏一首歌、滚不动"。
 ///
-/// ## 借鉴来源（许可与"借了什么"都写清）
+/// 算法借自 spoti.pw v0.21.1（GPL-3.0）的 `Redesigned/Player/PlayerCards.x` / `PlayerScroll.x`，
+/// 落地是本地 Swift 实现。**许可边界：只许借 ≤ v0.21.1**；v0.22.0 起是 PolyForm Strict，一行不能碰。
 ///
-/// 思路与算法借自 **spoti.pw v0.21.1**（`LICENSE` = **GPL-3.0**，与本仓库 GPL-3.0 兼容）的
-/// `tweak/Sources/Redesigned/Player/PlayerCards.x` 与 `PlayerScroll.x`。
-/// **落地代码是我们自己的 Swift 实现**（不是搬过来的 ObjC）。取证、目标类在 9.1.88 上的
-/// 存活情况、依赖面，都记在 `Tools/eevee-hookfinder/SPOTIPW_0211_PORT_ASSESSMENT.md`。
-/// ⚠️ 许可边界：**只允许借 ≤ v0.21.1 那一侧**；`v0.22.0` 起是 PolyForm Strict，一行都不能碰。
-///
-/// ## ★ 为什么是"钉住"，而不是"把滚动关掉"（这是 pw 用真机 + 二进制偏移换来的）
-///
-/// 听歌页的**下拉关闭**挂在**列表自己的 pan recogniser** 上：
-/// `-[SPTBarInteractivePresentationController scrollViewDidAppear:]` 取走列表的
-/// `panGestureRecognizer`、对它 `addDismissPanWithGestureRecognizer:`，并让自己的 dismiss
-/// recogniser 等它失败；那个 handler **只在列表处于（或高于）顶部时**才启动关闭。
+/// ## 为什么是"钉住范围"而不是"关掉滚动"
+/// 下拉关闭挂在**列表自己的 pan recogniser** 上（`SPTBarInteractivePresentationController
+/// scrollViewDidAppear:` 取走它、让 dismiss 识别器等它失败，且只在列表处于 / 高于顶部时才启动）：
 /// **把滚动关掉会把那个 recogniser 一起带走 ⇒ 播放器再也划不掉。**
-///
-/// 所以这里关的是"范围"：把 `contentInset.bottom` 设成"让列表最多只能滚到它自己的顶部"。
+/// 所以这里只关"范围"：把 `contentInset.bottom` 设成"让列表最多滚到它自己的顶部"。
 /// 于是上拉只拉伸回弹、下拉仍能到负偏移、**关闭手势完全不受影响**。
 ///
-/// ## ⛔ 曾经的「禁止回弹」已删除（2026-10-03 真机日志 41 的判决）
+/// ⚠️ **`alwaysBounceVertical` 在这一页上不是观感调参，是关闭手势链条的一环**：
+///    真机试过把它关掉 ⇒ 播放器再也划不掉（那一版当天就删了）。`content.h == bounds.h` 之后
+///    用户感到的位移纯粹是回弹；`UIScrollView` 也没有"只关一端"的公开开关
+///    ⇒ 想彻底去掉回弹只剩"自己接管下拉关闭"一条路（hook 列表 pan → 自己驱动 dismiss，
+///    前提是先用诊断回答"delegate 是谁"）。
 ///
-/// 那一版在钉住之后还把列表的 `alwaysBounceVertical` 关掉，想连最后一点橡皮筋也去掉。
-/// 用户实测：**开了它就再也划不掉播放器了** —— 文档当初把它标成"唯一风险点"，
-/// 它确实是，而且坏得很干脆。
-///
-/// 日志 41（全量 37 份日志里唯一一份 `bounce=off`）的现场：
-///
-/// ```
-/// [OneScreen] 已关掉列表的回弹（alwaysBounceVertical=false）
-/// [OneScreen] diag inset.bottom=0 content.h=896 bounds.h=896 adj.top=0 adj.bottom=0 bounce=off panRecs=3
-/// ```
-///
-/// **机制**（与 pw v0.21.1 `PlayerScroll.x` 的记载同源）：**下拉关闭是经过列表那一层接管的** ——
-/// 列表在顶部时把下拉让给窗口，窗口那一侧才启动关闭。所以：
-///   · `alwaysBounceVertical = true`：下拉被列表接住（它愿意接），
-///     而钉住之后**列表没有任何内部可滚范围**（`content.h == bounds.h`）
-///     ⇒ 这次拖动只能落到"让位"那条路 ⇒ **关得掉**；
-///   · `alwaysBounceVertical = false` **且内容不满一屏**：pan 既不滚、也不进让位那条路
-///     ⇒ **窗口永远收不到这次下拉** ⇒ 播放器划不掉。
-///
-/// ⚠️ 这条"机制"是从**它坏掉的方式**反推出来的（日志 41 的现场 + pw 那句"关闭骑在列表的 pan 上"），
-/// 我们**没有**反汇编去证 9.1.88 的窗口那侧是怎么写的（`SPTBar*` 在 9.1.88 的 dump 里一个都没有）。
-/// 但结论足够硬：**唯一动过那个属性的那次构建，就是关闭坏掉的那次。**
-///
-/// ⇒ 所以：**在这一页上 `alwaysBounceVertical` 不是"观感调参"，它是关闭手势链条的一环。**
-///
-/// ## ★ 2026-10-05：用户再问「开启"一屏"还是能和橡皮筋一样往下滑，pw 不是解决了吗」
-///
-/// **答案：pw 没有解决，它是刻意保留的。** 它 `PlayerScroll.x` 的文件头原话（v0.21.1，GPL-3.0）：
-///
-/// > *"So the range is closed instead: the bottom inset is set to whatever makes the furthest the
-/// > list can scroll its own top. **A drag upward then only stretches and springs back**, a drag
-/// > downward still carries the offset below zero, and the dismissal is untouched."*
-///
-/// 逐句对到我们这边：
-/// * *"the range is closed instead"* = 我们做的**就是**这一件事（`inset.bottom` → `min(want, 0)`）；
-/// * *"**A drag upward then only stretches and springs back**"* = ★ **pw 明确承认那条橡皮筋还在**
-///   （上拉/下拉都只"拉伸并弹回"）；
-/// * *"a drag downward still carries the offset below zero, **and the dismissal is untouched**"*
-///   —— ★ 这两句是**同一件事的两面**：**那个负的 `contentOffset` 就是下拉关闭的输入**。
-///   去掉回弹 = 去掉负偏移 = **关闭手势没有输入**。
-///
-/// **真机已经证明过这一条**：日志 41（全量 37 份里唯一一份 `bounce=off`）—— 那次就是把
-/// `alwaysBounceVertical` 关掉去追这最后一点橡皮筋，结果**播放器再也划不掉**，
-/// 开关当天就删了。而 pw 也写明**连滚动都不能关**：
-/// *"Turning scrolling off takes that recogniser out with it and the player can no longer be swiped away."*
-///
-/// **日志 49 的现状**（用户这次报的现场）：
-/// `inset.bottom=0 content.h=896 bounds.h=896 adj.top=0 adj.bottom=0 bounce=on panRecs=3`
-/// ⇒ ★ `content.h == bounds.h`：**一点可滚范围都不剩了**。用户感到的那点位移**纯粹是回弹**，
-/// 不是"还有内容能滚上去"。—— 也就是说「一屏」这一半是**做对了**的。
-///
-/// **所以只有一条路能同时要"拉不动"与"还能划掉"**：**自己接管下拉关闭**
-/// （把列表在顶部的下拉读成"关闭进度"，自己驱动 dismiss），拿到之后才敢关 `bounces`。
-/// 这条路的两个已知障碍：
-///   1. pw 的挂点（`SPTBarInteractivePresentationController` / `SPTBarOverlayPresentationTransition`）
-///      在 **9.1.88 上不存在**（探针实测缺这 2 个）⇒ **没有现成可抄的挂点**；
-///   2. 本仓库在"自己加手势"上有前车之鉴（双击手势整块删掉）。
-///
-/// 三档选择（等用户拍板，**不擅自做**）：
-///   * **A. 接受它**（pw 同款，成本 0）：只在设置页文案里说清"下拉那一下就是关闭手势本身"；
-///   * **B. 自己接管关闭手势**（独立一轮，风险中高）：hook 列表的 pan → 顶部下拉给阈值 → 我们驱动
-///     `dismiss`；成了才能把 `bounces` 关掉。**需要上面那条 diag 先回答"delegate 是谁"**；
-///   * **C. 只关一端**：`UIScrollView` **没有**"只关顶部回弹"的公开开关（`bounces` 是两端总闸，
-///     `alwaysBounceVertical` 在内容不满一屏时等于关掉顶部）—— **所以 C 不存在**。
-///
-/// 代价（说清楚）：列表拖拽时仍会有橡皮筋 —— 那是"一屏"目前**无法消除**的残留：
-/// 想去掉它就得碰上面那个属性，一碰关闭手势就坏。
-/// 开关与它的 UI 行、UserDefaults 键、en / zh-CN 的文案**全部删除**，不留"按了会坏"的入口
-/// （那两条文案历史上只存在这两种语言）。
-///
-/// ## 我们和 pw 的两处不同（刻意的）
-///
-/// | | pw v0.21.1 | 我们 |
-/// |---|---|---|
-/// | 重算时机 | hook `viewDidLayoutSubviews` + `willDisplayCell` + `scrollViewDidScroll` | **蹭 `DeclutterChrome` 既有的 0.3s 复查节拍**（不新开 hook、不挂可选方法 —— 本仓库两条纪律） |
-/// | 代价 | 每一帧都准 | 最坏 0.3s 的窗口里能多滑一点点，下一拍立刻被拉回 |
-///
-/// 卡片折叠那一半在 `NowPlayingOneScreenCards.x.swift`（那个必须是个 Orion hook）。
-///
-/// 开关：**听歌页 →「隐藏Spotify的听歌页模块」**，★ **默认开**
-/// （2026-10-04 改的；`UserDefaults.nowPlayingOneScreen` 里 `?? true`）。
-/// 日志 tag：`[OneScreen]`。
-///
-/// ⚠️ **本节原先写"默认关"，2026-10-14 审计时发现与代码不符，已改正** ——
-/// 这种文档↔代码不一致最容易让下一轮清理误判（"默认关"会被读成"用户没在用"）。
-///
-/// ⚠️ 当初**为什么默认关**（改默认值之前的历史理由，留着是为了说明它折得有多狠）：
-/// 它会连**歌词卡**一起折起来 —— kumone 敢把卡片全折，是因为它把歌词
-/// **搬进了播放器**；我们当时还没做那一步，折掉之后听歌页就没有"打开歌词"的入口了。
-/// 而且一旦钉住，**保留下来的卡片也永远滚不到**（这正是"一屏"的含义），
-/// 所以"只折一部分"不是稳定的中间态 —— 要么全折（一屏），要么别开。
-/// 2026-10-04 起"歌词进播放器"（`NowPlayingLyricsPlate`）补齐了这个前提，默认值才改成开。
+/// ## 其它
+///   · 重算时机：蹭 `DeclutterChrome` 既有的 0.3s 复查节拍（**不新开 hook、不挂可选方法**）；
+///   · 卡片折叠那一半在 `NowPlayingOneScreenCards.x.swift`（那个必须是 Orion hook）；
+///   · 开关：听歌页 →「隐藏 Spotify 的听歌页模块」，**默认开**
+///     （`UserDefaults.nowPlayingOneScreen ?? true`），日志 tag `[OneScreen]`。
+///     默认开的前提是"歌词进播放器"（`NowPlayingLyricsPlate`）补上了打开歌词的入口 ——
+///     否则折掉歌词卡之后，听歌页就没有"打开歌词"的地方了。
 enum NowPlayingOneScreen {
 
     static let logTag = "OneScreen"

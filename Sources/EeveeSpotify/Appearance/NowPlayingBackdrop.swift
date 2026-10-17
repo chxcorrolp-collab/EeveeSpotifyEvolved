@@ -2,75 +2,32 @@ import Foundation
 import UIKit
 import ObjectiveC.runtime
 
-/// 听歌页（NPV）的**整页底色**：换成"封面取色"的三层渐变 —— 也就是 Apple Music 那种
-/// "整页都是这首歌的颜色"的观感。
+
+/// 听歌页（NPV）的**整页底色**：换成"封面取色"的三层渐变 —— AM 那种"整页都是这首歌的颜色"。
 ///
-/// ## 借鉴来源（许可与"借了什么"都写清）
+/// 配方来自 kumone（LGPL-3.0 / GPL-3.0，与本仓库 GPL-3.0 兼容）的 `NowPlayingView.backdrop`：
+/// ① `LinearGradient(primary → secondary, .topLeading → .bottomTrailing)`
+/// ② `RadialGradient(white 0.12 → clear, 左上, r = 700)`
+/// ③ `LinearGradient(clear → black 0.35, .top → .bottom)`
+/// 交叉淡入时长 = `NowPlayingMetrics.backdropCrossfadeDuration`（kumone 的 0.8s）。
 ///
-/// 配方来自 **kumone**（独立网易云客户端，`LICENSE` = LGPL-3.0、`COPYING` = GPL-3.0；
-/// 与本仓库 GPL-3.0 **兼容**）。它的 `NowPlayingView.backdrop`
-/// （`Features/Player/NowPlayingView.swift:185-202`）是三层：
+/// ⚠️ 关键区别：这是**取色渐变**，不是模糊封面。2026-10-02 那次"自绘壳"把整页糊掉，
+///    根因是**加了一层模糊盖在内容上**；渐变铺在底层，机理相反，所以不会糊内容。
 ///
-/// ```swift
-/// ZStack {
-///     LinearGradient(colors: [colors.primary, colors.secondary],
-///                    startPoint: .topLeading, endPoint: .bottomTrailing)
-///     RadialGradient(colors: [.white.opacity(0.12), .clear],
-///                    center: .topLeading, startRadius: 0, endRadius: 700)
-///     LinearGradient(colors: [.clear, .black.opacity(0.35)],
-///                    startPoint: .top, endPoint: .bottom)
-/// }
-/// .animation(.easeInOut(duration: 0.8), value: colors)
-/// ```
+/// ## 做法（零破坏性写入）
+/// 自己一块**整页 `UIView`**（三层 `CAGradientLayer` 作它的子层），`insertSubview(at: 0)` 插进
+/// 那层的**子视图**栈：不碰人家的 `backgroundColor`，也不跟人家的 layer 栈抢位置。
+///   · 那层自己的底色在我们下面（我们铺的是不透明底 ⇒ 观感上就是"换掉了底色"）；
+///   · 那层自己的子视图（真有内容的话）仍在上面 ⇒ **最坏只是"没效果"，不会是"盖掉内容"**；
+///   · 全程只加自己的视图 ⇒ 关开关 `remove()` 就是完全还原。
 ///
-/// ⚠️ **关键：那层底是"取色渐变"，不是模糊封面**。本仓库 2026-10-02 那次"自绘壳"把整页
-/// 糊掉（`Tweak.x.swift:384-387` 记着 bug 清单），根因是**加了一层模糊盖在内容上**。
-/// 取色渐变是**在底层铺颜色**，机理相反，所以这次不会糊内容。
-///
-/// ## ★ 本轮（2026-10-03 夜，读完日志 38 之后）：换掉"看不见"的那套做法
-///
-/// **旧做法**（`a2360c0` → `b14d6b9`）：找到那层 → **清空它的 `backgroundColor`** →
-/// 把渐变 `insertSublayer(at: 0)` + `zPosition = -1` 塞进**它自己的 layer 栈**。
-///
-/// **日志 38 的真机结论**（19:52–19:54，构建 = `b14d6b9`）：
-/// ```
-/// 11:52:59  [NPVStyle] no full-page coloured sibling found under UIView — backdrop skipped
-/// 11:52:59  [NPVStyle] backdrop (414x896) ← 封面取色 e84838，接管 1 层（…）   ← 自报成功
-/// 11:53:01  [Tree] #7 7.UIView@0,0,414,896,bg=#E84838                        ← 但它还在！
-/// 11:53:03  [Tree] #8 7.UIView@0,0,414,896,bg=#E84838
-/// 11:53:09  [Tree] #9 7.UIView@0,0,414,1682,bg=#584860                       ← 还自己换了色/长高
-/// ```
-/// `ViewTreeDumper.swift:159` 只在 `backgroundColor != nil && != .clear` 时才打 `bg=` ⇒
-/// **我们"清空底色"这件事在树上没有留下任何痕迹**，页面上零变化。三个可能的机理：
-///   1. 我们的层被插在人家的**最下面**（`at: 0` + `zPosition = -1`），那层若自己还有
-///      子层/渐变（`dump-9.1.88.txt:3127` 就有 `NowPlaying_ScrollImpl.NPVGradientView`），
-///      我们永远被压住；
-///   2. 候选判据**没有可见性闸门**（旧代码不看 `isHidden` / `alpha`），可能垫了一层
-///      看不见的满页视图 —— 同一页的 dump 里就有 `15.UIView@0,0,414,896,hidden,alpha=0.00`；
-///   3. 就算接对了，Spotify 的 binder 会把底色**写回**（`MiniBarGlass.swift:244-285`
-///      为同一个坑写过"清了又写回"），而旧代码 `lastHex` 相同就早退 ⇒ 永远修不回来。
-///
-/// **新做法**（本版，三条一起改）：
-///   · **我们自己的一个整页 `UIView`**（三层 `CAGradientLayer` 作它的子层），
-///     `insertSubview(at: 0)` 插进那层的**子视图**栈 —— 不碰人家的 `backgroundColor`，
-///     也不跟人家的 layer 栈抢位置：
-///       - 那层自己的底色在我们下面（我们铺的是**不透明**底 ⇒ 观感上就是"换掉了底色"）；
-///       - 那层自己的**子视图**（真有内容的话）仍然在我们上面 ⇒ **最坏只是"没效果"，
-///         不会是"盖掉内容"**；
-///       - 全程零破坏性写入 ⇒ 关开关 = 把我们的视图拿走，**天然完全还原**。
-///   · **可见性闸门**：`isHidden` / 祖先链 `alpha` / `window != nil` 三关都过才算候选，
-///     被闸门挡掉的会**计数上报**（不然"没垫上"和"垫错层"在日志里长得一样）。
-///   · **自愈**：`reconcile()` 蹭 `DeclutterChrome` 既有的复查节拍（**不新开定时器**），
-///     颜色直接读**那一层自己的 `backgroundColor`**（Spotify 每首歌写一次，一次属性读），
-///     变了才去问 `metadata()["extracted_color"]` 要权威值；尺寸每拍同步。
-///
-/// ## 纪律
-///
-/// * **幂等**：每次调用都先比对"当前是不是我们要的状态"，是就只更新颜色/尺寸，不重建；
-/// * **零破坏**：不动 Spotify 任何属性（只加自己的子视图）⇒ `remove()` 一定是完全还原；
-/// * **有上限**：走查最多 `maxNodes` 个视图；重找有 1s 节流（不变成变相轮询）；
-/// * **自报**：垫上谁、被谁挡掉、跟到换色、重挂，各打一行 `[NPVStyle]`；
-/// * 换色的交叉淡入时长取 `NowPlayingMetrics.backdropCrossfadeDuration`（kumone 的 0.8s）。
+///   · **可见性闸门**：`isHidden` / 祖先链 `alpha` / `window != nil` 三关都过才算候选；
+///     被闸门挡掉的计数上报（否则"没垫上"和"垫错层"在日志里长得一样）；
+///   · **自愈**：`reconcile()` 蹭 `DeclutterChrome` 既有的复查节拍（**不新开定时器**），先读那一层
+///     自己的 `backgroundColor`（Spotify 每首歌写一次，一次属性读），变了才去问
+///     `metadata()["extracted_color"]` 要权威值；尺寸每拍同步；
+///   · **纪律**：幂等、走查有 `maxNodes` 上限、重找 1s 节流、
+///     垫了谁 / 被谁挡掉 / 换了色各打一行 `[NPVStyle]`。
 enum NowPlayingBackdrop {
 
     static let logTag = "NPVStyle"

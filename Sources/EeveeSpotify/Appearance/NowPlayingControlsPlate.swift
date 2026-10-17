@@ -4,111 +4,41 @@ import UIKit
 import Orion
 import ObjectiveC.runtime
 
-// 「播放器控件换成本地字形」：把 Spotify 那三个控制键（上一首 / 播放暂停 / 下一首）的
-// **图标换成 Apple Music 那套细字形**，按钮本身留着。
+
+// 「播放器控件换成本地字形」：把 Spotify 那三个控制键（上一首 / 播放暂停 / 下一首）的图标
+// 换成 Apple Music 那套细字形，按钮本身留着。
 //
-// ## 这不是"自绘一整排按钮" —— 这是 pw 的做法（来源、许可与改动见「开源许可」页）
+// 这是 pw 的做法（GPL-3.0 隔离副本 `.spot-ipa/spotipw-v0.21.1`，`PlayerControls.x`）：
+// 字形画在 Spotify 的控件**之上、而不是替掉它** —— 按钮的动作 / 可用态 / 无障碍 / 热区全保留，
+// 我们的层不吃触摸；被抑制的只是原生图标画出来的东西。
 //
-// spoti.pw v0.21.1（GPL-3.0，隔离副本 `.spot-ipa/spotipw-v0.21.1`）的 `PlayerControls.x` 原话：
+// ## 钉整颗按钮的 layer，而不是逐叶子把 alpha 按回去
+// 换状态时 Spotify 会交叉淡入一张圆盘快照（每按一次都可能新建一层），**逐叶子追永远慢一拍**
+// （日志 49 里 `1/0/1/0` 交替 20+ 次、持续 7 秒就是这么来的）。现在：
+//   ① 三颗按钮**整个 layer 钉住**（`pinInvisible`：duration 极长、`isRemovedOnCompletion = false`
+//      的动画）⇒ 之后 Spotify 往里面塞什么（圆盘 / 原生字形 / 新快照 / 缓冲 spinner）**出生即不可见**；
+//   ② **只动 layer、绝不写 `alpha`** —— 渲染看呈现层（钉在 0 ⇒ 看不见），命中判定看模型值
+//      （没变 ⇒ 按钮照样收得到触摸）。这是播放 / 暂停还活着的前提；
+//   ③ 我们的字形挂到**按钮的兄弟层**（`button.superview`）、每拍按按钮框重算，`zPosition = 1000`
+//      （快照是后插的，`bringSubviewToFront` 只在跑到的那一拍有效）。字形若留在按钮里会跟着被钉没；
+//   ④ `armRehide`（0.05/0.15/0.35/0.6s）只补位置复核，**不是**把 alpha 按回去。
+// 还原：`removeAnimation` 撤钉 + 拿走字形 —— **原生一个字节都没改过**。
 //
-// > The glyphs are drawn **over Spotify's controls rather than instead of them**: each button keeps
-// > its action, its enabled state, its accessibility and the Gestures zones around it, and the glyph
-// > takes no touches. … Spotify's icon under it goes **transparent** on every pass.
+// ## 判据与细节
+//   · 三颗按钮按 **id** 认（`SPTNowPlayingPlayButton@64x64` / `…PreviousTrackButton` /
+//     `…NextTrackButton`），不按类名片段；白色圆盘（`MixedPlayButtonDecorationView`）一并钉掉
+//     —— AM / kumone 都是裸字形。
+//   · 9.1.88 的树里圆盘与 `CondensedButton` 是**兄弟**，所以 pw 那套"按几何认圆盘"不能照抄。
+//   · 点击那一刻就翻字形（`notePlayTapped()`）：投影的 0.35s 阈值加 0.3~0.5s 节拍
+//     ⇒ 否则最坏 ~0.85s 才翻（pw 原话 "looked like a slow button"）。
+//   · 播放键那类容器取消 `1.2×` 尺寸闸（crossfade 快照就装在纯 `UIView` 里）；
+//     `spinnerShowing` 时把字形 alpha 压 0（别画一个假的播放 / 暂停态）。
+//   · 字形尺寸：跳过键 22pt、播放键 30pt（与 `AppleMusicLyricsPlaybackControl` 同一套）。
+//   · 三个 key：`glyphKey`（我们叠的字形）/ `playStateKey`（上次画的是哪个字形）。
+//   · hook 落点：`PlaybackControlsElementsUnit` 只是"快一点的落点"，不是唯一落点 ——
+//     `NPVScrollViewControllerHook` 进页面时也调同一个 `apply`，所以 hook 被拒也装得上。
 //
-// 所以三步：**① 把按钮里原来那个图标视图设成透明（不是 hidden、不是移除）；
-// ② 在我们的层上画一个自己的字形；③ 我们的层不吃触摸** —— 按钮的动作/状态/无障碍原样保留。
-//
-// ## 为什么用 `PlaybackControlsElementsUnit`
-//
-// 那是 Spotify 装这一排的容器（`dump-9.1.88.txt`：`_TtC20NowPlaying_ModesImpl28PlaybackControlsElementsUnit`），
-// pw 也 hook 它。**但它只是"快一点的落点"，不是唯一落点**：本文件同时被
-// `NPVScrollViewControllerHook`（已证明能跑）在进页面时调一次，两条路都走同一个 `apply`，
-// 所以**万一这个 hook 被 Orion 拒了，功能照样装得上**（仓库纪律：类没覆写的方法不挂）。
-//
-// ## 三个按钮的判据是 **id**，不是类名
-//
-// `SPTNowPlayingPlayButton@64x64` / `SPTNowPlayingPreviousTrackButton` / `SPTNowPlayingNextTrackButton`
-// —— 前两个在真机日志里出现过 23 次，第三个由 `dump` + `ProbePack` 佐证。
-// 播放键底下那层**白色圆盘**（`MixedPlayButtonDecorationView`）也一并透明掉：照片 40/41 里
-// Apple Music / kumone 都是**裸字形**，没有圆盘。
-//
-// ## 纪律
-//
-// * 只改**透明度**、只**加自己的子视图** ⇒ 关掉开关 = 把字形拿走 + 把透明度写回，天然可还原；
-// * 三个 key 分工：`glyphKey`（我们叠的字形）/ `playStateKey`（上次画的是哪个字形）；
-// * 字形尺寸照照片：跳过键 22pt、播放键 30pt（与歌词壳那三个键同一套，见 `AppleMusicLyricsPlaybackControl`）。
-//
-// 开关：扩展功能 → 听歌页 →「**播放键换成本地字形**」，**默认关**。日志 tag：`[NPVControls]`。
-//
-// ## ★ 2026-10-05 最终形状（日志 49 + 用户澄清）：**钉整颗按钮**，字形搬到按钮的兄弟层
-//
-// **用户报**：「点击暂停键会有闪烁」，日志 49 里仍然如此。
-//
-// **照片 52/53（用户提供的"Spotify 自己的暂停按钮"）**：暂停 = **白圆盘 + 深色三角**，
-// 播放 = **白圆盘 + 深色两根竖条** ⇒ ★ **原生稳态一直是"白圆盘 + 深色字形"，两个状态都有**。
-// （上一轮我按一句纠正推出的"原生稳态本来就是裸字形"**作废**。）
-//
-// **日志 49 的现场**（02:59:31–02:59:38）：
-//
-// ```
-// [NPVControls] … 本拍把 1 处原生内容按回透明
-// [NPVControls] … 本拍把 0 处原生内容按回透明
-// [NPVControls] … 本拍把 1 处原生内容按回透明     ← 1/0/1/0 交替 20+ 次、持续 7 秒
-// ```
-//
-// ⚠️ **用户 2026-10-05 澄清**：**那 7 秒他一直在快速按暂停键**。
-// ⇒ 那不是"Spotify 自己每 0.25s 写回来一次"（我先前那条推论**作废**），
-// 而是**每按一次就多出一层新图形**（pw：*"The holder Spotify crossfades a snapshot of the disc in
-// when play turns to pause."*）。**我们永远追不上"它出生到我们钉住之间那一帧"** ——
-// 逐叶子去"按回去"的打法，**天生慢一拍**。
-//
-// ### 现在的做法（结构性，不再追）
-//
-// | 步骤 | 做法 | 为什么 |
-// |---|---|---|
-// | ① | 把 `SPTNowPlayingPlayButton` / `Previous` / `Next` **三颗按钮整个 layer 钉住**（`pinInvisible`） | 之后 Spotify 往它们里面塞多少新图形（圆盘 / 原生字形 / 每按一次新建的快照 / 缓冲 spinner）**出生即不可见** ⇒ 那一帧的窗口从根上没有了 |
-// | ② | 钉**只动 layer、不写 `alpha`** | 渲染看**呈现层**（被钉在 0 ⇒ 看不见）；命中判定看**模型值** `alpha`（一点没变 ⇒ 按钮照样收得到触摸）。这是播放/暂停还活着的前提 |
-// | ③ | 我们的字形挂到**按钮的兄弟层**（`button.superview`），每拍按按钮的框重算 | 字形若还是按钮的子视图，会**跟着被钉没**。pw 把字形放进按钮内部是为了跟"按下回弹"，而按钮整层钉住之后那份回弹本来就看不见了 ⇒ 搬出来不损失任何可见的东西 |
-// | ④ | 字形 `layer.zPosition = 1000` | 快照是**后插**进来的，`bringSubviewToFront` 只在我们跑到的那一拍生效；持续生效的只有 zPosition |
-// | ⑤ | 新钉住一颗按钮时补一串位置复核（`armRehide`，0.05/0.15/0.35/0.6s） | 只为了让字形跟上按钮前几拍还没稳定的坐标；**不是**"把 alpha 按回去" |
-//
-// **还原**：撤钉（`removeAnimation`）+ 拿走字形。**原生一个字节都没改过**（我们从没写过 `alpha`）。
-//
-// ### 走过的弯路（留档，别再回去）
-//
-// * **按类名片段 `MixedPlayButtonDecorationView` 去透明"白圆盘"**：那是 `_TtC28EncoreConsumerMobile_BaseKit29…`，
-//   是**容器**（没有"图形叶子"），`alpha` 写一次会被写回，而且**圆盘只是稳态那一半**；
-// * **逐叶子递归 + `1.2×` 尺寸闸 + "alpha 已是 0 的也钉"**：逻辑越来越细，但**每一版都还是慢一拍**，
-//   因为新图形不是同一批实例；
-// * **"写 `alpha = 0` + 复查节拍硬按回去"**：日志 49 的 `1/0/1/0` 就是这么来的。
-//
-// ## pw 的对照（读 `PlayerControls.x` 得来，GPL-3.0 隔离副本）
-//
-// 先纠正一个容易记反的点：**pw 并没有"隐藏原生按钮、自己画一个按钮"**。它文件头原话是
-// *"The glyphs are drawn **over** Spotify's controls **rather than instead of them**: each button
-// keeps its action, its enabled state, its accessibility and the Gestures zones around it, and the
-// glyph **takes no touches**."* —— 原生按钮一直留着、能收触摸，被抑制的只是它**画出来的东西**。
-// **"调度依然走原生"这半你记对了** —— 而且 pw 正是靠 hook 原生按钮自己的动作方法来对齐时机。
-//
-// 它比我们多打的三处补丁（都已补上）：
-//
-//   ① ★ **点击那一刻就翻字形**（`playTapped` + `kTapTrust = 1.2`）。它的原话：
-//      *"The player's state reaches the glyph **a beat after the tap** …, which read as a
-//      **slow button**. Spotify's own disc turns at the touch."*
-//      我们这边量得到的滞后：投影的 `pauseThreshold = 0.35s` **加**一个 0.3~0.5s 节拍
-//      ⇒ 点一下暂停，字形最坏 **~0.85s** 才翻过来。现在由 `notePlayTapped()` 当场接管。
-//   ② **crossfade 快照**：*"The holder Spotify crossfades a snapshot of the disc in when play
-//      turns to pause."* —— 换状态时 Spotify 会**交叉淡入一张圆盘快照**，装在一个**恰好是纯
-//      `UIView`** 的容器里。常规走查的 `1.2×` 尺寸闸**可能**放过它（pw 那段就**没有**尺寸闸）
-//      ⇒ 对播放键的那类容器取消尺寸闸。
-//   ③ **缓冲 spinner 立着时把我们的字形 alpha 压 0**（`spinnerShowing`）—— 否则"缓冲中"
-//      会显示一个假的播放/暂停字形。
-//
-// ⚠️ **它的"认圆盘"判据不能照抄**：pw 是按**几何**认的（"按钮里那颗与按钮等大的 `UIImageView`"），
-// 因为它的树（9.1.78）是 `PlayButtonView > CondensedButton(UIButton) > UIImageView 64x64`；
-// 而 **9.1.88 的树里圆盘是 `MixedPlayButtonDecorationView`，和 `CondensedButton` 是兄弟**
-// （日志 42/48 的 `[NPVTree]`）⇒ 照抄过去大概率就是它自己那句
-// `logMissing(@"the play button's disc")`。所以我们仍按**自己的真机树**用类名判。
+// 开关：扩展功能 → 听歌页 →「播放键换成本地字形」，**默认关**。日志 tag：`[NPVControls]`。
 
 // MARK: - Hook（可选的加速落点）
 

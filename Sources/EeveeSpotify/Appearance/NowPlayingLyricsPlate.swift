@@ -4,65 +4,44 @@ import UIKit
 import Orion
 import ObjectiveC.runtime
 
-// 「歌词进播放器」——**按 spoti.pw v0.21.1 的形状重做**
-//（`Redesigned/Player/PlayerLyrics.x`，GPL-3.0 隔离副本；来源与许可见「开源许可」页）。
+
+// 「歌词进播放器」——按 spoti.pw v0.21.1 的形状重做（`Redesigned/Player/PlayerLyrics.x`，
+// GPL-3.0 隔离副本；来源与许可见「开源许可」页）。
 //
-// 形状（pw 文件头原话的意译）：**不是常驻** —— 点 footer 那枚歌词字形才来，再点还原；
-// 来的时候**封面让位**（Spotify 那条 `alpha 0`，我们自己画同一张图 —— 所以看不出换 ——
-// 用 `transform` 缩到 72pt 缩略图）、**标题行上移右移贴到缩略图旁边**、歌词填进
-// "标题之下、进度条之上"让出来的那块地方。
-// 上一版错在"在播放器中段**常驻**一块 414×240 的歌词层"：和封面抢同一块地方，还复用了内嵌档的
-// 模糊封面背景（`LyricsBackdropRepresentable`）⇒ 在取色底上又叠一层模糊。
+// 形状：**不是常驻** —— 点 footer 那枚歌词字形才来，再点还原。来的时候封面让位（Spotify 那条
+// `alpha 0`，我们自己画同一张图并用 `transform` 缩到 72pt 缩略图）、标题行上移右移贴到缩略图
+// 旁边、歌词填进"标题之下、进度条之上"让出来的那块。
+// pw 的常量（pt）：缩略图 72 / 缩略图—标题 16 / 标题—控件 12 / 标题尾渐隐 20 / 缩略图离封面区顶 8。
 //
-// pw 的常量（原样抄，单位 pt）：缩略图 72 / 缩略图—标题 16 / 标题—控件 12 / 标题尾渐隐 20 /
-// 缩略图离封面区顶 8（我们上面那几条按自己的版式微调过）。
+// ## 动画（照 pw `place()` / `thumbTransform()` / `SGRMotionLayout`）
+//   · 布局永远按"Spotify 封面那个大小与位置"，用 **`bounds` + `center`**（不是 `frame`），
+//     位移只写在 `transform` 上 ⇒ 复查那趟 0.3s 不会打断动画（本仓库纪律：transform 非恒等时
+//     `frame` 不可信）；
+//   · 位移 = `CGAffineTransformConcat(Scale, Move)`（先缩放、后平移，关于自身中心）；
+//   · **缩放会把圆角一起缩放** ⇒ 想让缩略图"看起来"是 8pt，模型值要写 `8 / scale`；
+//   · 阴影挂在**容器**上（容器不裁剪）；动画 `0.45s` + damping 1 + velocity 0（临界阻尼、不回弹），
+//     options `AllowUserInteraction` + `BeginFromCurrentState`（后者是连点两次不跳的关键）；
+//   · **Reduce Motion 打开时整段不做动画**；换图就在我们那张接上去的那一刻把 Spotify 那条撤掉
+//     （早了露空档、晚了**两张同屏**）；
+//   · 拿不到图 ⇒ 封面留着、歌词等着，**不展开**（`layoutAndMount` 返回 false 就是这条）。
 //
-// ## 动画的形状（照 pw `place()` / `thumbTransform()` / `SGRMotionLayout`）
+// ## 两条"必须"（错了封面就卡住）
+//   · 收尾（撤掉我们那张 + 把 Spotify 那条写回）**必须挂在动画 completion 上**，并带令牌
+//     `coverGeneration`（动画没走完又被点开时这次收尾作废）；"已经在对的位置"与"Reduce Motion"
+//     这两条路上 `completion` **也必须被调用**，否则 Spotify 那条永远停在 `alpha 0`；
+//   · 歌词绘制复用 `AppleMusicLyricsOverlayView`（透明档，只有歌词）。
 //
-// | 环节 | 做法 |
-// |---|---|
-// | 布局 | 容器**永远**按"Spotify 封面那个大小与位置"布局，用 **`bounds` + `center`**（不是 `frame`），位移只写在 `transform` 上 ⇒ `layoutAndMount` 那趟 0.3s 复查**不会打断动画** |
-// | 位移 | `CGAffineTransformConcat(Scale, Move)` = **先缩放、后平移**（关于自己的中心） |
-// | 圆角 | ★ **缩放会把圆角一起缩放** ⇒ 想让缩略图"看起来"是 8pt，模型值要写 **8 / scale** |
-// | 阴影 | 挂在**容器**上（容器不裁剪）⇒ 跟着 transform 一起走，不用每帧重画 |
-// | 动画 | `0.45s + usingSpringWithDamping 1 + velocity 0`（**临界阻尼、不回弹**），options **`AllowUserInteraction` + `BeginFromCurrentState`**（后者是**连点两次不跳**的关键） |
-// | 无障碍 | **Reduce Motion 打开时整段不做动画** |
-// | 换图那一刻 | 早了露空档、晚了**两张同屏**（一大一小）⇒ 就在我们那张接上去的**那一刻**把 Spotify 那条撤掉 |
-// | 拿不到图 | 封面留着、歌词等着 ⇒ **不展开**（`layoutAndMount` 返回 false 就是这条） |
-//
-// ⚠️ 本仓库纪律：**`frame` 在 transform 非恒等时不可信** —— 所以这套全程不碰 `frame`。
-//
-// 收起的收尾（撤掉我们那张 + 把 Spotify 那条写回）**必须挂在动画 completion 上**，并带一个令牌
-// （`coverGeneration`）：动画没走完又被点开时，这一次收尾要作废。
-// ⚠️ `completion` 在"已经在对的位置"与"Reduce Motion"两条路上**也必须被调用**，
-// 否则封面撤不掉、Spotify 那条永远停在 `alpha 0`。
-//
-// ## 与 pw 的两处不同（刻意的）
-//
-// | | pw | 我们 |
-// |---|---|---|
-// | 歌词绘制 | 它自己的 `SGRKaraokeView` | 复用 `AppleMusicLyricsOverlayView`（**透明档**，只有歌词） |
-// | 封面缩略图 | 它自己再画一张封面并飞过去 | 一样（`Encode.ImageView` 的那张图） |
-//
+// ## 那枚「歌词键」
+// 必须**看得见**：44pt 圆角键 + 半透明白底 + `quote.bubble.fill` 字形（展开时换 `chevron.down`）。
+// 位置：贴在 `npv.bottomStackView` 的**最后一行（footer）**水平居中 —— 那是 pw 放歌词字形的地方，
+// 也与原生控件（Connect / 分享 / 队列）不重叠；找不到 footer 才退回"贴那一坨上面"（展开时靠右），
+// 再退回"由播放键反推同一条空带"。
+// ⚠️ **只借 footer 的 frame，键挂在 `page` 上** —— 塞进 Spotify 的 stack 会变成
+//    `stack.subviews.last`，把"认 footer"这件事本身弄坏。
+// 没词时 `alpha = 0.35` 且点下去会打一行说明为什么没反应（不留"按了没反应"的入口）。
+// ⚠️ 顺序：先铺歌词、**再**摆键（封面 / 标题 / 容器都会 `bringSubviewToFront`，后写的赢）；
+//    关开关 / 离开页面时那枚键**也要拿走**（`closeEverything` 的守卫会早退，光靠它会把键留在屏上）。
 // 日志 tag：`[NPVLyrics]`。开关：扩展功能 → 听歌页 →「歌词进播放器」。
-//
-// ## 那枚「歌词键」：**必须看得见**，而且点了才展开
-//
-// 曾经的做法是 `UIControl` + `.clear` 背景 + 无任何内容 —— 一块 120×44 的**完全透明热区**，
-// 压在进度条（`SPTNowPlayingSliderV2`）与播放键上沿、还会抢走拖动手势 ⇒ 用户找不到它。
-// 现在的形状：
-//   1. **看得见**：44pt 圆角键 + 半透明白底 + `quote.bubble.fill` 字形（展开时换成 `chevron.down`）；
-//   2. **让开**：贴在 `npv.bottomStackView` 的**最后一行（footer）**、水平居中 —— 那是 pw 放歌词字形
-//      的地方，也与原生控件（Connect / 分享 / 队列）不重叠；找不到 footer 才退回"贴那一坨上面"
-//      （展开时靠右），再退回"由播放键反推同一条空带"。
-//      ⚠️ **只借 footer 的 frame，键挂在 `page` 上** —— 塞进 Spotify 的 stack 会让它变成
-//      `stack.subviews.last`，把"认 footer"这件事本身弄坏。
-//   3. **没词变灰**（pw：*"greyed out when the track has none"*）：`alpha = 0.35`，
-//      点下去仍然会打一行说明为什么没反应 —— 不留"按了没反应"的入口。
-//
-// ⚠️ **顺序**：`apply` / `reconcile` 里必须先铺歌词（封面 / 标题 / 容器都会 `bringSubviewToFront`）
-// **再**摆那枚键 —— 后写的赢，否则键会被我们自己的容器压住。
-// ⚠️ 关掉开关 / 离开页面时那枚键**也要拿走**（`closeEverything` 的守卫会早退，光靠它会把键留在屏上）。
 
 // MARK: - 宿主（只属于这一层，不抢全屏页/卡片那个单例）
 

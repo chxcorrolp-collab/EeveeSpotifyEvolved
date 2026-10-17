@@ -4,152 +4,45 @@ import UIKit
 import QuartzCore
 import ObjectiveC.runtime
 
+
 /// 标签栏：**把 Spotify 那条栏的内容藏起来，在它上面叠一条系统 `UITabBar`** ——
-/// iOS 26 会把它画成**真·液态玻璃**（选中气泡、折射、明暗自适应），**一行玻璃 API 都不用我们写**。
+/// iOS 26 会把它画成真·液态玻璃（选中气泡、折射、明暗自适应），一行玻璃 API 都不用我们写。
 ///
-/// ## 做法照 pw（`Redesigned/Navbar/TabBar.x`，GPL-3.0；来源、许可与改动见「开源许可」页）四步
-///
+/// ## 机制（四步）
 ///   ① Spotify 的栏**留着**（frame / 交互 / inset 都不碰），但它的**内容不可见**；
-///   ② 叠一条**系统栏**，item 从 Spotify 那几颗同步（顺序跟着；标题与图标同源 ⇒ 开关跟着）；
-///   ③ **选中态**：系统栏的选中项跟着"Spotify 把哪一颗标成选中"走 —— 气泡因此会**滑过去/形变**；
-///   ④ **让高度**：系统栏比 Spotify 的栏高时，把差额写进 `TabBarImpl` 的
-///      `additionalSafeAreaInsets.bottom` ⇒ Spotify 自己把栏 / 迷你播放器 / 页面**一起让开**。
+///   ② 叠一条**系统栏**，item 从 Spotify 那几颗同步（顺序、标题、图标都跟着开关走）；
+///   ③ **选中态**跟着"Spotify 把哪一颗标成选中"走（气泡因此会滑过去 / 形变）；
+///   ④ 系统栏比 Spotify 的栏高时，把差额写进 `TabBarImpl.additionalSafeAreaInsets.bottom`
+///      ⇒ Spotify 自己把栏 / 迷你播放器 / 页面一起让开。
 ///
-/// ## ★ 2026-10-12 第一次真机（日志 63 + 照片 82）——三处已修
-///
-/// | 现场 | 根因 | 现在的做法 |
-/// |---|---|---|
-/// | **整条栏点不动**（"划不动"） | 我把**整颗 item 视图**按成 `alpha = 0`，而 UIKit 命中测试**跳过 alpha < 0.01 的视图** ⇒ 点击再也落不到 Spotify 那几颗上 | 只藏**图标与文字**这两个子视图，**item 视图本身的 alpha 一个字不动** ⇒ 看不见但照样收触摸 |
-/// | 「关掉创建之后玻璃变窄」（2026-10-13 用户） | 藏「创建」用的是 `isHidden`，`UIStackView` 把那格让给另外三颗 ⇒ UIKit 按 3 颗画玻璃（360→274），迷你条等宽跟随一起缩 | **保住槽位、只藏内容**（只对「创建」那一颗：`alpha = 0` + 点不到）⇒ 几何与宿主仍按"四格"算，**宽度不变**。⚠️ 上一行的教训只针对"**对每一颗都按透明**"，这里只动要它消失的那一颗 |
-/// | 「剩下三颗要**三等分**整块玻璃」（2026-10-13 用户，同一轮追加） | UIKit 对三颗默认 `.centered`：按内容居中、每颗 94 宽、间距 86，**宿主变宽也不拉伸**（日志 71 的 `274×60` 就是这么来的） | 系统栏**只放真正在用的那三颗** + `itemPositioning = .fill` ⇒ 沿宿主（= 按四格算出来的宽度）**等分**，三颗各占 1/3。选中态/转发按 `tag` 找格（`item(at:on:)`），不再按下标 |
-/// | **图标不见了** | 系统栏的 item 只拿到标题（`glyphImage` 没找到），而原图标又被藏了 ⇒ 那行只剩文字 | 先同步、后隐藏：**拿不到图标的那一颗，原图标就不藏**（安全网：绝不留下空行）；并把每颗的 `icon=Y/N` 打进日志 |
-/// | 「隐藏标签栏文字」**不生效** | 文字是**系统栏**画的，而我没读那颗开关 | `tabBarHideLabels` 开着时**不给系统栏标题**（原文字本来就被我们藏了） |
-///
-/// ## ★★ 2026-10-12 第二片（用户第二轮反馈，两件事一起做）
-///
-/// **① 尺寸与自绘的对齐。** 用户原话：「这个系统的液态玻璃和原本自己做的尺寸不一样……
-/// **你和自绘的对齐就行**」。做法：给系统栏加一个**宿主视图**（下面那个 class），
-/// 把宿主摆成 `TabBarGlassPlate.targetCapsuleRect(in:)` 算出来的**那一块**（360×60、
-/// 贴图标行、左右各 24pt）—— 几何判据只有那一份。
-/// ⚠️ 2026-10-13：自绘那盘**已删除**，所以现在不是"两条路对齐"，而是**这一份判据就是唯一的一份**
-/// （`TabBarGlass.x.swift` 只剩几何与标签内容取舍）。
-/// ⚠️ 宿主**必须**把底部安全区报成 0：UIKit 的浮岛玻璃是"按所在视图的安全区"量高度的
-/// （Face ID 机型 `max(83, 49 + inset)`），不这么做的话它会留 34pt 给 Home Indicator，
-/// 内容区只剩 26pt。这是 pw 的 `SGRTabBarHost` 那一招。
-/// **我们给的框 ≠ 玻璃画出来的框**（UIKit 自己还有内边距）⇒ 每次布局把
-/// **宿主框 / 系统栏框 / 玻璃自己那几块（platter / liquid lens / selection）的框**
-/// 打进同一行日志（`glass geometry — …`），下一份日志就能算出常量差、一次收敛。
-///
-/// **② 触摸交给系统栏（"果冻"与"可划动"的前提）。** 用户原话：「液态玻璃不是胶囊套胶囊吗，
-/// 里面那个胶囊**不可用手划动**」。第一片里系统栏 `isUserInteractionEnabled = false`
-/// ⇒ 手指落到 Spotify 那条栏上，玻璃只是张画。现在：
-///   · 系统栏**接管触摸**（`isUserInteractionEnabled = true` + `delegate` 中继）；
-///   · 选中的那一颗**转发成对 Spotify 那一颗的点击** —— 五条路，**从最公开到最私有**：
-///     ① **`UITabBarController.selectedIndex`**（容器是 `UITabBarController` 的子类，公开 API）
-///     ② 那颗 item 子树里 **tap 手势识别器自己的 target/action**（pw 的做法）
-///     ③ `-handleTap`（pw 点名的 `TabBarItemElementUI`；只找"响应它的对象"，不猜签名）
-///     ④ `accessibilityActivate()`　⑤ `UIControl.sendActions`
-///   · **五条全不通 ⇒ 把触摸还给 Spotify 那条栏**（`handTouchesBack`）：只有第一次点击失效，
-///     之后点得动，只是没有"按下回弹" —— 绝不留下"看得见、点不动"。
-///   · 用了哪条路**打进日志**；全不通时把子树里的识别器与 UIControl 全列出来。
-///   · 转发完成后 0.25s 再 `reapply()` 一次：Spotify 会晚一点重画标签颜色（选中态信号）。
-///   · 宿主只有那一块 ⇒ **玻璃以外的区域照旧落到 Spotify 的栏上**，行为不变。
-///
-/// ⚠️ **2026-10-12 真机日志 64 + 用户第三轮反馈的三条教训**（都已改进代码，别回退）：
-///   1. 旧的三条转发路**一条都没通**（`⚠️ tap on #N found nothing to forward to`）⇒ 点标签栏没反应；
-///   2. 玻璃比我们给的框**小一圈** ⇒ `place` 按实测差自校准（见那里的注释）；
-///   3. **"只能动一次 + 没有实际的按键效果"**：上一版是"先接管触摸、转发失败再把触摸还回去"，
-///      于是**第一下点空**；而且"还回去"时**漏了宿主** —— 宿主自己开着交互又盖在胶囊那块上，
-///      触摸被它吃掉 ⇒ 页面既不切、也没有回弹。现在改成：
-///        · **建栏时先问"有没有可用的转发路"**（当时叫 `canForwardTaps`，**第四片已换成**
-///          `probeForwardRoute`：能把链读出来才算有）——有才接管触摸，没有就从头让触摸穿透
-///          （与第一片一致：点得动，只是没有回弹）；
-///        · 运行时万一仍然全不通，`handTouchesBack` **栏与宿主一起关**，并且**交还过就不再收回**
-///          （避免"点一下空一下"）。
-///   4. **"玻璃大小一直变"**：`place` 的内边距**量一次就冻结**，而且只认**栏自己那块**
-///      `UITabBarPlatterView`（不能按面积挑 —— `_UITabBarItemPlatterView` 是选中气泡，尺寸随选中态变）。
-///
-/// ## ★★ 第四片（2026-10-12 深夜；照片 86/87 + 日志 **70**）—— 用户第四轮反馈，两条一起改
-///
-/// 用户原话：「**标题栏液态玻璃不跟手**，在划动过程中，**可能有胶囊回弹 / 替用户按按键**的情况，
-/// 而且**胶囊也没有反射**。你可以去看一下 spoti.pw 看一下他们的标题栏液态玻璃是怎么做的」
-/// （= 底部那条玻璃栏；pw 那边整块功能就叫 `Navbar`，机制在 `Redesigned/Navbar/TabBar.x`）。
-///
-/// **日志 70 第一行就是全部答案**（它和同一秒后面那行 `installed — … taking touches` **自相矛盾**）：
-///
-/// ```
-/// [TabBarSystem] system bar added 0,0,414,83 on NavigationUI_TabBarImpl.TabBarView
-///     — in a host that reports no bottom safe area;
-///       leaving the touches to Spotify's own bar (no forwarding route found, so tapping behaves exactly as before)
-/// ```
-///
-/// ⇒ 前几版的 `canForwardTaps` **只认第 ① 条公开路**（容器是 `UITabBarController`），
-///    而真机上容器是 `TabBarContainerImpl`、`children: 1`（日志 67）⇒ 判定**永远是 false**
-///    ⇒ **系统栏一次都没接过触摸**。于是三件事同时成立，正好就是用户报的三件：
-///
-/// | 用户看到 | 机制（代码实证） |
-/// |---|---|
-/// | **不跟手 / 胶囊没有反射** | 手指落在 **Spotify 那条栏**上（系统栏 `isUserInteractionEnabled = false`）⇒ UIKit 的玻璃永远收不到 `touchesBegan`，它只是一张**画**（`_UILiquidLensView` 在树上、但没有任何交互态） |
-/// | **替用户按按键** | 第三片装的那只 `UIPanGestureRecognizer`（`cancelsTouchesInView = true`）"滑过哪格切哪格"，每次 `.changed` 都 `commitSelection` ⇒ 用户只是划一下，页面被**我们**换掉了 |
-/// | **胶囊回弹** | 同上；提交路没学到时 `dragCrossed` 会把气泡**拨回真实那一颗**（日志 70：`⚠️ the drag could not switch the page yet`） |
-///
-/// **两条改法（照 pw 的机制；来源与许可见「开源许可」页）：**
-///
-/// 1. **转发路"读得出来"才接管触摸**（`probeForwardRoute`）。pw 那条路本来就可以**在点之前读出来**：
-///    item 子树里那颗 `UITapGestureRecognizer` 的 `_targets` 里有一对**目标真的响应**的 target/action
-///    （`TabBarItemElementUI` 的 `-handleTap`）。读得到 ⇒ `isUserInteractionEnabled = true`
-///    ⇒ 玻璃接得住手指（"跟手"与折射就是从这里来的）；读不到 ⇒ 照旧让触摸穿透，
-///    并把那条链**逐环**写进日志（`chainDescription`：`_targets` 在不在 / 有几对 / 每对解出来什么）。
-///    ⚠️ 这一版**不再**"先接管、失败再还回去"（那会白丢第一下，见第三片的教训）。
-/// 2. **删掉那只 pan**（"按住划"）及其整套机械（`dragCrossed` / `commitSelection` /
-///    `refreshCommitRoute` / `learnSelection` / `TabBarContainerSelectionHook`）。
-///    pw 那条栏上**一只手势都没有**（只有"长按主页进设置"，`TabBar.x:228-239`）——
-///    "能划动/果冻"是**系统玻璃自己**的交互，不是我们模拟出来的。
-///
-/// 顺带修掉一处**自相矛盾的日志**：`installed — …` 原来写死 `taking touches…`（见 `logLayoutOnce`）。
-///
-/// ## ★ 第五片（2026-10-13 同日）：**"拖动胶囊"归苹果，我们一行都不写**
-///
-/// 用户原话：「**GitHub 或者苹果自己总有教里面这个胶囊怎么搞吧，哪来的独立开关**」——
-/// 对，而且这正是第四片那句 `probeForwardRoute` 想买的东西：
-///
-///   · **原生 iOS 26 的液态玻璃标签栏本来就"按住就能滑"** —— 手指一贴上那条栏就能横向滑，
-///     选中镜片**立刻跟手**、松手选中手指下那一颗，**不需要先长按**。
-///     两处独立来源：`liquid_glass_easy` 的 issue #30（作者在 iOS 26 上逐条对比 Apple Music 后写的）
-///     与苹果 WWDC25「Build a UIKit app with the new design」的 Tab views 一章 ——
-///     那一章里标签栏整个是 `UITabBarController` 的系统外观与行为，**没有"自己画胶囊"这条题**。
-///   · 我们唯一要做的，是**别把触摸从系统栏手里拿走**（第四片：玻璃接管触摸）。
-///
-/// ⇒ 于是**曾经写过的两版都删掉了**：
-///   ① 第三片那只 pan（装在 **Spotify 那条栏**上、"滑过哪格切哪格"）—— 用户报的
-///      "不跟手 / 胶囊回弹 / 替用户按按键"就是它；
-///   ② 第五片初稿（照 kumone 的 `GlassTabBar.swift` 装在**我们宿主**上、逐格切 + 一颗独立开关）——
-///      **和系统自己那套重复**，而且系统那套（连续跟手）比我们的逐格跟手更好。
-///   ⚠️ kumone 要自己写，是因为它是 **SwiftUI 自绘**的标签栏（iOS 16–25 没有原生玻璃）；
-///      我们用的是**真系统栏**，所以这件事归 UIKit —— 这也正是"别再自绘"那条纪律的同一件事。
-///
-/// 顺带记两条**实测**（都写进日志了，别再猜）：
-///   · `accessibilityTraits` 在 Spotify 9.1.88 上**没有** `.selected` 标记（`traits=0x0`）
-///     ⇒ 选中态**实际靠"谁的文字是白色那颗"**：`主页` 的 label 是 `#FFFFFF`、其余 `#B3B3B3`；
-///   · 这台机器上 `made room` 那一行**没出现**是**对的**：`83 - 49 - 34 = 0`，本来就不需要让
-///     （pw 的注释也这么说：Face ID 机型两条栏本来就对得上）。
+/// ## 硬约束（错了当场就坏，别再试）
+///   · **只藏内容（图标 / 文字），绝不藏 item 视图本身**：UIKit 的命中测试跳过 `alpha < 0.01`
+///     的视图，藏了 item 就整条栏点不动；每个视图记**它自己的**原 alpha，不能统一写 1。
+///   · **图标先同步、后隐藏**：拿不到图标的那一颗，原图标就不藏（安全网，不留空行），
+///     每颗的 `icon=Y/N` 打进日志。
+///   · **宿主必须把底部安全区报成 0**：UIKit 的浮岛玻璃按所在视图的安全区量高度，否则会留
+///     34pt 给 Home Indicator，内容区只剩 26pt。
+///   · **几何只认 `TabBarGlassPlate.targetCapsuleRect`**；内边距量一次就冻结，而且只认栏自己那块
+///     `UITabBarPlatterView`（`_UITabBarItemPlatterView` 是选中气泡，尺寸随选中态变）。
+///   · **只放真正在用的那几颗 + `itemPositioning = .fill`**，沿宿主（按四格算出来的宽度）等分；
+///     藏「创建」时**保住槽位**，否则 UIKit 按三颗重画、玻璃变窄。按 `tag` 找格，不按下标。
+///   · **触摸**：只有 `probeForwardRoute` **读得出**一条能用的转发路时，系统栏才接管触摸
+///     （读 item 子树里那颗 `UITapGestureRecognizer` 的 `_targets`，目标要真的响应
+///     `TabBarItemElementUI.handleTap`）。可用路从公开到私有：`selectedIndex` → 识别器
+///     target/action → `-handleTap` → `accessibilityActivate()` → `UIControl.sendActions`；
+///     **全不通就 `handTouchesBack`**（栏与宿主一起关交互，交还过就不再收回），
+///     绝不留下"看得见、点不动"。转发完成后 0.25s 再 `reapply()`（Spotify 会晚一步重画标签色）。
+///   · **栏上不装任何手势**：iOS 26 的液态玻璃标签栏本来就"按住就能滑"；
+///     pan / 逐格切换那一套（"不跟手 / 胶囊回弹 / 替用户按按键"的根因）已删除。
+///   · 选中态判据：9.1.88 的 item **没有** `.selected` trait（`traits=0x0`）⇒ 看谁的文字是
+///     `#FFFFFF`（其余 `#B3B3B3`）。
 ///
 /// ## 开关
-///
-/// 设置 → 扩展功能 → 标签栏 → 「**标签栏改用系统玻璃**」，**默认开**
-/// （2026-10-13 用户要求："默认启用标签用液态玻璃"；此前默认关，理由只是"我没验过"。
-///  已经在旧版本里拨过这颗开关的盘上值由一次性迁移补上，见
-///  `UserDefaults.applyTabBarSystemGlassDefaultIfNeeded()`）。
-/// 关掉 = 系统栏与宿主移除 + 被藏的内容**各自恢复原 alpha** + `additionalSafeAreaInsets` **写回原值**。
-/// 日志 tag：`[TabBarSystem]`。
-///
-/// ⚠️ **整个 enum 标 `@MainActor`**（与 `NowPlayingControlsPlate` 同一个写法）：
-///    它要调 `TabBarGlassPlate.findTabsStack(in:)`，而那个函数是 `@MainActor` 的
-///    ⇒ 我们不在主 actor 上就会被 Swift 6 并发检查直接判错（CI 2026-10-12 就是这么红的）。
-///    两个调用点本来就都在主 actor 上：
-///      · `TabBarPlateHook.layoutSubviews` 里那句 —— 包在 `onMainThreadSync` 里，
-///        而它的闭包类型就是 `@escaping @MainActor () -> Void`（`LyricsChromeVisibility.swift:25`）；
-///      · 设置页 `persist:` 闭包 —— 与既有那些 `NowPlayingControlsPlate.reapply()` 同一个上下文。
+/// 设置 → 扩展功能 → 标签栏 →「**标签栏改用系统玻璃**」，**默认开**（老版本拨过的盘上值由
+/// `UserDefaults.applyTabBarSystemGlassDefaultIfNeeded()` 一次性迁移）。
+/// 关掉 = 系统栏与宿主移除 + 被藏的内容**各自恢复原 alpha** + `additionalSafeAreaInsets` 写回原值。
+/// 日志 tag：`[TabBarSystem]`。整个 enum 必须是 `@MainActor`（要调 `@MainActor` 的
+/// `TabBarGlassPlate.findTabsStack(in:)`，否则 Swift 6 并发检查直接判错）。
 @MainActor
 enum TabBarSystemGlass {
 

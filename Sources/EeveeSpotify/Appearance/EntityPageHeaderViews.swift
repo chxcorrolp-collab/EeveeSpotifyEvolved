@@ -467,8 +467,13 @@ final class EntityPageHeaderPlay: UIControl {
 /// ```
 ///
 /// 数据在 `ArtistLatestReleaseSource`（iTunes 目录，**不需要令牌**，实测与图片 136 逐字一致）。
-/// 这一颗只负责画：**不是按钮**（我们不伪造一个点不动的"链接"）—— 没有箭头、没有高亮。
-/// 优先展示「艺人之选」时，调用方直接把那份数据塞进来即可（见 `update(_:)`）。
+/// 这一颗只负责画。
+///
+/// ★★ 2026-10-17（用户：「点击那个卡片应该是**跳转到对应的专辑**，而不是全部歌曲」）：
+/// 卡片**可点**，但**不接受"我们自己编一个目标"** —— 点下去由 `EntityPageHeaderManager`
+/// 把点击**转发给页面里那一格**（`eeveeSelectAncestorCell`，走 `collectionView(_:didSelectItemAt:)`，
+/// 就是真人点那张卡的那一条）。数据来自苹果目录那条兜底时没有 Spotify 目标 ⇒ 那时卡片不可点
+/// （`isTappable = false`，不留"看得见、点不动"的控件）。
 final class EntityPageHeaderReleaseCard: UIView {
 
     /// 高度与"卡片之间的间距"（`EntityPageHeaderView` 排版要用）。
@@ -479,6 +484,18 @@ final class EntityPageHeaderReleaseCard: UIView {
     private let dateLabel = UILabel()
     private let titleLabel = UILabel()
     private let metaLabel = UILabel()
+
+    /// 点一下要做什么（由 `EntityPageHeaderView` 接到 manager 上；没有目标时保持 `nil`）。
+    var onTap: (() -> Void)?
+
+    /// 这张卡现在可不可点 —— 只改交互与无障碍，不改画法。
+    var isTappable = false {
+        didSet {
+            guard isTappable != oldValue else { return }
+            isUserInteractionEnabled = isTappable
+            accessibilityTraits = isTappable ? .button : .staticText
+        }
+    }
 
     private static let artworkSide: CGFloat = 68
     private static let artworkInset: CGFloat = 13
@@ -525,6 +542,14 @@ final class EntityPageHeaderReleaseCard: UIView {
         metaLabel.textColor = .secondaryLabel
         metaLabel.lineBreakMode = .byTruncatingTail
         addSubview(metaLabel)
+
+        // 手势一直挂着，交互由 `isTappable` 开关 —— 和别处"只改交互不改画法"同一个形状。
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleTap)))
+    }
+
+    @objc private func handleTap() {
+        guard isTappable else { return }
+        onTap?()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -675,6 +700,10 @@ final class EntityPageHeaderView: UIView {
         //    它是**内容**、不是按钮 —— 不吃触摸，也不参与 `hitTest` 的那条白名单。
         releaseCard.isHidden = true
         releaseCard.accessibilityIdentifier = "eevee-entity-header-release"
+        // ★★ 2026-10-17（用户：「点击那个卡片应该是跳转到对应的专辑」）：
+        //    卡片的触摸往上交给 manager —— 由它转发给页面里那张真卡（`handleReleaseCardTap`）。
+        //    `[weak self]`：卡片是本视图的子视图，强引用会成环。
+        releaseCard.onTap = { [weak self] in self?.onReleaseCardTap?() }
         addSubview(releaseCard)
     }
 
@@ -756,19 +785,23 @@ final class EntityPageHeaderView: UIView {
 
     /// ★★ 2026-10-17：**「最新发布」小卡片**（艺人页三颗按钮下面那张）。
     ///
-    /// 数据由 `EntityPageHeaderManager` 取（`ArtistLatestReleaseSource`，iTunes 目录、不要令牌）；
-    /// 这一侧只管"有没有东西要显示"：`title` 空 ⇒ 藏起来并让排版重算。
+    /// 数据由 `EntityPageHeaderManager` 给（首选**页面自己那一格** —— 见 `captureLatestRelease`；
+    /// 苹果目录只在页面读不到时兜底）。这一侧只管"有没有东西要显示"：`title` 空 ⇒ 藏起来并让排版重算。
     ///
-    /// ⚠️ 卡片**不是按钮**：我们不知道它在 Spotify 里该跳到哪一页（那是苹果目录里的 id），
-    /// 所以它没有箭头、没有高亮，也不进 `hitTest` 的白名单 —— 不留"看得见、点不动"的控件。
+    /// ★★ 2026-10-17（用户：「点击那个卡片应该是**跳转到对应的专辑**」）：
+    /// `isTappable` 由调用方按**数据来源**决定 —— 来自页面那一格 ⇒ 可点（点击转发给那一格，
+    /// 见 manager 的 `handleReleaseCardTap`）；来自苹果目录 ⇒ **不可点**（那没有 Spotify 目标，
+    /// 不留"看得见、点不动"的控件）。
     func updateRelease(
         title: String?,
         date: String?,
         meta: String?,
         artwork: UIImage? = nil,
-        artworkURL: URL? = nil
+        artworkURL: URL? = nil,
+        isTappable: Bool = false
     ) {
         guard let title, !title.isEmpty else {
+            releaseCard.isTappable = false
             if !releaseCard.isHidden {
                 releaseCard.isHidden = true
                 setNeedsLayout()
@@ -783,11 +816,15 @@ final class EntityPageHeaderView: UIView {
             artwork: artwork,
             artworkURL: artworkURL
         )
+        releaseCard.isTappable = isTappable
         if releaseCard.isHidden {
             releaseCard.isHidden = false
             setNeedsLayout()
         }
     }
+
+    /// 卡片被点了一下（manager 接上"转发给页面那一格"，见 `handleReleaseCardTap`）。
+    var onReleaseCardTap: (() -> Void)?
 
     /// 卡片现在是不是显示着（`contentHeight` / `layoutSubviews` 共用这一条判据）。
     private var showsReleaseCard: Bool { !releaseCard.isHidden }

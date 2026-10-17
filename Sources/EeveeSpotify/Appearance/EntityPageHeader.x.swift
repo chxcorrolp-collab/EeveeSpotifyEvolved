@@ -928,6 +928,9 @@ enum EntityPageHeaderManager {
         //    「热门新歌」那一块也在同一页上（日志 111：`[ArtistPageProbe] … [热门新歌]`）
         //    ⇒ 卡片的数据**从页面读**；苹果目录退化成最后兜底（见 `scheduleLatestRelease`）。
         captureLatestRelease(in: page)
+        // ★★ 2026-10-17（用户：「点击那个卡片应该是跳转到对应的专辑」）：
+        //    卡片的触摸交给 manager 转发给页面里那一张真卡（`handleReleaseCardTap`）。
+        headerView.onReleaseCardTap = { handleReleaseCardTap() }
         // ★★ 2026-10-17（用户：图片 145「这里会默认不展开『显示更多』…… 不展开又很难看」）：
         //    进页后替用户点一次那颗展开按钮（原地铺开这一段 → 那条黑带与半截行都不再出现）。
         scheduleSectionExpansion(in: page)
@@ -1313,6 +1316,34 @@ enum EntityPageHeaderManager {
         return nil
     }
 
+    /// 「艺人之选」/「热门新歌」那一行里**第一张小卡**（横向 carousel 的 cell）。
+    ///
+    /// ★ 2026-10-17（用户：「点击那个卡片应该是跳转到对应的专辑」）：卡片显示的是哪一张，
+    /// 点击就必须转发给**那一张** —— 所以数据与点击目标都取这同一颗，而不是整条 carousel 的宿主格。
+    private static func firstNestedCell(in view: UIView) -> UIView? {
+        var queue: [UIView] = view.subviews
+        var visited = 0
+        while !queue.isEmpty, visited < 400 {
+            let node = queue.removeFirst()
+            visited += 1
+            if node is UICollectionViewCell { return node }
+            queue.append(contentsOf: node.subviews)
+        }
+        return nil
+    }
+
+    /// 卡片现在指向的那一格（点击转发目标）。**弱引用** —— 换页/重排之后它可能已经没了。
+    private static weak var releaseCardSource: UIView?
+    /// 那一格属于**哪位艺人**。换了艺人但页面还留在导航栈里时，旧格子的 `window` 仍然非空
+    /// ⇒ 只靠弱引用/`window` 判断会转发到上一页，这里再按名字卡一道。
+    private static var releaseCardSourceName: String?
+
+    /// 记下"卡片现在的目标"（数据与点击共用同一格）。
+    private static func setReleaseCardSource(_ card: UIView, name: String) {
+        releaseCardSource = card
+        releaseCardSourceName = name
+    }
+
     static func captureArtistPick(in page: UIView) {
         let name = currentArtistName
         guard !name.isEmpty else { return }
@@ -1324,9 +1355,11 @@ enum EntityPageHeaderManager {
             return
         }
 
-        guard let found = sectionCard(in: page, headingMatches: isPickHeading),
-              let pick = makePick(from: found.cell) else { return }
+        guard let found = sectionCard(in: page, headingMatches: isPickHeading) else { return }
+        let card = firstNestedCell(in: found.cell) ?? found.cell
+        guard let pick = makePick(from: card) else { return }
         artistPickCache[name] = pick
+        setReleaseCardSource(card, name: name)
         writeDebugLog(
             "[Release] artist pick — \(pick.title)"
                 + " (from \(found.path.section),\(found.path.item))"
@@ -1383,9 +1416,13 @@ enum EntityPageHeaderManager {
 
         releaseSectionMisses[name] = (releaseSectionMisses[name] ?? 0) + 1
 
-        guard let found = sectionCard(in: page, headingMatches: isReleaseHeading),
-              let release = makePick(from: found.cell) else { return }
+        guard let found = sectionCard(in: page, headingMatches: isReleaseHeading) else { return }
+        let card = firstNestedCell(in: found.cell) ?? found.cell
+        guard let release = makePick(from: card) else { return }
         releaseSectionCache[name] = release
+        // ★ 2026-10-17（用户：「点击那个卡片应该是跳转到对应的专辑」）：
+        //   卡片显示的就是这一张小卡 ⇒ 点击转发给它（`handleReleaseCardTap`）。
+        setReleaseCardSource(card, name: name)
         writeDebugLog(
             "[Release] latest release from the page — \(release.title)"
                 + " (from \(found.path.section),\(found.path.item))"
@@ -1393,6 +1430,43 @@ enum EntityPageHeaderManager {
         if let headerView = lastArtistHeaderView, currentArtistName == name {
             applyPick(release, to: headerView)
         }
+    }
+
+    /// 卡片被点了一下。
+    ///
+    /// ★★ 2026-10-17（用户：「点击那个卡片应该是**跳转到对应的专辑**，而不是全部歌曲」）：
+    /// 卡片不编目标，**转发给页面里那一张真卡** —— `eeveeSelectAncestorCell` 走的是
+    /// `collectionView(_:didSelectItemAt:)`（真人点卡那一条），所以落地页与 Spotify 自己完全一致
+    /// （专辑 / 单曲就进那一张，不会跑到「全部歌曲」）。
+    ///
+    /// 目标没了（换页、列表重建、或数据来自苹果目录那条兜底）就**什么都不转发**，只留一行日志。
+    private static func handleReleaseCardTap() {
+        guard releaseCardSourceName == currentArtistName else {
+            writeDebugLog("[Release] card tapped — the card belongs to another artist page, nothing forwarded")
+            return
+        }
+
+        var source = releaseCardSource
+        if source?.window == nil {
+            // ★ 2026-10-17：列表会把那一格回收（"热门新歌"在列表很下面，页头滚回去时它可能已经没了）
+            // ⇒ 先按**标题行**重新找一次，再退回记下来的那颗。
+            if let headerView = lastArtistHeaderView,
+               let page = eeveeAncestor(withIdentifier: "creator-page", of: headerView),
+               let found = sectionCard(in: page, headingMatches: isReleaseHeading) {
+                let card = firstNestedCell(in: found.cell) ?? found.cell
+                releaseCardSource = card
+                source = card
+            }
+        }
+
+        guard let source, source.window != nil else {
+            writeDebugLog("[Release] card tapped — the source row is gone, nothing forwarded")
+            return
+        }
+        let path = eeveeSelectAncestorCell(of: source)
+            ?? eeveeActivate(source)
+            ?? "NOTHING"
+        writeDebugLog("[Release] card tapped — fired: \(path)")
     }
 
     // MARK: - 「显示更多」：进页替用户展开一次
@@ -1615,16 +1689,21 @@ enum EntityPageHeaderManager {
             title: release.title,
             date: date,
             meta: meta,
-            artworkURL: release.artworkURL
+            artworkURL: release.artworkURL,
+            // 苹果目录里的发布在 Spotify 里没有对应目标 ⇒ **不可点**（不留看得见点不动的控件）。
+            isTappable: false
         )
     }
 
+    /// 页面里读到的卡片（「艺人之选」/「热门新歌」）—— 数据与目标都是那一格 ⇒ **可点**。
     private static func applyPick(_ pick: ArtistPick, to headerView: EntityPageHeaderView) {
         headerView.updateRelease(
             title: pick.title,
             date: nil,
             meta: pick.meta,
-            artwork: pick.artwork
+            artwork: pick.artwork,
+            // 只有"目标还在、而且属于**这一页**的艺人"才可点（换页后旧格子可能还活着）。
+            isTappable: releaseCardSource != nil && releaseCardSourceName == currentArtistName
         )
     }
 

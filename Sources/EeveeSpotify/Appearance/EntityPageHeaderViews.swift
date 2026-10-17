@@ -269,6 +269,21 @@ final class EntityPageHeaderButton: UIControl {
                 + " scrolledIntoView=\(scrolled), fired: \(path); \(signals)"
         )
 
+        // ★ 2026-10-17（第二版）：`⋯` 点完 0.9s 后再数一次"弹层迹象"。
+        //   前几版日志只能说明事件发出去了，说不出菜单弹没弹（见 `eeveePopupSnapshot`）。
+        if role == "more" {
+            let before = eeveePopupSnapshot()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                let after = eeveePopupSnapshot()
+                let appeared = after.windows > before.windows || after.menuLike > before.menuLike
+                let verdict = appeared ? "something came up" : "nothing appeared"
+                writeDebugLog(
+                    "[EntityPageHeader] more result — window(s) \(before.windows) → \(after.windows),"
+                        + " menu-like view(s) \(before.menuLike) → \(after.menuLike), \(verdict)"
+                )
+            }
+        }
+
         // ★★ 2026-10-18：点击之后源控件的状态才变（Follow 最明显，见 `afterFire`）。
         //    别只靠"下一次布局回合"——艺人页关注之后不一定还会布局一次。
         if let afterFire {

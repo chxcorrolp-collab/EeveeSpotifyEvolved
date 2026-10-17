@@ -1072,6 +1072,43 @@ func eeveeActivate(_ source: UIView?) -> String? {
     return "activate.accessibility(\(activated))"
 }
 
+// MARK: - 弹层有没有出现（`⋯` 的点击结果）
+
+/// 屏幕上的"弹层迹象"：window 个数 + 类名带 Menu / Platter / Popover 的视图数。
+struct EeveePopupSnapshot: Equatable {
+    let windows: Int
+    let menuLike: Int
+}
+
+/// ★ 2026-10-17（第二版）：`⋯` 点完之后**界面上到底多出了什么**。
+///
+/// 前几版日志只能证明"事件发出去了"（日志 100 / 109 / 110 全是 `fired: …`，界面一动不动），
+/// 证明不了"菜单弹没弹"。这里数两样东西：**window 个数**（`UIMenu` / platter 常常自建一层
+/// window）与**类名带 Menu / Platter / Popover 的视图数**。点之前数一次，0.9s 后再数一次：
+/// 两次一样 ⇒ 这一档转发确实什么都没换来（下一步就该换"我们自己建菜单"那条路）。
+func eeveePopupSnapshot() -> EeveePopupSnapshot {
+    var windows = 0
+    var menuLike = 0
+    for scene in UIApplication.shared.connectedScenes {
+        guard let windowScene = scene as? UIWindowScene else { continue }
+        windows += windowScene.windows.count
+        for window in windowScene.windows {
+            var queue: [UIView] = [window]
+            var visited = 0
+            while !queue.isEmpty, visited < 1500 {
+                let view = queue.removeFirst()
+                visited += 1
+                let name = NSStringFromClass(type(of: view))
+                if name.contains("Menu") || name.contains("Platter") || name.contains("Popover") {
+                    menuLike += 1
+                }
+                queue.append(contentsOf: view.subviews)
+            }
+        }
+    }
+    return EeveePopupSnapshot(windows: windows, menuLike: menuLike)
+}
+
 /// 只进日志：一颗控件到底"为什么点不动"——target/action、手势、`UIMenu`、子控件各有哪些。
 ///
 /// ★★ 2026-10-18（用户：「右上角的三个点的按钮点击无反应」）：上一版已经跳过 `sendActions`

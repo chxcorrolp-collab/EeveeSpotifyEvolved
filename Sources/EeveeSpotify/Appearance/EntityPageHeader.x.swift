@@ -1318,44 +1318,81 @@ enum EntityPageHeaderManager {
     ///
     /// ⇒ 进页 1 秒后（等 section 建出来）**替用户点一次**：原地铺开，不再有黑带与半截行。
     /// 每页只排一次；点到几颗、有没有点动都进日志。
+    /// ★ 2026-10-17（第二版）：**只试一次太脆**。
+    ///
+    /// 进页的 1 秒里列表还在长（`contentSize` 每拍都在变）⇒ 那一拍"热门"这一段 footer 很可能
+    /// **还没建出来**，于是只留一行 `no footer button`，用户照样看见「显示更多」。
+    /// ⇒ 改成三轮（1.0 / 2.5 / 5.0s），点到就停；三轮都没有才认输，并把轮数写进日志
+    ///   （下一份日志一眼能分出是"没找到"还是"点了没动"）。
+    private static let expandAttemptDelays: [Double] = [1.0, 2.5, 5.0]
+
     private static func scheduleSectionExpansion(in page: UIView) {
         let key = ObjectIdentifier(page)
         guard !expandScheduledPages.contains(key) else { return }
         expandScheduledPages.insert(key)
+        attemptSectionExpansion(in: page, attempt: 0)
+    }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak page] in
+    private static func attemptSectionExpansion(in page: UIView?, attempt: Int) {
+        guard let page, attempt >= 0, attempt < expandAttemptDelays.count else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + expandAttemptDelays[attempt]) { [weak page] in
             guard let page, page.window != nil else { return }
-            expandSectionFooters(in: page)
+            if expandSectionFooters(in: page) { return }
+            if attempt + 1 < expandAttemptDelays.count {
+                attemptSectionExpansion(in: page, attempt: attempt + 1)
+            } else {
+                writeDebugLog(
+                    "[EntityPageHeader] section expansion — no footer button after"
+                        + " \(expandAttemptDelays.count) attempt(s)"
+                )
+            }
         }
     }
 
-    private static func expandSectionFooters(in page: UIView) {
+    /// 这一颗是不是"展开这一段"那颗 footer。
+    ///
+    /// ★ 2026-10-17（第二版）：原来只认 `accessibilityIdentifier` 里的 `ListSectionFooter.Button`，
+    ///   但 Encore 的 id 有时**只到组件名**（日志 109 的 `⋯` 就是 `id=Components.UI.ContextMenuButton`，
+    ///   后面没有编号）⇒ 放宽成"`ListSectionFooter` 就够"，再加一条**按字形文字**的兜底
+    ///   （多语言各写一条，与 `isPickHeading` 同一个思路）。
+    private static func isSectionFooter(_ control: UIControl) -> Bool {
+        if (control.accessibilityIdentifier ?? "").contains("ListSectionFooter") { return true }
+        let texts = [control.accessibilityLabel ?? "", control.accessibilityValue ?? ""]
+        let needles = [
+            "显示更多", "显示全部", "展開",
+            "show more", "show all", "see more", "see all",
+            "もっと見る", "すべて表示",
+        ]
+        return texts.contains { text in
+            let lowered = text.lowercased()
+            guard !lowered.isEmpty else { return false }
+            return needles.contains { lowered.contains($0) }
+        }
+    }
+
+    /// 点一颗/几颗「显示更多」；**点到了返回 true**（调用方据此停止重试）。
+    private static func expandSectionFooters(in page: UIView) -> Bool {
         var found: [UIControl] = []
         var queue: [UIView] = [page]
         var visited = 0
         while !queue.isEmpty, visited < 1200, found.count < 4 {
             let view = queue.removeFirst()
             visited += 1
-            if let control = view as? UIControl,
-               (control.accessibilityIdentifier ?? "").contains("ListSectionFooter.Button") {
+            if let control = view as? UIControl, isSectionFooter(control) {
                 found.append(control)
                 continue
             }
             queue.append(contentsOf: view.subviews)
         }
 
-        guard !found.isEmpty else {
-            writeDebugLog("[EntityPageHeader] section expansion — no footer button on the page")
-            return
-        }
+        guard !found.isEmpty else { return false }
 
         for control in found {
             let path = eeveeActivate(control) ?? "NOTHING"
-            writeDebugLog(
-                "[EntityPageHeader] section expansion — \(path)"
-                    + " on \(String(describing: control.accessibilityIdentifier ?? "-"))"
-            )
+            let identifier = String(describing: control.accessibilityIdentifier ?? "-")
+            writeDebugLog("[EntityPageHeader] section expansion — \(path) on \(identifier)")
         }
+        return true
     }
 
     /// 卡片高度（含与按钮行之间的间距）—— 页头排版与"页头长高"共用同一个数。
@@ -1434,9 +1471,13 @@ enum EntityPageHeaderManager {
         releaseArtist = name
 
         ArtistLatestReleaseSource.fetch(artist: name) { release in
-            guard let release,
-                  let current = lastArtistHeaderView,
-                  currentArtistName == name else { return }
+            guard let current = lastArtistHeaderView, currentArtistName == name else { return }
+            guard let release else {
+                // ★ 2026-10-17（第二版）：取不到时要**留一行**，否则"卡片没出现"在日志上
+                //   和"这段代码根本没跑"长得一模一样（数据源自己会先打一行 `iTunes search failed`）。
+                writeDebugLog("[Release] no release for \"\(name)\" — the card stays hidden")
+                return
+            }
             applyLatestRelease(release, to: current)
             writeDebugLog("[Release] card shows the latest release for \"\(name)\"")
         }

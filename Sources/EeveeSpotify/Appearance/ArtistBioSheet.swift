@@ -205,6 +205,11 @@ final class ArtistBioSheet: UIView {
         //    所以是艺人真正的维基条目 / 推特账号，不是我们拼的搜索页）。
         //    ⚠️ 控件是 weak 引用：那一格被回收之后点胶囊会走兜底（维基 → 搜索页），日志里看得出来。
         if !links.isEmpty {
+            // ⚠️ 三颗胶囊**可能放不下**：卡宽 414、左边留 12 ⇒ 可用 402pt，而三颗各最多 132pt
+            //    再加两道 8pt 间距 = 412pt ⇒ 第三颗会伸出卡片右边（`card.clipsToBounds = true`，
+            //    真机上就是半颗被裁掉）。这里按**剩余宽度**夹一次；连 66pt（最短一颗）都放不下
+            //    就停 —— 宁可少画一颗，也不画半颗。
+            let usableRightEdge = card.bounds.width - 12
             var chipX: CGFloat = 12
             for (index, link) in links.enumerated() {
                 let chip = UIButton(type: .system)
@@ -219,7 +224,12 @@ final class ArtistBioSheet: UIView {
                 let textWidth = (link.title as NSString).size(
                     withAttributes: [.font: UIFont.systemFont(ofSize: 14, weight: .medium)]
                 ).width
-                let chipWidth = min(132, max(66, ceil(textWidth) + 28))
+                let chipWidth = min(
+                    132,
+                    max(66, ceil(textWidth) + 28),
+                    usableRightEdge - chipX
+                )
+                guard chipWidth >= 66 else { break }
                 chip.frame = CGRect(
                     x: chipX,
                     y: card.bounds.height - footer - linkRow + 4,

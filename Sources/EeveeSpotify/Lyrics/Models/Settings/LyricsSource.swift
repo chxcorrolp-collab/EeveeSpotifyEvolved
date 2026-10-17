@@ -55,7 +55,11 @@ enum LyricsSource: Int, CaseIterable, CustomStringConvertible {
         return "AMLL"
     case .appleMusicOfficialTtml:
         // 这是**提供者署名**（注入 payload 的 `providedBy` / 页脚那一行），不是源选择器的标签。
-        return "Apple Music"
+        //
+        // ★ 2026-10-17（用户）：「如果歌词来源是苹果官方，显示为 Apple Inc.」——
+        //   刻意**不写** "Apple Music"：署名行要的是版权方（Apple Inc.），
+        //   与服务/产品名（Apple Music）区分开。实验开关那一行的文案不受影响。
+        return "Apple Inc."
     }
     }
 

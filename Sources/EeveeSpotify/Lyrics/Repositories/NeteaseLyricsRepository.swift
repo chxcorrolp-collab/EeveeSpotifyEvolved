@@ -447,7 +447,10 @@ class NeteaseLyricsRepository: LyricsRepository {
         let data = try performWeapi("/weapi/search/get", params: [
             "s": keyword,
             "type": 1,
-            "limit": 30,
+            // ★ 2026-10-17：30 → **100**。网易的搜索排序按地区变（日志 108：日本 IP 下
+            // 正确的 `ヒミツ — MIMI` 掉出前 30，兜底就选了 `Thank You — Royal 44`）。
+            // 100 是 weapi 搜索的常用上限；多出来的结果由下面的"标题+歌手+时长"三重闸门筛。
+            "limit": 100,
             "offset": 0,
         ])
 
@@ -846,12 +849,32 @@ class NeteaseLyricsRepository: LyricsRepository {
         let keyword = "\(query.title) \(query.primaryArtist)"
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let songs: [[String: Any]]
+        var songs: [[String: Any]]
         do {
             songs = try searchSongs(keyword: keyword)
         } catch {
             writeDebugLog("[NetEase] Search error: \(error)")
             throw error
+        }
+
+        // ★ 2026-10-17（用户：「使用日本 IP 使用 NetEase 时，返回结果和中国 IP 完全不一样」）：
+        //    再发一次**只带标题**的搜索，把结果并进来。网易的排序按地区变，`标题 + 歌手`
+        //    那一份可能把正主挤出前 100；标题单独搜往往能把它捞回来。合并按 song id 去重，
+        //    失败不影响主查询（`try?`）。
+        let titleOnlyKeyword = query.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !titleOnlyKeyword.isEmpty,
+           let extra = try? searchSongs(keyword: titleOnlyKeyword),
+           !extra.isEmpty {
+            var seen = Set(songs.compactMap { songId(from: $0) })
+            var added = 0
+            for song in extra {
+                guard let id = songId(from: song) else { continue }
+                if seen.insert(id).inserted {
+                    songs.append(song)
+                    added += 1
+                }
+            }
+            writeDebugLog("[NetEase] title-only search added \(added) candidate(s) (total \(songs.count))")
         }
 
         guard !songs.isEmpty else {
@@ -918,6 +941,56 @@ class NeteaseLyricsRepository: LyricsRepository {
             return false
         }
 
+        /// 标题归一化：去掉括号/标点/空白，砍掉 `feat. …` / `ft. …` 之后的部分。
+        ///
+        /// ★ 2026-10-17（日志 108：日本 IP 下选了 `Thank You — Royal 44`，而 Spotify 这首是
+        ///    `ヒミツ (feat. 可不) — MIMI`）：**光靠时长兜底**会把"恰好差不多长的另一首歌"
+        ///    选进来。现在时长之外还必须**标题对得上**；标题对不上的一律不选，交给 Genius 兜底
+        ///    （同一条日志里 Genius 确实找到了 `ヒミツ (Secret)`）。
+        func normalizeTitle(_ raw: String) -> String {
+            var text = raw.folding(
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                locale: Locale(identifier: "en_US_POSIX")
+            )
+            // ★ 先砍 `feat. …`（**在去标点之前**，否则 `feat` 与后面的词粘在一起，
+            //   拿 `ft` 去截会把 `after` 这类词截成 `a`）。
+            for marker in ["feat.", "feat ", " ft.", " ft "] {
+                if let range = text.range(of: marker, options: .caseInsensitive) {
+                    text = String(text[..<range.lowerBound])
+                }
+            }
+            for token in [
+                "（", "）", "(", ")", "[", "]", "【", "】", "{", "}", "《", "》", "〈", "〉",
+                "-", "—", "–", "・", "·", " ", "　", "\t", "\n",
+                "!", "！", "?", "？", "'", "’", "\"", "“", "”", ",", "，", ".", ":", "：", "/",
+            ] {
+                text = text.replacingOccurrences(of: token, with: "")
+            }
+            return text
+        }
+
+        let wantedTitle = normalizeTitle(query.title)
+
+        func candidateTitles(_ song: [String: Any]) -> [String] {
+            var titles: [String] = []
+            if let name = song["name"] as? String { titles.append(name) }
+            if let aliases = song["alias"] as? [String] { titles.append(contentsOf: aliases) }
+            return titles
+        }
+
+        func titleMatches(_ song: [String: Any]) -> Bool {
+            // 拿不到 Spotify 标题（本地文件等）⇒ 这一关不参与判定，退回旧行为。
+            guard !wantedTitle.isEmpty else { return true }
+            for title in candidateTitles(song) {
+                let candidate = normalizeTitle(title)
+                guard !candidate.isEmpty else { continue }
+                if candidate.contains(wantedTitle) || wantedTitle.contains(candidate) {
+                    return true
+                }
+            }
+            return false
+        }
+
         var chosen: [String: Any]?
         var chosenIndex = -1
         var fallbackByDurationOnly: Int?
@@ -934,12 +1007,15 @@ class NeteaseLyricsRepository: LyricsRepository {
             }
             guard durationOK else { continue }
 
+            // ★ 标题是**新的硬闸门**：标题不对，时长再接近也不选（那正是日志 108 的错误来源）。
+            guard titleMatches(song) else { continue }
+
             switch artistMatches(song) {
             case .some(true):
                 chosen = song
                 chosenIndex = index
             case .some(false), .none:
-                // 时长对、但**歌手对不上**（翻唱 / 同曲异名）或**网易没给歌手名** ——
+                // 标题对、时长对，但**歌手对不上**（翻唱 / 同曲异名）或**网易没给歌手名** ——
                 // 记下来当"最差可用"，优先继续找歌手也对得上的。
                 //
                 // ★★ 2026-10-16：**按时长差取最近的那一个**，不再取"相关度排序里的第一个"。
@@ -965,10 +1041,23 @@ class NeteaseLyricsRepository: LyricsRepository {
             chosen = songs[index]
             chosenIndex = index
             writeDebugLog(
-                "[NetEase] no candidate matched both artist and duration — closest duration wins"
+                "[NetEase] title matched but artist did not — closest duration wins"
                     + " (index \(index), Δ\(fallbackDelta == Int.max ? -1 : fallbackDelta)ms,"
                     + " \(songs.count) results)"
             )
+        }
+
+        // 还是选不出来 ⇒ 把前 8 条候选的标题/歌手/时长/两道闸门打进日志（只在失败时打）。
+        if chosen == nil {
+            for (index, song) in songs.prefix(8).enumerated() {
+                let name = song["name"] as? String ?? "?"
+                let artists = candidateArtists(song).joined(separator: " / ")
+                let ms = candidateDuration(song).map { "\($0)ms" } ?? "?"
+                writeDebugLog(
+                    "[NetEase] candidate[\(index)] \(name) — \(artists.isEmpty ? "?" : artists)"
+                        + " \(ms) title=\(titleMatches(song)) artist=\(artistMatches(song) ?? false)"
+                )
+            }
         }
 
         guard let chosen else {

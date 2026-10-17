@@ -515,6 +515,27 @@ private let propertyReplacements = [
         name: "lyrics_under_cover_art_enabled",
         scope: "ios-nowplaying-contentlayers-impl",
         modification: .setBool(false)
+    ),
+
+    // ★★ 2026-10-17（用户：「有会遮不住 Spotify 官方单行歌词的情况，图片 143；
+    //    未开启覆盖配置时有，开启之后似乎没有了」）：
+    //    新的「歌词内容层」元素（`ElementView<LyricsTextElementProps>`）由这两条 flag 控制
+    //    （日志 108 逐字：`is_lyrics_cover_art_refactor_enabled=true`、
+    //    `lyrics_element_migration_enabled=true`）。`lyrics_under_cover_art_enabled=false`
+    //    只关旧的那条 `singalong-lyrics-view`，管不到新元素 ⇒ 旧元素被藏了，新元素仍在，
+    //    屏幕上就出现"我们的歌词 + 官方单行"两份。
+    //    覆盖配置 ON 之所以看起来修好：整份服务端配置被换成随包快照，这两条不再为 true。
+    //    这里直接把它们钉成 false（**仍只在「隐藏封面下单行歌词」开关开着时生效**，
+    //    见 `modifyAssignedValues` 的跳过条件）；比整份覆盖配置窄得多。
+    EeveePropertyReplacement(
+        name: "lyrics_element_migration_enabled",
+        scope: "ios-nowplaying-contentlayers-impl",
+        modification: .setBool(false)
+    ),
+    EeveePropertyReplacement(
+        name: "is_lyrics_cover_art_refactor_enabled",
+        scope: "ios-nowplaying-contentlayers-impl",
+        modification: .setBool(false)
     )
 ]
 
@@ -523,6 +544,10 @@ private let lyricsEntryPointFlagName = "lyrics_entry_point_enabled"
 
 /// 「封面下单行歌词」那条 flag 的名字（同上）。
 private let singalongLineFlagName = "lyrics_under_cover_art_enabled"
+
+/// ★ 2026-10-17：新「歌词内容层」的两条 flag（同上；见 `propertyReplacements` 末尾）。
+private let lyricsMigrationFlagName = "lyrics_element_migration_enabled"
+private let lyricsRefactorFlagName = "is_lyrics_cover_art_refactor_enabled"
 
 /// 「歌词入口 flag 已按开关跳过」只打一次 —— `modifyAssignedValues` 每次 customize
 /// 响应都会跑，重复打只会刷屏。
@@ -654,6 +679,9 @@ private func reportLyricsReplacementOutcome(_ values: [AssignedValue]) {
         let skipped = (name == lyricsEntryPointFlagName
                         && !NgzhwmSettingsViewModel.isLyricsEntryPointFlagForced)
             || (name == singalongLineFlagName && !UserDefaults.hideSingalongLine)
+            // ★ 2026-10-17：新内容层的两条也跟「隐藏封面下单行歌词」走。
+            || ((name == lyricsMigrationFlagName || name == lyricsRefactorFlagName)
+                && !UserDefaults.hideSingalongLine)
 
         writeDebugLog(
             "[Flags] replacement \(key) — \(hits) match(es)"
@@ -762,6 +790,13 @@ private func modifyAssignedValues(_ values: inout [AssignedValue]) {
            replacement.name == singalongLineFlagName,
            !UserDefaults.hideSingalongLine {
             reportSingalongFlagSkippedOnce()
+            continue
+        }
+
+        // ★ 2026-10-17：新内容层的两条也跟同一个开关走（见 `propertyReplacements` 末尾）。
+        if index < builtInReplacementCount,
+           replacement.name == lyricsMigrationFlagName || replacement.name == lyricsRefactorFlagName,
+           !UserDefaults.hideSingalongLine {
             continue
         }
 

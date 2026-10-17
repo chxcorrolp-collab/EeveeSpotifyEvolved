@@ -60,7 +60,7 @@ jobs:
           test "$total" -gt 200
           test "$fails" -eq 0
 
-      # ── 守卫：五条"必然编译错"的纯文本检查（2026-10-16 接进来）────────────────────
+      # ── 守卫：六条"必然编译错"的纯文本检查（2026-10-16 接进来，2026-10-17 补第六条）──────
       #
       # 这五个脚本从 2026-10-01 起就是"每轮改完手动跑一遍"的纪律，但它们**从来没进过任何
       # workflow**（全仓 grep 只有注释提到它们）⇒ 一次普通 push 之后没人拦这五类错，
@@ -70,8 +70,17 @@ jobs:
       # 放进来的代价约 8 秒（实测：brace 1.1s / string 0.6s / member 3.3s / orion 2.3s /
       # l10n 0.4s），收益是**每一次 push 都跑**，而不是靠人记得。
       #
-      # ⚠️ 五个脚本**都不扫 `Tests/`**（那里的 `main.swift` 是断言程序，不是被注入的源码）
+      # ⚠️ 那五个脚本**都不扫 `Tests/`**（那里的 `main.swift` 是断言程序，不是被注入的源码）
       #    —— 所以最后单独给 `Tests/` 补一条括号/字符串检查。
+      #
+      # ★ 2026-10-17 追加第六条（真机 build 现场）：`swift_import_check.py`
+      #   ——「用了 Foundation 的符号却没 import Foundation」。
+      #   现场：`ExperimentsOptions.swift` 一直只有 Bool 字段（`Codable`/`Decoder` 在 stdlib 里）
+      #   ⇒ 不 import 也能编过；加了一句 `Locale.current.region?.identifier` 之后真机直接报
+      #   `cannot find 'Locale' in scope` / `cannot find 'TimeZone' in scope`。
+      #   上面那五条**都挡不住**，`swiftc -parse` 也挡不住（`-parse` 不解析 import）——
+      #   而本机没有 Swift 工具链，这类错只能等真机 build 才暴露。这一条填的就是这个洞。
+      #   它同时扫 `Sources/` 与 `Tests/`，所以和上面五条的扫描范围不一样。
       - name: Guard — balanced braces / strings (Sources)
         run: python3 Tools/eevee-hookfinder/swift_brace_check.py
       - name: Guard — string literal escapes (Sources)
@@ -82,6 +91,8 @@ jobs:
         run: python3 Tools/eevee-hookfinder/orion_hook_guard.py
       - name: Guard — l10n keys
         run: python3 Tools/l10n_lint.py --quiet
+      - name: Guard — missing Foundation imports (Sources + Tests)
+        run: python3 Tools/eevee-hookfinder/swift_import_check.py
       - name: Guard — balanced braces / strings (Tests)
         run: python3 Tools/eevee-hookfinder/swift_brace_check.py Tests
 

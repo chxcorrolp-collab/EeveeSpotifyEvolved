@@ -1,3 +1,9 @@
+// ⚠️ 这个文件**必须** `import Foundation`：2026-10-17 之前它只有 `Bool` 字段，
+//    `Codable` / `Decoder` 都在 stdlib 里，所以不 import 也能编过；一旦用到
+//    `Locale` / `TimeZone`（下面那个地区判断）就编不过了 —— `swiftc -parse` 不解析
+//    import，CI 的语法门挡不住这一类，只能在真机 build 里暴露。
+import Foundation
+
 struct ExperimentsOptions: Codable, Equatable {
     var liveContainerSharing: Bool
     /// 「显示 Instagram 分享位」—— 2026-10-02 删过一次（它挂的 `SPTSharingSDK` /
@@ -84,7 +90,9 @@ struct ExperimentsOptions: Codable, Equatable {
     /// 4. 这个默认值**只在首次写入时算一次**（跟着 `decodeIfPresent ?? …` 的既有约定），
     ///    之后一直听用户的；不随旅行自动翻转 —— 一个会自己变的开关比一个定错值的开关更难查。
     static var defaultNeteaseCrossValidation: Bool {
-        let isMainlandRegion = Locale.current.regionCode == "CN"
+        // 用 `region?.identifier`（iOS 16+）而不是 `regionCode`：后者在 16 起被标了弃用。
+        // 本仓的 iOS 底线是 16.1（见 `Makefile` / `control` / 三处 `cyan -m 16.1`）。
+        let isMainlandRegion = Locale.current.region?.identifier == "CN"
         let isMainlandTimeZone = mainlandTimeZoneIdentifiers.contains(TimeZone.current.identifier)
         return !(isMainlandRegion && isMainlandTimeZone)
     }

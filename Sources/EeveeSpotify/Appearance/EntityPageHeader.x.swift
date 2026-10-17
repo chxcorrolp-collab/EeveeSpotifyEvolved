@@ -1660,6 +1660,40 @@ class SPTArtistAboutDataLoaderHook: ClassHook<NSObject> {
     typealias Group = ArtistAboutDataHookGroup
     static let targetName = "SPTArtistAboutDataLoader"
 
+    /// 装 hook 之前的**运行时形状核对** —— 把"签名不对就在调用时崩"变成"不装 + 一行日志"。
+    ///
+    /// 判据只有两条，都从**真实方法**上读（不看我们的声明）：
+    ///   · 选择器 `fetchArtistAboutForArtist:withCompletion:` 存在；
+    ///   · 类型编码的**形状**对得上：`v`（void 返回）… `@?`（有一个块参数）。
+    ///
+    /// 真机上是 `v32@0:8@16@?24`（二进制的类 → 方法表逐字），这里只认形状、不认具体数字，
+    /// 换一版 Spotify 只要仍是"对象 + 块"就继续装。
+    static func canInstall() -> Bool {
+        guard let cls = NSClassFromString(targetName),
+              let method = class_getInstanceMethod(
+                  cls,
+                  NSSelectorFromString("fetchArtistAboutForArtist:withCompletion:")
+              ),
+              let raw = method_getTypeEncoding(method) else {
+            return false
+        }
+        let encoding = String(cString: raw)
+        return encoding.hasPrefix("v") && encoding.contains("@?")
+    }
+
+    /// 运行时类型编码（只进日志，排障用）。
+    static func typeEncoding() -> String {
+        guard let cls = NSClassFromString(targetName),
+              let method = class_getInstanceMethod(
+                  cls,
+                  NSSelectorFromString("fetchArtistAboutForArtist:withCompletion:")
+              ),
+              let raw = method_getTypeEncoding(method) else {
+            return "-"
+        }
+        return String(cString: raw)
+    }
+
     func fetchArtistAbout(
         forArtist artist: AnyObject,
         withCompletion completion: @escaping (AnyObject?, Error?) -> Void
@@ -1715,8 +1749,9 @@ func activateEntityPageHeader() {
     // ★★ 2026-10-18：Spotify 自己的「关于艺人」数据线（`SPTArtistAboutDataLoader`）——
     //    装得上就等于"一进页面就有**完整正文 + 真链接**"；装不上就退回界面读文字那条老路
     //    （走的是哪一条，日志里都写清楚）。
-    let aboutLoader = NSClassFromString(SPTArtistAboutDataLoaderHook.targetName) != nil
+    let aboutLoader = SPTArtistAboutDataLoaderHook.canInstall()
     if aboutLoader { ArtistAboutDataHookGroup().activate() }
+    let aboutEncoding = SPTArtistAboutDataLoaderHook.typeEncoding()
     writeDebugLog(
         "[EntityPageHeader] on — AM header \(EntityPageHeaderManager.isEnabled ? "ON" : "OFF"),"
             + " page look \(EntityPageAppearance.isEnabled ? "ON" : "OFF")"
@@ -1726,5 +1761,6 @@ func activateEntityPageHeader() {
             + (bio ? "; about-artist hook on" : "; about-artist hook MISSING")
             + (bioCard ? " + card-layout hook on" : " + card-layout hook MISSING")
             + (aboutLoader ? " + about-data hook on" : " + about-data hook MISSING")
+            + " (encoding \(aboutEncoding))"
     )
 }

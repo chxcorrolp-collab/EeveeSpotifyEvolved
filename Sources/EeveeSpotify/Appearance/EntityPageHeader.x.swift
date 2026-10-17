@@ -115,11 +115,54 @@ enum EntityPageHeaderManager {
     }
 
     /// 把模型落库（`bioTexts` / `bioLinks` 的其它读点都在主线程 ⇒ 这里必须主线程调）。
+    ///
+    /// ⚠️ **落库的 key 必须与所有读点一致**：`cachedBioText` / `cachedBioLinks` /
+    /// `hasCapturedBio` / `readBioWithoutScrolling` 用的都是**页面上的艺人名**
+    /// （`artistNameStorage`）。模型的 `artistName` 多数时候与它逐字相同，但**不保证**
+    /// （本地化 / 版本差异 / 空白与大小写）⇒ 只按模型名存就会出现
+    /// "hook 装上了、日志也打了 `[ArtistBio] loader — …`、卡片里却什么都没有"。
+    /// 所以：**页面名为主**；模型名不同就再当别名存一份（两个读法都能命中）。
     private static func storeArtistAbout(_ about: NSObject) {
-        let modelName = eeveeArtistAboutName(from: about)
         let biography = eeveeArtistAboutBiography(from: about)
         let links = eeveeArtistAboutLinks(from: about)
-        let name = modelName ?? artistNameStorage
+        guard biography != nil || !links.isEmpty else {
+            writeDebugLog("[ArtistBio] loader — the model carried neither a biography nor a link")
+            return
+        }
+
+        let pageName = artistNameStorage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelName = eeveeArtistAboutName(from: about)
+        let primary = pageName.isEmpty ? (modelName ?? "") : pageName
+        guard !primary.isEmpty else { return }
+
+        let previous = bioTexts[primary]?.count ?? 0
+        applyArtistAbout(biography: biography, links: links, to: primary)
+        if let modelName, modelName != primary {
+            applyArtistAbout(biography: biography, links: links, to: modelName)
+        }
+
+        if let biography {
+            writeDebugLog(
+                "[ArtistBio] loader — \(primary), biography \(biography.count) char"
+                    + " (was \(previous))"
+            )
+        } else {
+            writeDebugLog("[ArtistBio] loader — \(primary), biographyText missing on the model")
+        }
+        if !links.isEmpty {
+            writeDebugLog(
+                "[ArtistBio] loader links — \(links.map(\.kind).joined(separator: ","))"
+                    + " (from the model, real URLs)"
+            )
+        }
+    }
+
+    /// `storeArtistAbout` 的落库那一半 —— **同一份数据可以写两个 key**（见那里的 ⚠️）。
+    private static func applyArtistAbout(
+        biography: String?,
+        links: [(kind: String, url: URL)],
+        to name: String
+    ) {
         guard !name.isEmpty else { return }
 
         if let biography {
@@ -128,12 +171,6 @@ enum EntityPageHeaderManager {
             if biography.count >= previous {
                 bioTexts[name] = biography
             }
-            writeDebugLog(
-                "[ArtistBio] loader — \(name), biography \(biography.count) char"
-                    + " (was \(previous))"
-            )
-        } else {
-            writeDebugLog("[ArtistBio] loader — \(name), biographyText missing on the model")
         }
 
         guard !links.isEmpty else { return }
@@ -165,8 +202,6 @@ enum EntityPageHeaderManager {
             )
         }
         bioLinks[name] = refs
-        let kinds = links.map(\.kind).joined(separator: ",")
-        writeDebugLog("[ArtistBio] loader links — \(kinds) (from the model, real URLs)")
     }
 
     /// 「关于艺人」那块里找到的**社交链接**（维基 / 推特 / …）—— 按艺人名存。

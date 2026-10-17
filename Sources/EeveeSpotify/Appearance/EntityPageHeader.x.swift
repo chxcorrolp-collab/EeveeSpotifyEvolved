@@ -993,6 +993,9 @@ enum EntityPageHeaderManager {
         //    「热门新歌」那一块也在同一页上（日志 111：`[ArtistPageProbe] … [热门新歌]`）
         //    ⇒ 卡片的数据**从页面读**；苹果目录退化成最后兜底（见 `scheduleLatestRelease`）。
         captureLatestRelease(in: page)
+        // ★★ 2026-10-18：那一块在列表很下面、懒加载 ⇒ 布局拍停掉之后就没人再读了
+        //    （见 `startReleasePolling`：这就是"刚进没有、重进才有"的根因）。
+        startReleasePolling(in: page, name: name)
         // ★★ 2026-10-17（用户：「点击那个卡片应该是跳转到对应的专辑」）：
         //    卡片的触摸交给 manager 转发给页面里那一张真卡（`handleReleaseCardTap`）。
         headerView.onReleaseCardTap = { handleReleaseCardTap() }
@@ -1705,6 +1708,59 @@ enum EntityPageHeaderManager {
     private static var releaseSectionFirstSeen: [String: Date] = [:]
     private static let releaseFallbackDelay: TimeInterval = 6
 
+    // MARK: - 「最新发布」：页面那一块是**懒加载**的，得有人按时去看
+
+    private static var releasePollTimer: Timer?
+    private static weak var releasePollPage: UIView?
+    private static var releasePollDeadline: Date?
+    private static var releasePollName = ""
+    private static let releasePollInterval: TimeInterval = 1.5
+    private static let releasePollLifetime: TimeInterval = 90
+
+    /// ★★ 2026-10-18（用户：「这卡片的自画展示逻辑是什么，刚进艺人页没有，重进之后可能就有了」）：
+    ///
+    /// **这就是那个"时有时无"的根因** —— 卡片的数据要读页面里「热门新歌」那一块，
+    /// 而那一块在列表中很下面（日志 222：`热门新歌` 标题在 **y=1020pt**，窗口只有 896pt），
+    /// Spotify 用的是**懒加载**：没滚到就一直是 `RetrievalRowLoadingElementUI … 正在加载`。
+    ///
+    /// 而原来唯一的读取时机是**布局拍**（`applyToArtistPage` → `captureLatestRelease`）——
+    /// 页头一旦稳定、列表不再重排，**布局拍就不来了** ⇒ 真正滚到那一块的时候没人去读；
+    /// 反过来，"重进一次"之所以可能就有了，是因为上一轮已经滚过、Spotify 手里有数据，
+    /// 那一拍建得够快。**同一个原因**也让它落到苹果目录兜底（日志 222：`no page section after 29s`），
+    /// 于是选错专辑（苹果目录里那是另一位同名艺人的 `Connect the World`）、而且不可点。
+    ///
+    /// ⇒ 进艺人页后**按 1.5 秒一拍去看 90 秒**（与布局拍无关）。读到就画，画完就变成
+    /// 页面里那一格 ⇒ 数据对、点击也转发得动。
+    static func startReleasePolling(in page: UIView, name: String) {
+        if releasePollPage === page, releasePollTimer != nil, releasePollName == name { return }
+        releasePollTimer?.invalidate()
+        releasePollPage = page
+        releasePollName = name
+        releasePollDeadline = Date().addingTimeInterval(releasePollLifetime)
+
+        let timer = Timer(timeInterval: releasePollInterval, repeats: true) { _ in
+            guard let page = releasePollPage, page.window != nil,
+                  currentArtistName == releasePollName else {
+                releasePollTimer?.invalidate()
+                releasePollTimer = nil
+                return
+            }
+            if let deadline = releasePollDeadline, Date() > deadline {
+                releasePollTimer?.invalidate()
+                releasePollTimer = nil
+                writeDebugLog(
+                    "[Release] gave up looking for the page's own releases row"
+                        + " after \(Int(releasePollLifetime))s"
+                )
+                return
+            }
+            captureLatestRelease(in: page)
+            captureArtistPick(in: page)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        releasePollTimer = timer
+    }
+
     private static func scheduleLatestRelease(for headerView: EntityPageHeaderView, name: String) {
         // ① 已经有"艺人之选"⇒ 卡片归它（用户：优先展示艺人之选）。
         if let pick = artistPickCache[name] {
@@ -1759,6 +1815,22 @@ enum EntityPageHeaderManager {
         }
     }
 
+    /// ★★ 2026-10-18（图片 150「只剩半只猫」）：**显卡的那一拍照样把页头补高**。
+    ///
+    /// `EntityPageHeaderView` 是**贴底排**的（`y = bounds.height - contentBottom - contentHeight`）——
+    /// 页头高度不变而内容多了一张卡 ⇒ 姓名与那三颗**整体上移 106pt**。而满幅照片的化开终点
+    /// 锚在"名字上沿"（`EntityPageAppearance.ensureSharpHero`）⇒ 照片被多吃掉一百多 pt，
+    /// 用户看到的就是"只剩半只猫"。
+    ///
+    /// 日志 222 的现场：`[Release] card shows …` 在 **16:12:11**，`[Release] header room — 520 → 626pt`
+    /// 在 **16:12:37** —— 中间 **26 秒**都停在上移的状态（页头稳定之后布局拍就不再来了，
+    /// 而 `makeRoomForReleaseCard` 只在 `applyToArtistPage` 里被调）。
+    /// ⇒ 显卡的那一把顺手补高，两者永远同一拍。
+    private static func growHeaderForReleaseCard(_ headerView: EntityPageHeaderView) {
+        guard let header = headerView.superview else { return }
+        makeRoomForReleaseCard(in: header)
+    }
+
     private static func applyLatestRelease(_ release: ArtistLatestRelease, to headerView: EntityPageHeaderView) {
         let date = release.date.map { ArtistLatestReleaseSource.cardDateFormat.string(from: $0) }
         let meta = release.trackCount > 0
@@ -1772,6 +1844,8 @@ enum EntityPageHeaderManager {
             // 苹果目录里的发布在 Spotify 里没有对应目标 ⇒ **不可点**（不留看得见点不动的控件）。
             isTappable: false
         )
+        // ★★ 2026-10-18：卡片一显出来就把页头补高（否则姓名/三颗上移 106pt，照片被吃掉一半）。
+        growHeaderForReleaseCard(headerView)
     }
 
     /// 页面里读到的卡片（「艺人之选」/「热门新歌」）—— 数据与目标都是那一格 ⇒ **可点**。
@@ -1784,6 +1858,8 @@ enum EntityPageHeaderManager {
             // 只有"目标还在、而且属于**这一页**的艺人"才可点（换页后旧格子可能还活着）。
             isTappable: releaseCardSource != nil && releaseCardSourceName == currentArtistName
         )
+        // ★★ 2026-10-18：同上 —— 页头高度与卡片同一拍补上。
+        growHeaderForReleaseCard(headerView)
     }
 
     /// 标题行的文字是不是"艺人之选"这一块（多语言各写一条 —— Spotify 的 UI 跟着 App 语言走）。

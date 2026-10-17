@@ -1099,6 +1099,23 @@ class NeteaseLyricsRepository: LyricsRepository {
         //      —— 排序按地区变，而"哪一条和 Spotify 的时长最接近"跟地区无关。
         var strictlyMatchedIndices: [Int] = []
         var durationOnlyCandidates: [(index: Int, delta: Int)] = []
+        /// ★★ 2026-10-18（日志 222 的现场：MIMI 那首**还是**找不到词）：
+        ///
+        /// ```
+        /// [NetEase] candidate[0] ヒミツ (feat. 可不) — MIMI / 可不 150085ms title=false base=false artist=true
+        /// [NetEase] no candidate duration matches Spotify (spotify=150000ms, 49 results) — noSuchSong
+        /// ```
+        ///
+        /// **歌手对上、时长只差 85ms**，但 Spotify 那边的标题是**另一种写法**（`秘密` / 罗马字 / 尾注
+        /// 全都不同）⇒ 歌名与主干两道都过不去。这不是"比较写得不够松"，而是**同一个词在两套书写系统里
+        /// 各有一个名字**（`ヒミツ` 与 `秘密`）—— 字符串比较再放宽也永远不会相等。
+        ///
+        /// ⇒ 加第三档：**歌手对得上 + 时长差 ≤ 2s** 也收进候选表。位置排在
+        /// "三道闸门全过"之后、"只有标题+时长对上（歌手对不上）"之前 —— 前者当然更可信，
+        /// 而后者的风险（翻唱 / 同名不同曲）比"同一歌手、时长几乎一样"更大。
+        /// 同一歌手两首时长差 2 秒以内的歌很少；这一档也只有在前两档一条都没有时才会被选中。
+        let closeDurationMs = 2000
+        var closeDurationCandidates: [Int] = []
         /// 拿不到 Spotify 时长（本地文件）时没有 Δ 可比 ⇒ 与旧行为一致，只记第一个。
         var firstDurationOnlyWithoutDelta: Int?
 
@@ -1118,6 +1135,14 @@ class NeteaseLyricsRepository: LyricsRepository {
             //   歌手对上、时长对上、主干相同（见 `baseTitle`）⇒ 同一首歌的两种写法。
             //   ★★ 2026-10-17（日志 112）：`ヒミツ (feat. 可不)` vs `ヒミツ (Secret)` 就是这种。
             let baseOK = !titleOK && artistOK == .some(true) && baseTitleMatches(song)
+            // ★★ 2026-10-18：标题与主干都对不上、但**歌手对上且时长几乎一样** ⇒ 收进第三档
+            //    （见 `closeDurationCandidates` 那段；`ヒミツ` vs `秘密` 就是这一类）。
+            if !titleOK, !baseOK, artistOK == .some(true),
+               let spotifyDurationMs, let ms = candidateDuration(song),
+               abs(ms - spotifyDurationMs) <= closeDurationMs {
+                closeDurationCandidates.append(index)
+                continue
+            }
             guard titleOK || baseOK else { continue }
 
             if artistOK == .some(true) {
@@ -1151,6 +1176,17 @@ class NeteaseLyricsRepository: LyricsRepository {
 
         // 把两条排序拼成一条有序候选表（见上面「候选排序」段的 ①②）。
         var orderedCandidateIndices: [Int] = strictlyMatchedIndices
+        // ★★ 2026-10-18：第三档（歌手 + 时长，跨书写系统）排在"只有标题+时长对上"之前，
+        //    理由见 `closeDurationCandidates` 的说明。
+        if !closeDurationCandidates.isEmpty {
+            for index in closeDurationCandidates where !orderedCandidateIndices.contains(index) {
+                orderedCandidateIndices.append(index)
+            }
+            writeDebugLog(
+                "[NetEase] \(closeDurationCandidates.count) candidate(s) admitted by artist + duration"
+                    + " (the title is written in another script) — index \(closeDurationCandidates)"
+            )
+        }
         for candidate in durationOnlyCandidates.sorted(by: { $0.delta < $1.delta }) {
             orderedCandidateIndices.append(candidate.index)
         }
@@ -1353,8 +1389,45 @@ class NeteaseLyricsRepository: LyricsRepository {
                     writeDebugLog("[NetEase] yrc (eapi) fetch failed: \(error)")
                 }
             }
-            let yrcParsed: [(offsetMs: Int, content: String, words: [LyricsWordDto])] =
+            var yrcParsed: [(offsetMs: Int, content: String, words: [LyricsWordDto])] =
                 yrcText.map { parseYrc($0) } ?? []
+
+            // ★★ 2026-10-18（日志 222 的现场：`Chosen[1]: 独白 — DUSTCELL 196680ms` 之后
+            //    `eapi /api/song/lyric/v1 → yrc absent, ytlrc absent` ⇒ 那首歌**退化回行级**）：
+            //
+            // 逐字（yrc）是**按歌曲 id** 下发的，同一首歌在网易那边常有多个 id（原版 / 单曲版 /
+            // 专辑版）。选中的那条没有 yrc，不代表这首歌没有 —— 用户点名要的就是逐字。
+            // ⇒ 选中的候选没给 yrc 时，**再向同歌的其它候选各要一次**（最多 2 条）。
+            //
+            // 代价：每次最多多 2 个 eapi 请求，而且**只在"选中那条没有 yrc"时**才发生
+            // （三道闸门全过的歌一般一次就够）；拿不到就照旧回退行级，不影响功能。
+            if preferWordByWord, yrcParsed.isEmpty {
+                let probes = orderedCandidateIndices
+                    .filter { $0 != chosenIndex }
+                    .prefix(2)
+                if !probes.isEmpty {
+                    writeDebugLog(
+                        "[NetEase] yrc absent for candidate[\(chosenIndex)] — probing"
+                            + " \(probes.count) sibling candidate(s)"
+                    )
+                }
+                for index in probes {
+                    guard let otherSongID = songId(from: songs[index]) else { continue }
+                    guard let probe = try? fetchYrcRaw(songId: otherSongID) else { continue }
+                    let parsed = probe.yrc.map { parseYrc($0) } ?? []
+                    writeDebugLog(
+                        "[NetEase] yrc probe — candidate[\(index)]"
+                            + " \(songs[index]["name"] as? String ?? "?") →"
+                            + " \(parsed.isEmpty ? "absent" : "\(parsed.count) line(s)")"
+                    )
+                    if !parsed.isEmpty {
+                        yrcParsed = parsed
+                        // ytlrc 必须与**采用的那一份** yrc 配对（两边的行 offset 是一套）。
+                        ytlrcText = probe.ytlrc
+                        break
+                    }
+                }
+            }
 
             if !yrcParsed.isEmpty {
                 writeDebugLog("[NetEase] Word-by-word (yrc) lyrics — \(yrcParsed.count) line(s)")

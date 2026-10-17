@@ -235,6 +235,8 @@ enum ArtistLatestReleaseSource {
         let wanted = normalized(artist)
         var newest: ArtistLatestRelease?
         var seenArtists: [String] = []
+        var matched = 0
+        var dated = 0
 
         for item in results {
             guard let name = item["collectionName"] as? String, !name.isEmpty else { continue }
@@ -251,6 +253,8 @@ enum ArtistLatestReleaseSource {
             else { continue }
 
             let date = parseDate(item["releaseDate"] as? String)
+            matched += 1
+            if date != nil { dated += 1 }
             let tracks = item["trackCount"] as? Int ?? 0
             let artwork = (item["artworkUrl100"] as? String).flatMap(upsizedArtwork)
 
@@ -275,17 +279,59 @@ enum ArtistLatestReleaseSource {
             }
         }
 
+        // ★★ 2026-10-18：**一条日期都解析不出来就别猜**。
+        //
+        //   搜索是**按相关度**返回的，「最新发布」这个名字要求按日期挑 ⇒ 没有日期时
+        //   "第一名"根本不是"最新的一张"（`Connect the World` 就是这么被选上的）。
+        //   宁可这张卡先不出现（页面那一块读到之后会自己换上来），也不印一张错的专辑。
+        if matched > 0, dated == 0, let fallback = newest {
+            writeDebugLog(
+                "[Release] \(matched) result(s) matched the artist but none carried a parseable"
+                    + " releaseDate — refusing to guess (would have shown \"\(fallback.title)\")"
+            )
+            return (nil, results.count, seenArtists.isEmpty ? "-" : seenArtists.joined(separator: " | "))
+        }
+
         return (newest, results.count, seenArtists.isEmpty ? "-" : seenArtists.joined(separator: " | "))
     }
 
-    /// `06/20/2025 07:00:00` —— iTunes 的固定格式（**不是**跟随地区的那一套）。
+    /// `2026-08-22T07:00:00Z`（现代 iTunes Search）或 `06/20/2025 07:00:00`（老格式 / 部分端点）。
+    ///
+    /// ★★ 2026-10-18（日志 222 的现场：卡片显示成 `Connect the World - Single`）：
+    ///
+    /// ```
+    /// [Release] "Nanatsukaze" @ us → Connect the World - Single (1 track(s), date ?)
+    /// ```
+    ///
+    /// 旧版**只**认 `MM/dd/yyyy HH:mm:ss`，而现在的 search 接口下发的是 **ISO-8601**
+    /// ⇒ 每条结果的日期都是 nil ⇒ `newest` 落到「**搜索相关度第一名**」而不是「日期最新的一张」，
+    /// 于是卡片显示的是另一位同名艺人的旧单曲，而不是页面上那张 `空耳 - Single`。
+    /// 那一行里的 `date ?` 就是现场。
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    private static let fractionalISOFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
     private static func parseDate(_ raw: String?) -> Date? {
         guard let raw, !raw.isEmpty else { return nil }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "MM/dd/yyyy HH:mm:ss"
-        return formatter.date(from: raw)
+        if let date = isoFormatter.date(from: raw) ?? fractionalISOFormatter.date(from: raw) {
+            return date
+        }
+        for format in ["MM/dd/yyyy HH:mm:ss", "yyyy/MM/dd HH:mm:ss", "yyyy-MM-dd HH:mm:ss"] {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = format
+            if let date = formatter.date(from: raw) { return date }
+        }
+        return nil
     }
 
     /// `…/100x100bb.jpg` → `…/600x600bb.jpg`（同一张图的大图）。

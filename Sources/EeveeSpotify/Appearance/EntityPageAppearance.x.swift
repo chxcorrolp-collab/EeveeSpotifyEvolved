@@ -255,8 +255,10 @@ enum EntityPageAppearance {
     private static var didReport = false
     /// "清掉了一个页面容器"只报一次（见 `clearPageContainers`）。
     private static var didReportContainerClear = false
-    /// "藏掉了页头那层 wash"只报一次（见 `concealAlbumWash`）。
-    private static var didReportAlbumWash = false
+    /// "藏掉了页头那层 wash"按**页**各报一次（见 `concealAlbumWash`）。
+    /// ★★ 2026-10-18：原来是一个布尔（整场只报一次）⇒ 第二页以后藏了也不报，
+    /// "这一页没藏掉"在日志上就看不出来了。
+    private static weak var concealedWashPage: UIView?
     /// "这一页有哪些色层"也只报一次 —— 按**页**记（换页要重新出清单）。
     private static weak var washProbePage: UIView?
     private static var lastLoggedHex: String?
@@ -1328,6 +1330,12 @@ enum EntityPageAppearance {
                             "[\(logTag)] wash candidate — \(name) \(frameDescription(frame))"
                                 + " id=\(identifier.isEmpty ? "-" : identifier) parent=\(parent)"
                                 + " header=\(inHeader)"
+                                // ★★ 2026-10-18（用户：「图片 144 的问题还在」）：把**当下的显隐**
+                                //    也打出来 —— "候选列出来了却没藏掉"与"藏掉了又被 Spotify 显回来"
+                                //    在旧日志里长得一样，只能靠这一列分开。
+                                + " hidden=\(view.isHidden ? 1 : 0)"
+                                + " alpha=\(String(format: "%.2f", view.alpha))"
+                                + " layerHidden=\(view.layer.isHidden ? 1 : 0)"
                         )
                     }
                     concealWash(on: view)
@@ -1340,8 +1348,10 @@ enum EntityPageAppearance {
             queue.append(contentsOf: view.subviews.map { ($0, inHeader, depth + 1) })
         }
 
-        guard taken > 0, !didReportAlbumWash else { return }
-        didReportAlbumWash = true
+        // ★★ 2026-10-18：原来这里是"整场只报一次"（`didReportAlbumWash`）⇒ **第二页以后藏了也不报**，
+        //    于是"这一页没藏掉"在日志上看不出来。改成**每页一次**。
+        guard taken > 0, concealedWashPage !== page else { return }
+        concealedWashPage = page
         writeDebugLog(
             "[\(logTag)] album wash — concealed \(taken) GradientView(s) (header subtree"
                 + " or a page-wide band in the top 80%)"

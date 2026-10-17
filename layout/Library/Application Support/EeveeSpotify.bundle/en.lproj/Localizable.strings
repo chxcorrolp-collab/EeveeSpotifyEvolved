@@ -109,6 +109,9 @@ amll_fuzzy_search_description = "Only applies when \"AMLL preferred\" is on or t
 netease_cross_validation = "NetEase cross-validation";
 netease_cross_validation_description = "May ease or fix the case where NetEase hands back the wrong song's lyrics for users outside mainland China — NetEase orders its search results by region, so the wrong track can be picked. With this on, a NetEase pick that did not pass all three gates (title, artist, duration) is compared against a source whose identity is anchored to the Spotify track ID (Spicy Lyrics, AMLL, Musixmatch); if the two texts do not match, the next NetEase candidate is tried. Picks that pass all three gates are never checked, so most songs cost nothing extra — but songs that do get checked take longer to load.";
 
+spicy_cross_validation = "Spicy Lyrics cross-validation";
+spicy_cross_validation_description = "Fixes the case where the lyrics Spicy Lyrics returns have had words censored out. With this on, a censored line is looked up in another source for the same track and only the censored words are filled back in; if the replacement cannot be pinned down, the asterisks are left alone. Lyrics take longer to load.";
+
 /* MARK: Premium PopUps */
 
 have_premium_popup = "It looks like you have an active Premium subscription, so the tweak won't patch the data or restrict the use of Premium server-sided features. You can manage this in the EeveeSpotify settings.";

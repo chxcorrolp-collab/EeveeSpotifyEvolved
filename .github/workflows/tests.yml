@@ -231,6 +231,21 @@ jobs:
                  -o netease-cross-validation-tests
           ./netease-cross-validation-tests
 
+      # 2026-10-17：「SpicyLyrics 交叉验证」的**补词判据**（`LyricsCensorFill`）。
+      # 三件事必须钉住：
+      #   ① 检测正则 —— 上游的 `\b\*{3,}\b` 实测只命中 `f***k`，`my **** line` 一个都
+      #      不命中 ⇒ 那个功能从来没真正接线过。现在必须是"任意 3+ 星号"。
+      #   ② CJK 回归 —— 旧算法按空格切词，中日韩整行只有 1 个"词" ⇒ **任何**候选行都被
+      #      当成匹配、整行被换成别的歌词。必须只换星号那一段。
+      #   ③ 不猜 —— 锚点不足（整行星号）或替换词不唯一（`**** you`）时保持原样。
+      # 纯 Foundation（无网络、无 DTO），所以能进这里。
+      - name: Lyrics censor fill (Spicy Lyrics cross-validation)
+        run: |
+          swiftc Sources/EeveeSpotify/Lyrics/LyricsCensorFill.swift \
+                 Tests/LyricsCensorFill/main.swift \
+                 -o lyrics-censor-fill-tests
+          ./lyrics-censor-fill-tests
+
       # 2026-10-17：AMLL TTML 的 **ruby 注音**（`<ruby>漢<rt>かん</rt></ruby>`）不能被当歌词 ——
       # `text()` 原来把 `rt` 里的读音也拼进正文，于是 ① 那一行多出读音；② 有逐词 span 的行
       # 更糟：`primaryText` 含读音、与词条拼接结果不一致 ⇒ mapper 的不变量失败 ⇒ **整行降级为逐行**

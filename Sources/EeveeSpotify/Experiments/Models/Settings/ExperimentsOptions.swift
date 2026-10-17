@@ -18,19 +18,31 @@ struct ExperimentsOptions: Codable, Equatable {
     ///
     /// 判据与分级见 `NetEaseCrossValidation.swift` / `NeteaseCrossValidationRunner.swift`。
     var neteaseCrossValidation: Bool
+    /// 「SpicyLyrics 交叉验证」—— 2026-10-17（用户）：SpicyLyrics 的上游会把部分词和谐成
+    /// 星号（`my **** line`）。打开后拿**同一首歌**在另一个源里的文本找回同一句，
+    /// 只把星号那几段换掉（见 `LyricsCensorFill` / `LyricsUncensorFill`）。
+    ///
+    /// **默认关**（用户明确要求）：它会为每首"确实有星号"的歌多发 1~5 次请求。
+    /// ⚠️ 历史：这个功能在 2026-10-17 之前是**无条件开着**的，但那时它的检测正则是
+    /// `\b\*{3,}\b`，实测只命中 `f***k` 这种写法、`my **** line` 一个都不命中
+    /// ⇒ 实际上等于没接线。所以"改成默认关"对绝大多数用户**不是行为倒退**，
+    /// 而是把一个本来就没生效的东西改成显式可选。
+    var spicyLyricsCrossValidation: Bool
 
     init(
         liveContainerSharing: Bool,
         showInstagramDestination: Bool = false,
         petitLyricsNetEaseFallback: Bool = false,
         amllFuzzySearch: Bool = false,
-        neteaseCrossValidation: Bool = ExperimentsOptions.defaultNeteaseCrossValidation
+        neteaseCrossValidation: Bool = ExperimentsOptions.defaultNeteaseCrossValidation,
+        spicyLyricsCrossValidation: Bool = false
     ) {
         self.liveContainerSharing = liveContainerSharing
         self.showInstagramDestination = showInstagramDestination
         self.petitLyricsNetEaseFallback = petitLyricsNetEaseFallback
         self.amllFuzzySearch = amllFuzzySearch
         self.neteaseCrossValidation = neteaseCrossValidation
+        self.spicyLyricsCrossValidation = spicyLyricsCrossValidation
     }
 
     /// 手写解码：`liveContainerSharing` 之外那些都是**后加的**字段，早期盘上根本没有它们。
@@ -45,6 +57,8 @@ struct ExperimentsOptions: Codable, Equatable {
         amllFuzzySearch = try container.decodeIfPresent(Bool.self, forKey: .amllFuzzySearch) ?? false
         neteaseCrossValidation = try container.decodeIfPresent(Bool.self, forKey: .neteaseCrossValidation)
             ?? ExperimentsOptions.defaultNeteaseCrossValidation
+        spicyLyricsCrossValidation = try container.decodeIfPresent(Bool.self, forKey: .spicyLyricsCrossValidation)
+            ?? false
     }
 
     // MARK: - 「NetEase 交叉验证」的默认值

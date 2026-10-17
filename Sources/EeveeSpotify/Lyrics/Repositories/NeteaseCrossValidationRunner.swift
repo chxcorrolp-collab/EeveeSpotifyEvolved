@@ -35,17 +35,6 @@ struct NeteaseCrossValidationRunner {
         }
     }
 
-    /// 跑裁判请求的**专用并发队列**。
-    ///
-    /// ⚠️ 不用 `DispatchQueue.global()`：调用方 `CustomLyrics` 本身就是
-    /// `DispatchQueue.global(qos: .userInitiated).async` 进来的，而这里会在**外面**再等一个
-    /// 信号量 —— 两层都占全局池的线程，多首并发时会互相挤。单独一条队列把这件事隔开。
-    private static let verificationQueue = DispatchQueue(
-        label: "eevee.netease.cross-validation",
-        qos: .userInitiated,
-        attributes: .concurrent
-    )
-
     /// 单个裁判源的预算（秒）。
     static let perArbiterBudget: TimeInterval = 3.0
     /// 整次验证的总预算（秒）—— 三个裁判源全部超时也不会拖过这个数。
@@ -119,12 +108,9 @@ struct NeteaseCrossValidationRunner {
             }
             let budget = min(perArbiterBudget, remaining)
 
-            guard let arbiterLines = fetchLines(
-                budget: budget,
-                arbiter: arbiter,
-                query: query,
-                options: options
-            ) else {
+            guard let arbiterLines = LyricsLinesBudget.lines(budget, {
+                try arbiter.fetch(query, options).lines.map { $0.content }
+            }) else {
                 writeDebugLog("[NetEase] verify arbiter=\(arbiter.name) no usable text")
                 continue
             }
@@ -149,41 +135,5 @@ struct NeteaseCrossValidationRunner {
         }
 
         return .unknown("no-verdict")
-    }
-
-    // MARK: 取词 + 预算
-
-    /// 在 `budget` 秒内拿到裁判源的歌词行；超时／抛错／空文本都返回 `nil`。
-    ///
-    /// 实现说明：仓库里的取词都是**同步阻塞**的（含 `Thread.sleep` 退避），没有可取消的
-    /// 句柄 ⇒ 只能在**外面**加一道墙钟超时。超时后后台那次请求会自己跑完、结果被丢弃；
-    /// 代价是一个线程最多再忙二十几秒，可接受（验证只在低置信度候选上触发，数量很少）。
-    private static func fetchLines(
-        budget: TimeInterval,
-        arbiter: Arbiter,
-        query: LyricsSearchQuery,
-        options: LyricsOptions
-    ) -> [String]? {
-        let semaphore = DispatchSemaphore(value: 0)
-        let box = BudgetBox()
-
-        verificationQueue.async {
-            box.lines = (try? arbiter.fetch(query, options))?.lines.map { $0.content }
-            semaphore.signal()
-        }
-
-        if semaphore.wait(timeout: .now() + budget) == .timedOut {
-            return nil
-        }
-
-        guard let lines = box.lines, !lines.isEmpty else { return nil }
-        return lines
-    }
-
-    /// 为什么用 class 而不是捕获一个 `var`：闭包在别的队列上写、这里读，
-    /// 捕获列表里的 `var` 在开启严格并发检查的 Swift 版本上会被判成数据竞争。
-    /// 一个只放一层的盒子把意图写清楚，也不需要 `@unchecked Sendable`。
-    private final class BudgetBox {
-        var lines: [String]?
     }
 }

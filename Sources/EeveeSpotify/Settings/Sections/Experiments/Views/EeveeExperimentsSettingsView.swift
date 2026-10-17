@@ -68,6 +68,17 @@ struct EeveeExperimentsSettingsView: View {
                     isOn: $experimentsOptions.neteaseCrossValidation
                 )
             }
+
+            // ★ 2026-10-17：SpicyLyrics 交叉验证（**默认关**）。
+            //   补的是"上游把词和谐成星号"，判据在 `LyricsCensorFill`，
+            //   接线在 `LyricsUncensorFill`（挂在 `SpicyLyricsRepository.parseLyricsData` 之后）。
+            //   只有真的出现 `***` 时才发请求；一个源补完即停。
+            Section(footer: Text("spicy_cross_validation_description".localized)) {
+                Toggle(
+                    "spicy_cross_validation".localized,
+                    isOn: $experimentsOptions.spicyLyricsCrossValidation
+                )
+            }
         }
         .onChange(of: experimentsOptions) { options in
             UserDefaults.experimentsOptions = options

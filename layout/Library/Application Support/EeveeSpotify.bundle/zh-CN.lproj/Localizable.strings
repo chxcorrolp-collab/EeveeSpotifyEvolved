@@ -103,6 +103,9 @@ amll_fuzzy_search_description = "选项生效需要开启「AMLL 优先」或歌
 netease_cross_validation = "NetEase交叉验证";
 netease_cross_validation_description = "此选项开启后可能会缓解/解决非中国大陆用户使用 NetEase 歌词源时，NetEase 不会正确返回歌曲歌词的问题。但选项开启后会增加歌曲请求用时。";
 
+spicy_cross_validation = "SpicyLyrics交叉验证";
+spicy_cross_validation_description = "选项开启后会解决SpicyLyrics返回的歌词可能被和谐的问题，歌词请求用时会加长。";
+
 /* MARK: Premium PopUps */
 
 have_premium_popup = "看来您有一个真实有效的 Premium 订阅，因此此插件不会修补数据或限制 Premium 服务器端功能的使用。可以在 EeveeSpotify 设置中管理此操作。";

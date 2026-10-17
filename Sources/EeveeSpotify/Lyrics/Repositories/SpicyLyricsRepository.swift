@@ -379,9 +379,13 @@ class SpicyLyricsRepository: LyricsRepository {
         let result = try performQuery(trackId: trackId)
         var dto = try parseLyricsData(result, trackId: trackId)
 
-        // SpicyLyrics 上游会把部分歌词打码成 `***`。这里按「词数 + 词位置」从其他
-        // 未打码的源（LRCLIB / Musixmatch / Genius，见 LyricsUncensorFill）把词补回：
-        // 只改行文本，行的时间戳/时长原样保留。
+        // ★★ 2026-10-17（用户）：**实验开关「SpicyLyrics 交叉验证」，默认关**。
+        // 上游会把部分歌词和谐成星号（`my **** line`）。开关打开时，这里拿**同一首歌**
+        // 在另一个源（AMLL / LRCLIB / PetitLyrics / Musixmatch / Genius，见
+        // `LyricsUncensorFill`）里的文本找回同一句，只把星号那几段换掉 ——
+        // 判据是"行内字面片段做锚 + 替换词唯一"，见 `LyricsCensorFill`。
+        // 关着的时候这个调用**一次网络都不发**，等价于原样返回。
+        // 只改行文本，行的时间戳/时长/逐字时间轴原样保留。
         // Static(纯文本) / Line(逐行同步) / Syllable(逐字) 三条解析路径最终都汇合到
         // dto.lines，所以接在这一处即可全部覆盖。
         let filledContents = LyricsUncensorFill.fill(

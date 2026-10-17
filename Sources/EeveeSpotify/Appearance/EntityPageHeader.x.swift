@@ -1278,7 +1278,11 @@ enum EntityPageHeaderManager {
         }
         guard let heading else { return }
 
-        guard let cell = enclosingCell(of: heading),
+        // ⚠️ `enclosingCell` 返回的是 `UIView?`（它同时认 table cell），而 `indexPath(for:)`
+        //    只吃 `UICollectionViewCell` ⇒ **必须显式转一次**（2026-10-17 IPA build 报
+        //    `cannot convert value of type 'UIView' to expected argument type 'UICollectionViewCell'`）。
+        guard let ancestor = enclosingCell(of: heading),
+              let cell = ancestor as? UICollectionViewCell,
               let collection = eeveeEnclosingCollectionView(of: cell),
               let indexPath = collection.indexPath(for: cell) else { return }
 

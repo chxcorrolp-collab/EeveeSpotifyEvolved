@@ -70,9 +70,24 @@ final class AmllTtmlNode {
         return result
     }
 
+    /// 只承载**注音**（不是歌词）的标签。
+    ///
+    /// TTML 的 ruby 注音写成 `<ruby>漢<rt>かん</rt></ruby>`：`<rt>` 里是读音，`<rp>` 是
+    /// 给不支持 ruby 的渲染器看的括号。两者都不属于歌词正文。
+    static let rubyAnnotationNames: Set<String> = ["rt", "rp"]
+
     /// 递归拼接全部文本；`excludingRoles` 里的 role 子树整棵跳过。
+    ///
+    /// ★ 2026-10-17：`<rt>` / `<rp>` 一并跳过（`AmllTtmlNode.rubyAnnotationNames`）。
+    /// 不跳它有两个后果（`MEMORY_2026-10-16_EeveeSpotify-ng_AMLL-TTML-Gaps.md` §一·③）：
+    ///   ① 正文被拼成 `漢かん` —— 真机上就是那一行多出读音；
+    ///   ② 有逐词 span 的行更糟：`primaryText` 含读音，而词条拼接结果与它不一致 ⇒
+    ///      `AmllLyricsMapper` 的"content == words 拼接"不变量失败 ⇒ **整行降级为逐行**
+    ///      （逐词高亮消失）。
+    /// 测试：`Tests/AmllTtmlRuby`（CI）。
     func text(excludingRoles excludedRoles: Set<String> = []) -> String {
         if excludedRoles.contains(where: hasRole) { return "" }
+        if AmllTtmlNode.rubyAnnotationNames.contains(localName) { return "" }
         return contents.map { content in
             switch content {
             case .text(let text): return text

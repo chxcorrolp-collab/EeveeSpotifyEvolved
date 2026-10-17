@@ -305,7 +305,9 @@ class LrclibLyricsRepository: LyricsRepository {
         // 那会做出一个"0 行但标记为 timeSynced"的结果（听歌页上就是一片空白），
         // 落到下面按 plainLyrics 取才是对的。
         if let syncedLyrics = song.syncedLyrics, !syncedLyrics.isEmpty {
-            let lines = Array(syncedLyrics.components(separatedBy: "\n").dropLast())
+            // ★ 2026-10-17：原来是 `components(separatedBy: "\n").dropLast()` —— 那假定源以换行收束；
+            //   没有尾换行的响应里**最后一行真歌词会被静默丢掉**（理由与判据见 `LyricsLineSplitting`）。
+            let lines = LyricsLineSplitting.splitDroppingTrailingNewline(syncedLyrics)
             writeDebugLog("[LRCLIB] Synced lyrics — \(lines.count) line(s)")
             return LyricsDto(
                 lines: mapSyncedLyricsLines(lines),
@@ -318,7 +320,8 @@ class LrclibLyricsRepository: LyricsRepository {
             throw LyricsError.decodingError
         }
         
-        let lines = Array(plainLyrics.components(separatedBy: "\n").dropLast())
+        // ★ 2026-10-17：同上 —— 别再无条件 `dropLast()`。
+        let lines = LyricsLineSplitting.splitDroppingTrailingNewline(plainLyrics)
         writeDebugLog("[LRCLIB] Plain lyrics — \(lines.count) line(s)")
         return LyricsDto(
             lines: lines.map { content in LyricsLineDto(content: content) },

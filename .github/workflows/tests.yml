@@ -207,6 +207,17 @@ jobs:
                  -o lyric-line-break-fitting-tests
           ./lyric-line-break-fitting-tests
 
+      # 2026-10-17：LRCLIB 的按行拆分（`LyricsLineSplitting`）—— 两条路原来都写
+      # `components(separatedBy: "\n").dropLast()`：那是**假定响应末尾有换行**。
+      # 没有尾换行的响应里，`dropLast()` 丢的是**最后一行真歌词**，而且静默
+      # （日志只少一个数字，没有任何东西会变红）。纯 Foundation，所以能进这里。
+      - name: Lyrics line splitting (LRCLIB trailing newline)
+        run: |
+          swiftc Sources/EeveeSpotify/Lyrics/Models/LyricsLineSplitting.swift \
+                 Tests/LrclibLineSplitting/main.swift \
+                 -o lrclib-line-splitting-tests
+          ./lrclib-line-splitting-tests
+
       # 2026-10-16：打开后"没词可画时写哪一句"的判定（`LyricsNoticePolicy`）。四种"没词"必须
       # 分开说 —— 混档就是用户能看见的误报（"歌词明明有、我们却说未找到"）。纯 Foundation。
       - name: Lyrics notice policy (what we say when there is nothing to draw)

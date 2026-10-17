@@ -29,6 +29,18 @@ struct EeveeExperimentsSettingsView: View {
 
     var body: some View {
         List {
+            // ★★ 2026-10-17（用户：「在**实验**这个模块的『显示 ins 分享目标』上面，写一行字：
+            //   请注意，以下这些功能要么未经测试，要么有阻碍正常使用的 Bug……
+            //   请谨慎开启此页面里面的任何功能」）：
+            //   这一页按文件头那三条准入收进来，本来就该先示警 —— 放在**第一格之前的独立 section**，
+            //   用 footnote + 次要色（不抢标题，但一定看得见；inset-grouped 下自成一张卡片）。
+            Section {
+                Text("experiments_page_warning".localized)
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             // （「分享到 LiveContainer」2026-10-17 搬到「杂项设定」。理由见文件头的准入三条：
             //   它的行为早就定死了 —— 链接打不开就转给 LC、失败就把 URL 复制到剪贴板；
             //   真正"没定性"的是 LC 那一侧的私有深链，不是这个开关。）

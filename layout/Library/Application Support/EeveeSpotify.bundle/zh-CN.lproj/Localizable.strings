@@ -91,6 +91,8 @@ dark_popups = "深色弹窗";
 livecontainer_sharing = "分享到 LiveContainer";
 livecontainer_sharing_description = "如果不支持所选分享目标，则分享到 LiveContainer 并复制 URL。";
 
+experiments_page_warning = "请注意，以下这些功能要么未经测试，要么有阻碍正常使用的 Bug（只有极少数功能证明是正常工作的）。请谨慎开启此页面里面的任何功能。";
+
 show_instagram_destination = "显示 Instagram 分享目标";
 show_instagram_destination_description = "始终把 Instagram 作为分享目标。%@";
 

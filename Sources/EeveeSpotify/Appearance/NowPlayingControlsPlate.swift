@@ -297,6 +297,9 @@ enum NowPlayingControlsPlate {
             //   target/action —— 这是"点击那一刻就翻字形"在 9.1.88 上**唯一真正生效**的路
             //   （那条 `uiButtonTapped` 钩子从来没被调用过，见 `installTapTargetIfNeeded`）。
             installTapTargetIfNeeded(on: play)
+            // ★★ 2026-10-18：内层那颗的 `.touchUpInside` 在 9.1.88 上不发（见 `tapGestureHosts`）
+            //   ⇒ 外层这颗再挂一个不吞事件的手势，点击那一刻就翻字形，不再等投影。
+            installTapGestureIfNeeded(on: play)
             // pw 的同款补丁：缓冲 spinner 还立着时**把我们的字形藏起来** —— 否则"缓冲中"
             // 会显示一个假的播放/暂停字形，用户点完看到的就是"字形自己跳"。
             // （我们不动 spinner 的 `alpha`，所以 `spinnerShowing` 读到的还是原生值。）
@@ -793,6 +796,35 @@ enum NowPlayingControlsPlate {
     /// 清掉会让我们有机会对同一颗控件 `addTarget` 两次 ⇒ 一下就翻两下。
     /// 开关关掉后那个 target 还在，但它进函数第一句就 `guard isEnabled` ⇒ 空转。
     private static let tapTargets = NSHashTable<UIControl>.weakObjects()
+
+    /// ★★ 2026-10-18（日志 333 的现场：用户说「暂停/继续播放的按键会反应迟缓」**还在**）：
+    ///
+    /// 333 里 `tap target installed on …CondensedButton` **装上了**，但整份日志
+    /// `tap seen on …` 与 `play button tapped — glyph … -> …` **各 0 条**；
+    /// 唯一那次翻转是 `symbol play.fill -> pause.fill (via projection, isPlaying=true, pos=1.36s)`
+    /// —— 也就是"点下去以后等**投影**追上"，那 0.3~0.85 秒正是用户说的"迟缓"。
+    ///
+    /// ⇒ **内层那颗 `UIControl` 的 `.touchUpInside` 在 9.1.88 上也不发**（它不在触摸的落点上，
+    /// Spotify 把那一下交给了外层）。再补一条**不吞事件的手势**：挂在**外层颗**上，
+    /// `cancelsTouchesInView = false` ⇒ Spotify 自己的动作照常发出，我们只是"听见这一下"。
+    private static let tapGestureHosts = NSHashTable<UIView>.weakObjects()
+
+    private static func installTapGestureIfNeeded(on play: UIView) {
+        guard !tapGestureHosts.contains(play) else { return }
+        let recognizer = UITapGestureRecognizer(
+            target: NowPlayingPlayTapTarget.shared,
+            action: #selector(NowPlayingPlayTapTarget.tapped)
+        )
+        recognizer.cancelsTouchesInView = false
+        recognizer.delaysTouchesEnded = false
+        play.addGestureRecognizer(recognizer)
+        tapGestureHosts.add(play)
+        noteDiagnostic(
+            .tap,
+            "tap recognizer installed on the play button itself"
+                + " (it hears the tap even when the inner control does not)"
+        )
+    }
 
     private static func installTapTargetIfNeeded(on button: UIView) {
         guard let control = transportControl(in: button) else { return }

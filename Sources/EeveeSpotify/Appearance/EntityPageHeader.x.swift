@@ -541,13 +541,30 @@ enum EntityPageHeaderManager {
         }
 
         // 位置：**页面宽度、居中** —— Spotify 的 block 比页面窄（真机 386 / 402）。
+        // ★★ 2026-10-18：高度再加上"给封面让出来的那一段"（见 `coverDrop`）——
+        //    贴底排 ⇒ 文字整体下移，落在封面下面。
         let x = -block.convert(.zero, to: headerRoot).x
-        let frame = CGRect(x: round(x), y: 0, width: headerRoot.bounds.width, height: block.bounds.height)
+        let frame = CGRect(
+            x: round(x),
+            y: 0,
+            width: headerRoot.bounds.width,
+            height: block.bounds.height + coverDrop(of: header)
+        )
         if header.frame != frame { header.frame = frame }
 
         // ★ 2026-10-17（用户：「歌单页可能会有封面挡住自画字」）：z 序与几何两道保险。
         raiseToTop(header, in: headerRoot, role: "playlist")
         probeCoverOverlap(cover: cover, headerView: header, role: "playlist")
+        // ★★ 2026-10-18（图片 152：藏掉那排 pill 之后**留下一条空白**）：下一轮要把这条空白折掉，
+        //    得先知道"空在哪两段之间"。这里把三段高度打进日志（每页一次）：
+        logOnce(
+            "playlistGeom_" + String(describing: ObjectIdentifier(headerRoot)),
+            "playlist geometry — PL.Header \(Int(headerRoot.bounds.height.rounded()))pt,"
+                + " block \(Int(block.frame.minY.rounded()))..\(Int(block.frame.maxY.rounded()))pt,"
+                + " our block \(Int(header.frame.minY.rounded()))..\(Int(header.frame.maxY.rounded()))pt,"
+                + " text top \(Int(header.textTop.rounded()))pt,"
+                + " cover bottom \(cover.map { Int($0.convert($0.bounds, to: header).maxY.rounded()) } ?? -1)pt"
+        )
 
         // Spotify 那一列整列藏掉（我们自己的那份除外）。幂等；Spotify 边加载边往里加东西，
         // 所以**每一拍都要重新走一遍**。
@@ -695,6 +712,21 @@ enum EntityPageHeaderManager {
         )
     }
 
+    /// 文字压到封面时"我们要往下让多少"（存在**我们那一份**上，只增不减）。
+    ///
+    /// ★★ 2026-10-18（图片 152：歌单页那个自画标题**压在封面下缘**上）：我们这一份是
+    /// **贴底排**的（`y = bounds.height - contentBottom - contentHeight`）⇒
+    /// **只把它自己加高**（不碰 Spotify 的任何视图）就能让文字整体下移，直到落在封面下面。
+    /// 只增不减 ⇒ 不会每拍来回抖（下移之后测到的 overlap 归零，但记录不变）。
+    private static var coverDropKey: UInt8 = 0
+    private static let coverDropLimit: CGFloat = 140
+
+    private static func coverDrop(of headerView: EntityPageHeaderView) -> CGFloat {
+        guard let value = (objc_getAssociatedObject(headerView, &coverDropKey) as? NSNumber)?.doubleValue
+        else { return 0 }
+        return CGFloat(value)
+    }
+
     /// "封面压到我们的文字带了吗" —— 每页第一次命中记一行（两边的帧都换算到 `headerView` 里）。
     ///
     /// ★ 2026-10-17：这是用户那句"**可能会挡住**"的判据。z 序已由 `raiseToTop` 保证我们在最上，
@@ -712,6 +744,26 @@ enum EntityPageHeaderManager {
             "coverOverlap_" + role + "_" + String(describing: ObjectIdentifier(headerView)),
             "\(role): the cover reaches \(coverBottom)pt but our text starts at \(textLine)pt"
                 + " — they overlap; the text is drawn on top (z-order), say something if it reads badly"
+        )
+
+        // ★★ 2026-10-18：**不再只是"记一行日志"** —— 用户要的是字别压在封面上（图片 152）。
+        //   艺人页的"字压图"是**故意**的（AM 就是那样）⇒ 只对专辑 / 歌单页动手。
+        guard role != "artist" else { return }
+        let overlap = frame.maxY - textTop
+        let current = coverDrop(of: headerView)
+        let wanted = min(coverDropLimit, current + overlap)
+        guard wanted > current + 0.5 else { return }
+        objc_setAssociatedObject(
+            headerView,
+            &coverDropKey,
+            NSNumber(value: Double(wanted)),
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+        logOnce(
+            "coverDrop_" + role + "_" + String(describing: ObjectIdentifier(headerView)),
+            "\(role): our text sat \(Int(overlap.rounded()))pt inside the cover"
+                + " — moved our block down \(Int(wanted.rounded()))pt in total"
+                + " (only our own view grew; Spotify's views are untouched)"
         )
     }
 
@@ -767,9 +819,16 @@ enum EntityPageHeaderManager {
         } else if header.subviews.last !== headerView {
             header.bringSubviewToFront(headerView)
         }
-        if headerView.frame != header.bounds { headerView.frame = header.bounds }
-
         concealAlbumChrome(in: header, avoiding: cover, skipping: headerView)
+
+        // ★★ 2026-10-18：高度再加上"给封面让出来的那一段"（见 `coverDrop`）。
+        let albumFrame = CGRect(
+            x: 0,
+            y: 0,
+            width: header.bounds.width,
+            height: header.bounds.height + coverDrop(of: headerView)
+        )
+        if headerView.frame != albumFrame { headerView.frame = albumFrame }
 
         // ★ 2026-10-17（用户：「专辑页可能会有封面挡住自画字」）：z 序与几何两道保险。
         raiseToTop(headerView, in: header, role: "album")

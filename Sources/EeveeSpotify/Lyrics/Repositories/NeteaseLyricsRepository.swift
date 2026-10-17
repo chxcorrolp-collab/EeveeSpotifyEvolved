@@ -1116,34 +1116,55 @@ class NeteaseLyricsRepository: LyricsRepository {
         /// 同一歌手两首时长差 2 秒以内的歌很少；这一档也只有在前两档一条都没有时才会被选中。
         let closeDurationMs = 2000
         var closeDurationCandidates: [Int] = []
+        /// ★★ 2026-10-18（日志 333 的现场：Kotone「だれかの心臓になれたなら」）：
+        ///
+        /// ```
+        /// [NetEase] title matched but artist did not — closest duration wins (index 73, Δ598ms, 77 results)
+        /// [NetEase] No usable lyrics
+        /// [NetEase] Chosen[30]: だれかの心臓になれたなら（翻自 GUMI） — 水野あかり 229903ms
+        /// ```
+        ///
+        /// 选中的是**别人的翻唱**（歌手 `水野あかり`，`翻自 GUMI`）。原因是时长那一关是**一票否决**：
+        /// `guard durationOK else { continue }` 写在歌手/歌名之前，于是"**歌名与歌手都精确对上、
+        /// 只是网易标的时长和 Spotify 差 5 秒以上**"的正主在第一步就被丢掉了
+        /// （网易自己标的时长经常和母带差几秒；翻唱版的时长反而更接近）。
+        /// ⇒ 歌名 + 歌手**都精确对上**时，时长那一关不再否决 —— 只把它排在"时长也对上"的后面。
+        var longDurationCandidates: [(index: Int, delta: Int)] = []
         /// 拿不到 Spotify 时长（本地文件）时没有 Δ 可比 ⇒ 与旧行为一致，只记第一个。
         var firstDurationOnlyWithoutDelta: Int?
 
         for (index, song) in songs.enumerated() {
-            let durationOK: Bool
-            if let spotifyDurationMs, let ms = candidateDuration(song) {
-                durationOK = abs(ms - spotifyDurationMs) <= durationToleranceMs
-            } else {
-                // 拿不到 Spotify 时长（本地文件）⇒ 这一关不参与判定。
-                durationOK = true
-            }
-            guard durationOK else { continue }
-
             let artistOK = artistMatches(song)
             let titleOK = titleMatches(song)
             // ★ 标题是硬闸门（日志 108 的错误来源），但"**只差尾注**"不算差：
             //   歌手对上、时长对上、主干相同（见 `baseTitle`）⇒ 同一首歌的两种写法。
             //   ★★ 2026-10-17（日志 112）：`ヒミツ (feat. 可不)` vs `ヒミツ (Secret)` 就是这种。
             let baseOK = !titleOK && artistOK == .some(true) && baseTitleMatches(song)
+            let strongTitle = titleOK || baseOK
+
+            let deltaMs: Int?
+            if let spotifyDurationMs, let ms = candidateDuration(song) {
+                deltaMs = abs(ms - spotifyDurationMs)
+            } else {
+                // 拿不到 Spotify 时长（本地文件）⇒ 这一关不参与判定。
+                deltaMs = nil
+            }
+            let durationOK = deltaMs.map { $0 <= durationToleranceMs } ?? true
+
+            // ★★ 2026-10-18：时长不再**一票否决**（见 `longDurationCandidates` 那段）。
+            if !durationOK {
+                guard strongTitle, artistOK == .some(true), let deltaMs else { continue }
+                longDurationCandidates.append((index, deltaMs))
+                continue
+            }
+
             // ★★ 2026-10-18：标题与主干都对不上、但**歌手对上且时长几乎一样** ⇒ 收进第三档
             //    （见 `closeDurationCandidates` 那段；`ヒミツ` vs `秘密` 就是这一类）。
-            if !titleOK, !baseOK, artistOK == .some(true),
-               let spotifyDurationMs, let ms = candidateDuration(song),
-               abs(ms - spotifyDurationMs) <= closeDurationMs {
+            if !strongTitle, artistOK == .some(true), let deltaMs, deltaMs <= closeDurationMs {
                 closeDurationCandidates.append(index)
                 continue
             }
-            guard titleOK || baseOK else { continue }
+            guard strongTitle else { continue }
 
             if artistOK == .some(true) {
                 strictlyMatchedIndices.append(index)
@@ -1165,8 +1186,8 @@ class NeteaseLyricsRepository: LyricsRepository {
             //    这条兜底只在"歌手闸门也过不去"时才走（例如 Spotify 写 `Natsunose`、
             //    网易写 `ナツノセ`，跨书写系统认不出来），所以它越确定越好。
             if titleOK {
-                if let spotifyDurationMs, let ms = candidateDuration(song) {
-                    durationOnlyCandidates.append((index, abs(ms - spotifyDurationMs)))
+                if let deltaMs {
+                    durationOnlyCandidates.append((index, deltaMs))
                 } else if firstDurationOnlyWithoutDelta == nil {
                     firstDurationOnlyWithoutDelta = index
                 }
@@ -1186,6 +1207,21 @@ class NeteaseLyricsRepository: LyricsRepository {
                 "[NetEase] \(closeDurationCandidates.count) candidate(s) admitted by artist + duration"
                     + " (the title is written in another script) — index \(closeDurationCandidates)"
             )
+        }
+        // ★★ 2026-10-18：歌名 + 歌手都精确对上、只是时长差得远的那一批（见 `longDurationCandidates`）。
+        if !longDurationCandidates.isEmpty {
+            var added: [Int] = []
+            for candidate in longDurationCandidates.sorted(by: { $0.delta < $1.delta })
+            where !orderedCandidateIndices.contains(candidate.index) {
+                orderedCandidateIndices.append(candidate.index)
+                added.append(candidate.index)
+            }
+            if !added.isEmpty {
+                writeDebugLog(
+                    "[NetEase] \(added.count) candidate(s) admitted by exact title + artist even though"
+                        + " the duration is off — index \(added)"
+                )
+            }
         }
         for candidate in durationOnlyCandidates.sorted(by: { $0.delta < $1.delta }) {
             orderedCandidateIndices.append(candidate.index)

@@ -844,11 +844,14 @@ extension UserDefaults {
     /// ★ 2026-10-14：「头部居中」那条**已删** —— 它只对艺人页跑，而名单里 4 个 id 全是
     /// 专辑页的 ⇒ 从未命中过（详见 `Appearance/EntityPageAppearance.x.swift` 的 `tick()`）。
     ///
-    /// **默认关** —— 2026-10-13 用户要求：「专辑/歌单页的**两个按钮默认关闭**」。
-    /// 只改 fallback、**不动已存的值**：手动开过的设备保持他开的那一档（与 AMLL 那条同一纪律）。
+    /// **默认开** —— ★★ 2026-10-18 用户明确要求（「搞一下 替换Spotify的官方歌曲底色 默认开启」）。
+    ///
+    /// 历史：2026-10-13 曾经是「专辑/歌单页的**两个按钮默认关闭**」；2026-10-18 起**这一颗翻成默认开**
+    /// —— 页面 AM 化现在是**默认外观**，不再是需要用户去发现的开关。
+    /// 只改 fallback、**不动已存的值**：手动关过的设备保持关（与 AMLL 那条同一纪律）。
     static var entityPageDissolve: Bool {
         get {
-            container.object(forKey: entityPageDissolveKey) as? Bool ?? false
+            container.object(forKey: entityPageDissolveKey) as? Bool ?? true
         }
         set {
             container.set(newValue, forKey: entityPageDissolveKey)

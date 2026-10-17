@@ -74,6 +74,11 @@ enum EntityPageCurationHide {
 
         var marked: [UIView] = []
         var labelled: [UIView] = []
+        /// ★★ 2026-10-18（图片 148 的现场：那一排「放克 / 节拍 / 电子 / 游戏 …」**还在**）：
+        /// ② 那条类名判据（`ToolbarChip*`）在这个 Spotify 版本上**一次都没命中**
+        /// （日志 333 里 `[PageRepaint] hid … chrome row(s)` **0 行**）⇒ 只能按**形状**认。
+        /// 这里只收集"自己那段文字很短（≤6 字）的 UIControl"，凑够 4 颗再取它们共同的那一行。
+        var shortLabelled: [UIControl] = []
 
         var queue: [UIView] = [page]
         var visited = 0
@@ -85,17 +90,34 @@ enum EntityPageCurationHide {
                 marked.append(view)
                 continue
             }
-            if view is UIControl, let text = ownText(of: view), textMarkers.contains(text) {
-                labelled.append(view)
-                continue
+            if let control = view as? UIControl, let text = ownText(of: control) {
+                if textMarkers.contains(text) {
+                    labelled.append(control)
+                    continue
+                }
+                if text.count <= 6, shortLabelled.count < 16 {
+                    shortLabelled.append(control)
+                }
             }
             queue.append(contentsOf: view.subviews)
+        }
+
+        // ★★ 2026-10-18：**一排短标签**（≥ 4 颗、文字都 ≤ 6 字、共同祖先不超过 200pt 高）——
+        //    148 那排 chips 的兜底。卡片横条（艺人之选 / 热门新歌）的文字是歌名、更长，
+        //    而且它们不是 UIControl ⇒ 不会被这条吃掉。
+        var chipRow: UIView?
+        if marked.isEmpty, labelled.isEmpty, shortLabelled.count >= 4,
+           let row = commonAncestor(of: shortLabelled), row.bounds.height >= 20 {
+            chipRow = row
         }
 
         // 文字那条：四颗按钮要收**它们共同的那一行**（一颗颗藏会在原处留四个洞）。
         var targets = marked
         if labelled.count >= 2, let row = commonAncestor(of: labelled) {
             targets.append(row)
+        }
+        if let chipRow, !targets.contains(where: { $0 === chipRow }) {
+            targets.append(chipRow)
         }
         guard !targets.isEmpty else { return }
 

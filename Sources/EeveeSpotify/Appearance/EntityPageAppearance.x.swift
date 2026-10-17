@@ -355,6 +355,31 @@ enum EntityPageAppearance {
         }
     }
 
+    /// 页面上那一块**页头容器**：专辑页是 id 含 `CreativeWorkHeader` 的那个 `UIView`，
+    /// 歌单页是 `PL.Header`。判据与 `concealAlbumWash` 里那条完全一致（类名带 `HeaderView`
+    /// 不带 `NavigationBar`，或 id 带 `Header`）—— 只是这里返回**那一层**，不是它下面的渐变。
+    ///
+    /// ★★ 2026-10-18：专辑页与歌单页的洗色从此**共用 `concealWash(beneath:)`**，
+    /// 起点就是这个容器。`nil` ⇒ 这一页没有可认的页头（那就只剩几何那一趟兜底）。
+    private static func pageHeaderRoot(in page: UIView) -> UIView? {
+        let widthFloor = page.bounds.width * 0.85
+        var queue: [UIView] = page.subviews
+        var visited = 0
+        while !queue.isEmpty, visited < 600 {
+            let view = queue.removeFirst()
+            visited += 1
+            let name = NSStringFromClass(type(of: view))
+            let identifier = view.accessibilityIdentifier ?? ""
+            let looksLikeHeader = (name.contains("HeaderView") && !name.contains("NavigationBar"))
+                || (identifier.contains("Header") && !identifier.contains("NavigationBar"))
+            if looksLikeHeader, view.bounds.width >= widthFloor, view.bounds.height > 40 {
+                return view
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
+    }
+
     /// `layout` 是不是**艺人页**（页面 root 的 id = `creator-page`）。
     ///
     /// ★ 2026-10-17：`layoutPass` 只在这一页上继续藏原生封面（见那里的说明）。
@@ -1290,6 +1315,14 @@ enum EntityPageAppearance {
         let widthFloor = pageWidth * 0.85
         let bottomCeiling = pageHeight * 0.8
 
+        // ★★ 2026-10-18（用户：「这是专辑页特有的 bug，**和歌单的共用逻辑不可以吗**」）：
+        //    可以 —— 先用**歌单那一套**（`concealWash(beneath:)`：递归、遇 `GradientView` 就藏、
+        //    顺手擦底色漆）洗一遍**页头那一块**。几何那一趟留着兜别处的色带
+        //    （导航栏那层 `LiquidGlass.GradientView` 就是靠它，日志 222 的 `concealed 2` 里有它）。
+        if let headerRoot = pageHeaderRoot(in: page) {
+            concealWash(beneath: headerRoot)
+        }
+
         // ★ 2026-10-17（第二版）：探针**已经搬到 `concealNativeWash` 开头**（`probePageWash`）——
         //   日志 112 里 `wash probe` 一条都没有：这台设备走的是 `washPlane` 那条分支，
         //   而探测器当时藏在这里 ⇒ 永远轮不到它，于是"粉还在、却没有证据"。
@@ -1467,7 +1500,17 @@ enum EntityPageAppearance {
     /// 不透明的一层会盖住图），这里一并做，并且**把原值记下来**（我们有开关，关掉要还原）。
     private static func concealWash(on plane: UIView) {
         guard let container = plane.superview else { return }
+        concealWash(beneath: container, skipping: plane)
+    }
 
+    /// ★★ 2026-10-18（用户：「这个六似乎是专辑页特有的 bug。**和歌单的共用逻辑不可以吗**」）：可以 ——
+    ///
+    /// 歌单那条洗色本来就是"**从容器往下递归：遇到 `GradientView` 就藏、顺手擦掉底色漆**"，
+    /// 与页面类型无关。专辑页当年另写一条**按几何**找的（`concealAlbumWash`），
+    /// 唯一原因是专辑页没有 `_backgroundViewContainer` 这个起点。
+    /// ⇒ 把主体抽成"给一个容器就按歌单那套洗"，专辑页把**页头那一块**当容器传进来
+    /// （见 `pageHeaderRoot` 与 `concealAlbumWash` 开头）。
+    private static func concealWash(beneath container: UIView, skipping plane: UIView? = nil) {
         var queue: [UIView] = [container]
         var visited = 0
         while !queue.isEmpty, visited < 200 {
@@ -1480,7 +1523,7 @@ enum EntityPageAppearance {
             //    Spotify 的 wash 藏掉（歌单页那条路每拍都走这里 ⇒ 纱永远不出现）。
             //    （专辑/艺人页那两条路不用管：它们的"藏"按 `eevee-` 前缀认自己人，见 `isOurs`。）
             if let scrim, view === scrim { continue }
-            if view === plane { continue }
+            if let plane, view === plane { continue }
 
             if NSStringFromClass(type(of: view)).contains("GradientView") {
                 recordWash(view)

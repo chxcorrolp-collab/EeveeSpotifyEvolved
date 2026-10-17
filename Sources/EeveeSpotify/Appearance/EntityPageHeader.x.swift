@@ -545,6 +545,10 @@ enum EntityPageHeaderManager {
         let frame = CGRect(x: round(x), y: 0, width: headerRoot.bounds.width, height: block.bounds.height)
         if header.frame != frame { header.frame = frame }
 
+        // ★ 2026-10-17（用户：「歌单页可能会有封面挡住自画字」）：z 序与几何两道保险。
+        raiseToTop(header, in: headerRoot, role: "playlist")
+        probeCoverOverlap(cover: cover, headerView: header, role: "playlist")
+
         // Spotify 那一列整列藏掉（我们自己的那份除外）。幂等；Spotify 边加载边往里加东西，
         // 所以**每一拍都要重新走一遍**。
         for sub in block.subviews where sub !== header { eeveeConceal(sub) }
@@ -654,6 +658,63 @@ enum EntityPageHeaderManager {
         return false
     }
 
+    // MARK: - 页头的 z 序与几何（"封面挡住自画的字"那两类）
+
+    /// 把承载我们文字的 view **连它到 `root` 的每一层**都提到最上（祖先链提升）。
+    ///
+    /// ★★ 2026-10-17（用户：「歌单/专辑页**可能会有封面挡住自画字**的情况。怎么办」）：
+    ///
+    /// * 只在**我们自己这一层** `bringSubviewToFront` 不够 —— 封面 / 渐变的宿主常常是
+    ///   "我们所在那一层的**兄弟**"，甚至更高一层（歌单页：我们挂在 `block` 里，封面是
+    ///   `PL.Header` 的另一个子视图；专辑页：封面是 `CreativeWorkHeader` 的另一个子视图）。
+    /// * Spotify 每次重建页头都会把这些层**重新插到我们上面**（它的布局方块不认我们的顺序）
+    ///   ⇒ 每拍沿祖先链逐层提一次，幂等、最多 8 层。
+    /// * **第一次真的发现"有人在我们上面"时记一行日志**（类名）—— 用户这句"可能"从此有判据。
+    private static func raiseToTop(_ view: UIView, in root: UIView, role: String) {
+        var node: UIView? = view
+        var levels = 0
+        var above: [String] = []
+        while let current = node, current !== root, levels < 8 {
+            if let parent = current.superview {
+                if parent.subviews.last !== current {
+                    if above.count < 2,
+                       let last = parent.subviews.last {
+                        above.append(NSStringFromClass(type(of: last)))
+                    }
+                    parent.bringSubviewToFront(current)
+                }
+            }
+            node = current.superview
+            levels += 1
+        }
+        guard !above.isEmpty else { return }
+        let list = above.joined(separator: ", ")
+        logOnce(
+            "raised_" + role + "_" + String(describing: ObjectIdentifier(view)),
+            "\(role): something sat above our header text (\(list)) — raised our block to the top"
+        )
+    }
+
+    /// "封面压到我们的文字带了吗" —— 每页第一次命中记一行（两边的帧都换算到 `headerView` 里）。
+    ///
+    /// ★ 2026-10-17：这是用户那句"**可能会挡住**"的判据。z 序已由 `raiseToTop` 保证我们在最上，
+    /// 所以这里捕的是**几何上的打架**（封面下缘伸进文字带 ⇒ 字压在封面上、或封面的阴影糊住字）。
+    /// 真命中时的下一步二选一：把封面在文字带内**遮掉**（mask），或者把我们的内容整体挪出封面区。
+    private static func probeCoverOverlap(cover: UIView?, headerView: EntityPageHeaderView, role: String) {
+        guard let cover, headerView.bounds.height > 1, headerView.window != nil else { return }
+        let textTop = headerView.textTop
+        guard textTop > 0 else { return }
+        let frame = cover.convert(cover.bounds, to: headerView)
+        guard frame.maxY > textTop + 1, frame.minY < headerView.bounds.height else { return }
+        let coverBottom = Int(frame.maxY.rounded())
+        let textLine = Int(textTop.rounded())
+        logOnce(
+            "coverOverlap_" + role + "_" + String(describing: ObjectIdentifier(headerView)),
+            "\(role): the cover reaches \(coverBottom)pt but our text starts at \(textLine)pt"
+                + " — they overlap; the text is drawn on top (z-order), say something if it reads badly"
+        )
+    }
+
     // MARK: - 专辑页（**另一条路**）
 
     /// 专辑页那一拍。**与歌单页不是同一条路** —— 两边的头结构不同，pw 也是分开的两份
@@ -709,6 +770,10 @@ enum EntityPageHeaderManager {
         if headerView.frame != header.bounds { headerView.frame = header.bounds }
 
         concealAlbumChrome(in: header, avoiding: cover, skipping: headerView)
+
+        // ★ 2026-10-17（用户：「专辑页可能会有封面挡住自画字」）：z 序与几何两道保险。
+        raiseToTop(headerView, in: header, role: "album")
+        probeCoverOverlap(cover: cover, headerView: headerView, role: "album")
 
         headerView.update(title: texts.title, creator: texts.creator, length: texts.length, about: "")
 
@@ -940,6 +1005,10 @@ enum EntityPageHeaderManager {
         // Spotify 那一列：**空 mask 藏**（不碰 hidden —— 见函数头那段）。照片归 `EntityPageAppearance`。
         let cover = find("Components.Header.UI.ArtworkImage", in: header, cache: &cachedArtistCover)
         blankArtistChrome(in: header, avoiding: cover, skipping: headerView)
+
+        // ★ 2026-10-17（用户：「艺人页同理，封面别挡住我们的字」）：z 序与几何两道保险。
+        raiseToTop(headerView, in: header, role: "artist")
+        probeCoverOverlap(cover: cover, headerView: headerView, role: "artist")
 
         // ★ 2026-10-18：月听众那行也做成开关（默认保留）。`meta` 仍算出来给日志用。
         headerView.update(

@@ -33,6 +33,56 @@ enum LyricLineBreakFitting {
         return result
     }
 
+    /// **整行重排**：完全丢掉 CoreText 的断点，用渲染那把尺子从头贪心折行。
+    ///
+    /// ★★ 2026-10-17（用户：「逐词歌词**额外换行**还没修吗」+「Melox 就没这个问题」）：
+    ///
+    /// `verifiedBreaks` 只加不删 ⇒ **CoreText 自己那个多余的断点永远留着**。日志 113 的
+    /// Starboy L2 就是现场：
+    ///
+    /// ```
+    /// text=405.4 layout=331.8 ct=342.5 breaks=[31,36] "I'm tryna put you in the worst ↵mood ↵ah"
+    /// ```
+    ///
+    /// CoreText 断在 36（"ah" 前），它的第一段 `…worst mood` 量出来 342.5 > 331.8 ⇒ 我们又在 31 补一刀
+    /// ⇒ 屏幕上**三行**：`…worst` / `mood` / `ah`。正确的两行是 `…worst` / `mood ah`。
+    ///
+    /// 重排一次就对了：贪心地从行首吃词，吃不下就在**上一个空格后**断；没有空格就硬切。
+    /// 只在"整行确实超宽"时由调用方启用（整行放得下就一个断点都不需要）。
+    static func reflowBreaks(
+        text: String,
+        count: Int,
+        layoutWidth: CGFloat,
+        measure: (Range<Int>) -> CGFloat
+    ) -> Set<Int> {
+        guard count > 1, layoutWidth > 0 else { return [] }
+        let characters = Array(text)
+        guard characters.count == count else { return [] }
+
+        var result: Set<Int> = []
+        var lineStart = 0
+        while lineStart < count - 1 {
+            var end = lineStart + 1
+            var lastSpace: Int?
+            while end <= count {
+                let width = measure(lineStart..<end)
+                if width > layoutWidth { break }
+                if characters[end - 1] == " " { lastSpace = end }
+                end += 1
+            }
+            // 剩下的都放得下 ⇒ 收工。
+            if end > count { break }
+
+            // 在最后一个空格后断（空格留在上一行）；一行里没有空格才硬切。
+            var cut = lastSpace ?? (end - 1)
+            if cut <= lineStart { cut = lineStart + 1 }
+            if cut >= count { break }
+            result.insert(cut)
+            lineStart = cut
+        }
+        return result
+    }
+
     /// 复核断点：返回 CoreText 的断点 ∪ 补出来的断点。
     ///
     /// - Parameters:

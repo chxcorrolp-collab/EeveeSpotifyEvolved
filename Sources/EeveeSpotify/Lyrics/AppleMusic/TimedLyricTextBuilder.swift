@@ -664,12 +664,7 @@ enum TimedLyricTextBuilder {
         //    说漏了的行会被切开。下一份日志的 `fit=` 就是复核后**最宽那一段**的宽度 —— 它应当
         //    小于等于 layout。
         let characters = Array(source)
-        return LyricLineBreakFitting.verifiedBreaks(
-            text: source,
-            count: characters.count,
-            layoutWidth: layoutWidth,
-            coreTextBreaks: result
-        ) { range in
+        let measure: (Range<Int>) -> CGFloat = { range in
             guard range.lowerBound >= 0, range.upperBound <= characters.count else { return 0 }
             return measuredTextWidth(
                 source: String(characters[range]),
@@ -677,6 +672,19 @@ enum TimedLyricTextBuilder {
                 fontWeight: fontWeight
             )
         }
+        // ★★ 2026-10-17 第二版（用户：「逐词歌词额外换行还没修吗」，日志 113 的 Starboy L2）：
+        //   `verifiedBreaks` 只加不删，CoreText 自己那个多余断点会留成**多一行**
+        //   （现场：breaks=[31,36] ⇒ `…worst` / `mood` / `ah` 三行）。
+        //   ⇒ **整行确实超宽时改用整行重排**（丢掉 CT 断点，按渲染字体贪心折）；
+        //     整行放得下就一个断点都不需要。
+        let wholeWidth = measure(0..<characters.count)
+        guard wholeWidth > layoutWidth else { return [] }
+        return LyricLineBreakFitting.reflowBreaks(
+            text: source,
+            count: characters.count,
+            layoutWidth: layoutWidth,
+            measure: measure
+        )
     }
 
     private static func effectiveLayoutWidth(

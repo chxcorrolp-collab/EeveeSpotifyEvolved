@@ -1101,14 +1101,22 @@ enum EntityPageAppearance {
         //    mask 作用在 `view` 自己的坐标里，而照片上移了 `rise` ⇒ 名字的本地 y 要把 `rise` 加回来
         //    （`frame.minY` 是负的，减它等于加）。
         let imageHeight = max(1, view.bounds.height)
-        let meltStart = imageHeight * meltStartRatio
+        let meltStart: CGFloat
         let meltEnd: CGFloat
         if let textTop = ourHeaderTextTop(in: host), textTop > host.bounds.height * 0.2 {
             let local = textTop - frame.minY
-            meltEnd = min(imageHeight, max(meltStart + minMeltSpan, local - meltGap))
+            // ★★ 2026-10-18（用户：「现在的艺人淡出那部分太刻意了，和图片不像」）：
+            //    旧公式是 `max(meltStart + 90, titleTop - 8)` —— 跨度不够时**多出来的那段会
+            //    往标题下面顶**，于是标题/三颗按钮压在"半透明的照片"上，看起来就是一条刻意
+            //    画出来的渐变带。AM 的标题是落在**实心底色**上的。
+            //    ⇒ 终点永远不超过 `titleTop - meltGap`；跨度不够就**把起点提前**（拉长渐变），
+            //      而不是把终点顶到标题下面。
+            meltEnd = min(imageHeight, max(0, local - meltGap))
+            meltStart = min(imageHeight * meltStartRatio, max(0, meltEnd - minMeltSpan))
         } else {
             // 认不出我们那块页头（还没建 / 正在收起）：一路化到图的下缘，
             // 但起点仍是图高的 66% —— 不像旧版那样从 54% 就开始（那正是"吃掉主体"的来源）。
+            meltStart = imageHeight * meltStartRatio
             meltEnd = imageHeight
         }
         applyDissolveMask(to: view, solidUntil: meltStart, goneAt: meltEnd)

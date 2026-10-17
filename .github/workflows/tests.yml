@@ -262,3 +262,10 @@ jobs:
       # 唯一一个**不是** swiftc 的测试（纯 Python，不需要工具链）。
       - name: Resolve-configuration snapshot
         run: python3 Tests/ResolveConfigurationSnapshot/test.py
+
+      # 2026-10-17：真机日志分诊工具（`Tools/log_triage.py`）。B 组那几件（§3 歌单页搜索条 /
+      # §4 折叠 / §12 关于艺人 / §16 间奏 / §17 阈值 / §18 NetEase / §23+§30 折行与 AMLL）
+      # 全都等同一份日志；那个脚本把"该看什么"写成程序（只读、不联网、不进构建产物）。
+      # 这里只做一次语法检查 —— 免得日志来了才发现脚本自己坏了。
+      - name: Tool — log triage (python syntax)
+        run: python3 -m py_compile Tools/log_triage.py

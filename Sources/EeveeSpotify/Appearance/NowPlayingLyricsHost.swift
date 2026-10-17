@@ -78,7 +78,12 @@ final class NowPlayingLyricsHost {
             clock: clock,
             projection: projection,
             // ★ 2026-10-11：「没有时间轴」那一档 —— 见 `AppleMusicLyricsPage.isStatic`。
-            isStatic: isStatic
+            isStatic: isStatic,
+            // ★★ 2026-10-17（用户：「**歌词进播放器**的时候也**没有额外的歌词结构**」）：
+            //   这一档 `showsProviderFooter` 必须是 `false`（不画署名页脚），而副唱以前被绑在它上面
+            //   ⇒ 用户看到的歌词永远没有"主词下方那一小行副唱"。这里显式打开：
+            //   署名是元信息、副唱是歌词内容，两件事分开。
+            showsBackgroundVocals: true
         )
 
         let hosting = UIHostingController(rootView: root)

@@ -85,6 +85,18 @@ struct AppleMusicLyricsOverlayView: View {
     /// ⚠️ 放在属性表**最后**：逐成员初始化器是位置敏感的，放最后就不会动到既有调用点。
     var isStatic: Bool = false
 
+    /// 主歌词下面的**副唱/背景人声**那一小行要不要画。
+    ///
+    /// ★★ 2026-10-17（用户：「**歌词进播放器**的时候，也**没有额外的歌词结构**啊，
+    ///    不是代码已经写了么」）：以前它被绑在 `showsProviderFooter` 上（`body` 里
+    ///    `showsBackgroundVocals: showsProviderFooter`），而"歌词进播放器"那一档
+    ///    **必须** `showsProviderFooter: false`（那一档不画署名页脚，见 `NowPlayingLyricsHost`）
+    ///    ⇒ 于是**整条链路都在、数据也在，就是永远不画**。
+    ///    署名页脚是"元信息"，副唱是**歌词内容**，两件事不该共用一个开关。
+    ///
+    /// ⚠️ 同样放在属性表最后（逐成员初始化器位置敏感，见 `isStatic` 那段）。
+    var showsBackgroundVocals: Bool = true
+
     private static var profile: AppleMusicLyricsMotionProfile { .iOS26_6 }
 
     /// 预览标题栏那一行的自然高度（15pt 文字 / 32pt 按钮，取按钮高度）。
@@ -195,9 +207,12 @@ struct AppleMusicLyricsOverlayView: View {
                     typography: showsProviderFooter
                         ? .fullscreen
                         : (showsPreviewHeader ? .preview : .player),
-                    // 副唱只在全屏页显示：预览是 17pt 的小卡片，
-                    // 副唱按 0.63 缩到约 11pt 看不清，还白占一行高度。
-                    showsBackgroundVocals: showsProviderFooter,
+                    // ★★ 2026-10-17（用户：「歌词进播放器的时候也没有额外的歌词结构」）：
+                    //    这一行原来写的是 `showsProviderFooter` —— 而"歌词进播放器"那一档
+                    //    **必须** `showsProviderFooter: false` ⇒ 副唱永远不画（链路与数据都在）。
+                    //    现在由显式参数 `showsBackgroundVocals` 决定（默认 true）；
+                    //    调用方想按"是否全屏"收窄就自己传（见 `AppleMusicLyricsOverlay` 那一处）。
+                    showsBackgroundVocals: showsBackgroundVocals,
                     // ★ 2026-10-11（用户）：译文接上 —— 判据见 `showsTranslationNow`
                     //   （有译文 + 用户没关掉「隐藏译文」）。译文由渲染层画在**主歌词下方**。
                     showsTranslation: showsTranslationNow,

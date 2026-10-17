@@ -129,8 +129,15 @@ enum AmllLyricsMapper {
             )
             : nil
 
+        // ★ 2026-10-17（用户：「歌词进播放器的时候也没有额外的歌词结构」）：
+        //   把**副唱行数**也打出来 —— 这一行以后就能直接回答"这首歌到底有没有 x-bg、
+        //   数据有没有走到渲染层"，不用再靠猜（Starboy 那份 TTML 里有 16 处 `x-bg`）。
+        let backgroundCount = lines.reduce(into: 0) { total, line in
+            if line.backgroundVocal != nil { total += 1 }
+        }
         writeDebugLog(
-            "[\(logTag)] mapped \(lines.count) line(s), translation=\(translation == nil ? "none" : "yes"), romanization=\(romanization)"
+            "[\(logTag)] mapped \(lines.count) line(s), translation=\(translation == nil ? "none" : "yes"),"
+                + " bg=\(backgroundCount), romanization=\(romanization)"
         )
 
         // ── 署名 ──────────────────────────────────────────────────────────

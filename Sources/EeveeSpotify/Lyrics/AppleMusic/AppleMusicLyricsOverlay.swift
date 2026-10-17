@@ -438,7 +438,10 @@ final class AppleMusicLyricsOverlayHost {
             trackTitle: currentTrackTitle,
             trackArtist: currentTrackArtist,
             clock: clock,
-            projection: projection
+            projection: projection,
+            // ★ 2026-10-17：这一档**保持原行为** —— 卡片预览是 17pt，副唱缩到 ~11pt 看不清；
+            //   全屏（带页脚）才画。被解绑的是"歌词进播放器"那一档（见 `NowPlayingLyricsHost`）。
+            showsBackgroundVocals: showsProviderFooter
         )
     }
 }

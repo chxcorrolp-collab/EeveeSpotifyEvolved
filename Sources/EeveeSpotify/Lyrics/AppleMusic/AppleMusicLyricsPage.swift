@@ -374,6 +374,14 @@ struct AppleMusicLyricsPage: View {
                 at: playbackTime,
                 in: interludes
             )
+            // ★ 2026-10-17：焦点行**从这一处算一次**再往下传 —— 间奏尾巴那 1.8s 里
+            //   `position.highlightedLyricID` 还指着上一句，而点阵已经画空 ⇒ 焦点必须
+            //   交给 `promotedLyricID`（下一句），否则用户看到"高亮还留在上一句"
+            //   （§A·7）。两者是二选一、不是并列，判据在 `focusedLyricID`。
+            let focusedLyricID = LyricInterludeTimeline.focusedLyricID(
+                highlighted: position.highlightedLyricID,
+                interludePosition: interludePosition
+            )
             // 自绘壳占掉的高度：从安全区再往里让，避免歌词钻到标题栏/控件栏底下。
             //
             // 62 / 116 是量出来的，不是拍的：
@@ -427,6 +435,7 @@ struct AppleMusicLyricsPage: View {
                                     row(
                                         for: line,
                                         position: position,
+                                        focusedLyricID: focusedLyricID,
                                         availableWidth: availableWidth,
                                         proxy: proxy
                                     )
@@ -835,10 +844,14 @@ struct AppleMusicLyricsPage: View {
     private func row(
         for line: LyricLine,
         position: LyricPlaybackPosition,
+        focusedLyricID: LyricLine.ID?,
         availableWidth: CGFloat,
         proxy: ScrollViewProxy
     ) -> some View {
-        let isFocused = !isStatic && position.highlightedLyricID == line.id
+        // ★ 2026-10-17（§A·7）：焦点行不再直接比 `position.highlightedLyricID` ——
+        //   间奏尾巴那 1.8s 里它指着上一句，而点阵已经画空，焦点要交给下一句。
+        //   判据（二选一、不是 OR）在 `LyricInterludeTimeline.focusedLyricID`，有 CI 测试。
+        let isFocused = !isStatic && focusedLyricID == line.id
         let isActive = !isStatic && position.activeLyricIDs.contains(line.id)
         // ★ 静态档：每一行都按"焦点行"画（满亮度、不模糊、不缩放），只是没有焦点这一说。
         let focusStrength = isStatic ? 1 : focusStrength(

@@ -140,8 +140,9 @@ enum LyricInterludeTimeline {
     ///      仍然"是它"（`visibleInterludeID` 不变，让视图认得出这是一次间奏交接），
     ///      同时把下一句提升为焦点行（`promotedLyricID`）。
     ///
-    /// ⚠️ 第 3 阶段是 MeloX 的"提升"语义；本项目的渲染层暂时只消费前两个字段
-    /// （见 `AppleMusicInterludeRow` 顶部说明），`promotedLyricID` 先照抄不丢。
+    /// ⚠️ 第 3 阶段是 MeloX 的"提升"语义。**2026-10-17 起渲染层真的消费它了**：
+    ///    `AppleMusicLyricsPage` 用 `focusedLyricID(highlighted:interludePosition:)` 把焦点
+    ///    交给下一句（在那之前只给间奏行用，于是这 1.8s 里高亮还留在上一句 —— §A·7）。
     static func position(
         at playbackTime: TimeInterval,
         in interludes: [LyricInterlude]
@@ -194,6 +195,23 @@ enum LyricInterludeTimeline {
             promotedLyricID: nil,
             nextTransitionTime: nextTransitionTime
         )
+    }
+
+    /// 这一拍**焦点该落在哪一句** —— `promotedLyricID` 与 `highlightedLyricID` 是
+    /// **二选一**，不是并列。
+    ///
+    /// ★★ 2026-10-17（`MEMORY_2026-10-17_Remaining-Work.md` §A·7「间奏点阵消失后到下一句
+    ///    开始那 1.8s，高亮仍留在上一句」）：`position(at:in:)` 的第 3 阶段本来就报了
+    ///    `promotedLyricID`（MeloX 的"提升"语义），但渲染层以前**只消费前两个字段** ⇒
+    ///    那 1.8s 里焦点还是"最后一句已开始"的**上一句**。
+    ///
+    /// ⚠️ 两者**不能 OR**：`highlightedLyricID` 在这 1.8s 里仍然指向上一句，OR 起来就是
+    ///    前后两句**同时**亮 —— 比改之前更糟。所以有提升行时由它**独占**焦点。
+    static func focusedLyricID(
+        highlighted: LyricLine.ID?,
+        interludePosition: LyricInterludePlaybackPosition
+    ) -> LyricLine.ID? {
+        interludePosition.promotedLyricID ?? highlighted
     }
 
     private static func makeInterlude(

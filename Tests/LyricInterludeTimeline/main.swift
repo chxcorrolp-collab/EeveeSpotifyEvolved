@@ -289,6 +289,31 @@ require(
     "the slot is released exactly when the next line starts"
 )
 
+// ★ 焦点唯一化（§A·7：「间奏点阵消失后到下一句开始那 1.8s，高亮仍留在上一句」）：
+//   `promotedLyricID` 与 `highlightedLyricID` 必须**二选一** —— 那 1.8s 里
+//   `highlightedLyricID` 还指着上一句，OR 起来就是两句同时亮（比不改更糟）。
+require(
+    LyricInterludeTimeline.focusedLyricID(
+        highlighted: interlude.precedingLyricID,
+        interludePosition: tail
+    ) == interlude.followingLyricID,
+    "during the tail the promoted line owns the focus"
+)
+require(
+    LyricInterludeTimeline.focusedLyricID(
+        highlighted: interlude.precedingLyricID,
+        interludePosition: head
+    ) == interlude.precedingLyricID,
+    "while the dots are up the previous line keeps the focus"
+)
+require(
+    LyricInterludeTimeline.focusedLyricID(
+        highlighted: "line:8",
+        interludePosition: before
+    ) == "line:8",
+    "outside an interlude the highlighted line is untouched"
+)
+
 // 视图靠 `visibleInterludeID` 决定要不要占那条 40pt 的驻留行 ——
 // 中间断一拍就是"下面所有歌词往上跳一截"，所以整段必须连续成立。
 var probe = interlude.startTime

@@ -148,7 +148,7 @@ Some of the modified features in this fork have been verified to work in this en
 
 - Thanks to [whoeevee](https://github.com/whoeevee) for creating the original EeveeSpotify project.
 - The Spicy Lyrics lyrics provider, as well as the logging and export functionality, comes from [SideloadLabs](https://github.com/SideloadLabs/EeveeSpotifyReincarnated).
-- The **Apple Music official TTML** source (Settings → Experiments) follows [`zhaarey/apple-music-downloader`](https://github.com/zhaarey/apple-music-downloader) for finding the web player's developer token (`internal/amp-api/token.go`), and [`dropcreations/Manzana-Apple-Music-Lyrics`](https://github.com/dropcreations/Manzana-Apple-Music-Lyrics) for the songs/lyrics endpoints (`api/api.py`).
+- The Apple Music official TTML source (Settings → Experiments) follows [apple-music-downloader](https://github.com/zhaarey/apple-music-downloader) for finding the web player's developer token (`internal/amp-api/token.go`), and [Manzana-Apple-Music-Lyrics](https://github.com/dropcreations/Manzana-Apple-Music-Lyrics) for the songs/lyrics endpoints (`api/api.py`).
 - Lyrics are fetched at runtime from their providers — Spicy Lyrics, NetEase, AMLL, Musixmatch, PetitLyrics, LRCLIB, Genius and Apple Music; none of their content is bundled.
 - The inspiration for the karaoke lyrics and interludes came from [MeloX](https://github.com/youshen2/MeloX).
 - The liquid glass-related design was inspired by [spoti.pw](https://spoti.pw). Code from v0.21.1 and earlier (GPL-3.0, © Vojtěch Škopek) is used; the full notice is available in-app under "Licenses". v0.22.0+ is PolyForm Strict: none of its source code was read or reused.

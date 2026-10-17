@@ -654,32 +654,12 @@ enum NowPlayingControlsPlate {
     /// **中空的播放三角形**（只描边、不填充）—— 「播放页那个三角形能不能做成中空的」那条要求的画法。
     ///
     /// 为什么不直接用 SF Symbol：`play` 与 `play.fill` 都是**实心**的，系统没有描边版。
-    /// 这里用 `UIGraphicsImageRenderer` 画一个等边三角形再标成 **template**
-    /// ⇒ 颜色仍然由 `glyph.tintColor`（白）决定，与另外两颗字形同一套。
+    ///
+    /// ★★ 2026-10-18：画法**与艺人页那颗共用一份**（`eeveeHollowPlayTriangle`，见 `EntityPageHeader.swift`）
+    /// —— 两处各留一份拷贝的话，下次改线宽/形状就会漂（艺人页那颗是照片 138 里中间那颗 ▶）。
+    /// 颜色仍然由调用方的 `tintColor`（白）决定（那张图是 **template**）。
     private static func hollowPlayImage(size: CGFloat) -> UIImage {
-        let lineWidth = max(1.5, size * 0.09)      // 30pt ⇒ 2.7pt
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
-        let image = renderer.image { _ in
-            let inset = lineWidth / 2
-            let side = size - inset * 2
-            let height = side * 0.866              // 等边三角形的高
-            let top = (size - height) / 2
-
-            let path = UIBezierPath()
-            path.move(to: CGPoint(x: inset, y: top))
-            path.addLine(to: CGPoint(x: inset + side, y: top + height / 2))
-            path.addLine(to: CGPoint(x: inset, y: top + height))
-            path.close()
-            path.lineWidth = lineWidth
-            // ⚠️ `UIBezierPath` 没有 `lineJoin`，这个属性叫 `lineJoinStyle`（`CGLineJoin`）——
-            //    写成 `lineJoin` 会让编译器连累下一句（`image` 类型推不出来 ⇒ 报
-            //    "cannot infer contextual base in reference to member 'alwaysTemplate'"）。
-            path.lineJoinStyle = .round
-
-            UIColor.white.setStroke()
-            path.stroke()
-        }
-        return image.withRenderingMode(.alwaysTemplate)
+        eeveeHollowPlayTriangle(side: size).withRenderingMode(.alwaysTemplate)
     }
 
     /// 在**按钮的兄弟层**上叠一个我们自己的字形（**不吃触摸** —— 按钮的动作原样生效）。

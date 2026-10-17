@@ -347,14 +347,46 @@ enum TimedLyricTextBuilder {
             )
         )
 
+        // ★★ 2026-10-18（日志 104 的 Starboy 现场）：**折行那把尺子与渲染是不是同一把**。
+        //
+        //    现场：`text=394.4 layout=331.8 breaks=[]` —— 按 331.8pt 的预算，394.4pt 的行
+        //    本该折，可 CoreText **一个断点都没给**；而已折的那 5 行 text 都在 405~557pt。
+        //    ⇒ 两处量出来的宽度对不上（`measuredTextWidth` 用的是 `UIFont.systemFont`，
+        //      折行用的是 `CTFontCreateWithName(uiFont.fontName)` —— 后者可能落到别的字面）。
+        //    这一行把**折行字体的 PostScript 名 + 它量出来的宽度**一起打出来：
+        //    下一份日志一眼就能定"该换字体构造方式"还是"该换折行算法"。
+        let uiFont = UIFont.systemFont(ofSize: fontSize, weight: fontWeight.uiKitWeight)
+        let layoutFont = CTFontCreateWithName(uiFont.fontName as CFString, fontSize, nil)
+        let layoutFontName = CTFontCopyPostScriptName(layoutFont) as String
+        let layoutWidthMeasured = String(
+            format: "%.1f",
+            measuredTextWidth(source: source, font: layoutFont)
+        )
+
         writeDebugLog(
             "[LyricWrap] fs=\(String(format: "%.1f", fontSize))"
                 + " w=\(constrainedWidth.map { String(format: "%.1f", $0) } ?? "nil")"
                 + " layout=\(layoutWidth)"
                 + " text=\(textWidth)"
+                + " ct=\(layoutWidthMeasured) (\(layoutFontName) / \(uiFont.fontName))"
                 + " breaks=[\(breaks)]"
                 + " \"\(marked(source, at: lineBreakOffsets))\""
         )
+    }
+
+    /// 一段文本在**指定字体**下的排版宽度（诊断用；`measuredTextWidth` 那个重载走
+    /// `UIFont.systemFont` —— 渲染那一侧的字体，见 `logWrapDecisionIfUseful` 的说明）。
+    private static func measuredTextWidth(
+        source: String,
+        font: CTFont
+    ) -> CGFloat {
+        guard !source.isEmpty else { return 0 }
+        let attributed = NSAttributedString(
+            string: source,
+            attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font]
+        )
+        let line = CTLineCreateWithAttributedString(attributed)
+        return CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
     }
 
     /// 整段文本（不折行）的排版宽度，用于诊断。

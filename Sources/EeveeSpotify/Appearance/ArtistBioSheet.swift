@@ -29,6 +29,10 @@ final class ArtistBioSheet: UIView {
     private let creditLabel = UILabel()
     /// 那一颗 Wikipedia 链接的地址（`build` 里按 app 语言算好）。
     private var wikiURL: URL?
+    /// 这一张卡片的艺人名（社交链接那颗胶囊在控件被回收时要用它拼兜底链接）。
+    private var artistName = ""
+    /// 从"关于艺人"那块卡里收下来的**社交链接控件**（见 `EntityPageHeaderManager.cachedBioLinks`）。
+    private var linkRefs: [ArtistBioLinkRef] = []
     /// **已经真的显示了正文**吗（占位那句不算）—— 只给"原生正文晚一拍到了"那条补看用，
     /// 免得把已经取到的 Genius / 维基正文又盖掉。
     private var hasBody = false
@@ -108,11 +112,16 @@ final class ArtistBioSheet: UIView {
         card.addSubview(close)
 
         let footer: CGFloat = 52
+        // ★★ 2026-10-18：收下来社交链接时，正文上面让出一条 38pt 给那一排胶囊。
+        let links = Array(EntityPageHeaderManager.cachedBioLinks(for: name).prefix(3))
+        linkRefs = links
+        artistName = name
+        let linkRow: CGFloat = links.isEmpty ? 0 : 38
         bodyView.frame = CGRect(
             x: 16,
             y: 58,
             width: card.bounds.width - 32,
-            height: card.bounds.height - 58 - footer
+            height: card.bounds.height - 58 - footer - linkRow
         )
         bodyView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         bodyView.backgroundColor = .clear
@@ -185,8 +194,43 @@ final class ArtistBioSheet: UIView {
         wiki.autoresizingMask = [.flexibleTopMargin]
         wiki.contentHorizontalAlignment = .left
         wiki.addTarget(self, action: #selector(wikipediaTapped), for: .touchUpInside)
+        // ★★ 2026-10-18：**收到过真链接时这颗让位** —— 下面那一排胶囊里就有一张"维基百科"，
+        //    再挂一颗"在维基百科中打开"是重复的（而且那颗只是**搜索页**，不是艺人的条目）。
+        if !links.isEmpty { wiki.isHidden = true }
         card.addSubview(wiki)
         wikiURL = Self.wikipediaURL(for: name)
+
+        // ★★ 2026-10-18（用户：「原本有的维基 / 推特链接之类的没显示」）：把 Spotify 自己那块卡里
+        //    的社交链接按钮画成**一排胶囊**，点下去**转发给那些控件本身**（走 Spotify 自己的打开逻辑，
+        //    所以是艺人真正的维基条目 / 推特账号，不是我们拼的搜索页）。
+        //    ⚠️ 控件是 weak 引用：那一格被回收之后点胶囊会走兜底（维基 → 搜索页），日志里看得出来。
+        if !links.isEmpty {
+            var chipX: CGFloat = 12
+            for (index, link) in links.enumerated() {
+                let chip = UIButton(type: .system)
+                chip.setTitle(link.title, for: .normal)
+                chip.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
+                chip.setTitleColor(UIColor.white.withAlphaComponent(0.95), for: .normal)
+                chip.backgroundColor = UIColor.white.withAlphaComponent(0.14)
+                chip.layer.cornerRadius = 15
+                chip.layer.cornerCurve = .continuous
+                chip.tag = index
+                chip.addTarget(self, action: #selector(linkTapped(_:)), for: .touchUpInside)
+                let textWidth = (link.title as NSString).size(
+                    withAttributes: [.font: UIFont.systemFont(ofSize: 14, weight: .medium)]
+                ).width
+                let chipWidth = min(132, max(66, ceil(textWidth) + 28))
+                chip.frame = CGRect(
+                    x: chipX,
+                    y: card.bounds.height - footer - linkRow + 4,
+                    width: chipWidth,
+                    height: 30
+                )
+                chip.autoresizingMask = [.flexibleTopMargin]
+                card.addSubview(chip)
+                chipX += chipWidth + 8
+            }
+        }
 
         creditLabel.font = .systemFont(ofSize: 12)
         creditLabel.textColor = UIColor.white.withAlphaComponent(0.55)
@@ -209,6 +253,27 @@ final class ArtistBioSheet: UIView {
         guard let wikiURL else { return }
         UIApplication.shared.open(wikiURL, options: [:], completionHandler: nil)
         writeDebugLog("[ArtistBio] wikipedia link opened")
+    }
+
+    /// **社交链接胶囊**（维基 / 推特 / …）：转发给从"关于艺人"那块卡里收下来的**原控件**。
+    ///
+    /// 为什么转发而不是自己拼 URL：我们要的是**艺人真正的条目 / 账号** —— 那个地址只存在
+    /// Spotify 自己的按钮里（它的"打开"走 `linkDispatcher`，不是 `UIApplication.open`）。
+    /// 控件已经被回收（weak 变 nil）时才退兜底：维基走搜索页，其余只打日志。
+    @objc private func linkTapped(_ sender: UIButton) {
+        guard linkRefs.indices.contains(sender.tag) else { return }
+        let link = linkRefs[sender.tag]
+        if let control = link.control {
+            let path = eeveeFire(control) ?? "NOTHING (no action, no tap recogniser)"
+            writeDebugLog("[ArtistBio] link tapped — \(link.kind) → \(path)")
+            return
+        }
+        if link.kind == "wikipedia", let url = Self.wikipediaURL(for: artistName) {
+            UIApplication.shared.open(url, options: [:], completionHandler: nil)
+        }
+        writeDebugLog(
+            "[ArtistBio] link tapped — \(link.kind) (its control is gone; opened the fallback)"
+        )
     }
 
     /// 维基百科那条**链接**：用**搜索页**（省掉"先找条目"这一步，同名艺人也不怕），
@@ -401,3 +466,17 @@ final class ArtistBioSheet: UIView {
 /// 下拉关闭那条手势的 delegate —— 协议声明放这儿，**实现写在类体里**
 /// （`gestureRecognizerShouldBegin(_:)` 是 `UIView` 的方法，扩展里不能重写，见那里的 ⚠️）。
 extension ArtistBioSheet: UIGestureRecognizerDelegate {}
+
+/// 「关于艺人」那块卡里的一条**社交链接**：认出来的是什么（`kind`）、画在胶囊上的短名（`title`）、
+/// 以及**那个控件本身**（weak —— cell 一回收就自动失效，见 `ArtistBioSheet.linkTapped`）。
+final class ArtistBioLinkRef {
+    let kind: String
+    let title: String
+    weak var control: UIView?
+
+    init(kind: String, title: String, control: UIView?) {
+        self.kind = kind
+        self.title = title
+        self.control = control
+    }
+}

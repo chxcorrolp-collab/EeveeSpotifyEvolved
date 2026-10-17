@@ -92,6 +92,69 @@ enum EntityPageHeaderManager {
     /// 读到的简介（没有就是 nil）。
     static func cachedBioText(for name: String) -> String? { bioTexts[name] }
 
+    /// 「关于艺人」那块里找到的**社交链接**（维基 / 推特 / …）—— 按艺人名存。
+    ///
+    /// ★★ 2026-10-18（用户：「原本有的维基 / 推特链接之类的没显示」）：Spotify 自己那一块里
+    /// 就有这些链接按钮（dump:21074-21079 的 `SPTArtistAbout:sArtist*ButtonTitle`），
+    /// 我们把整块折掉之后它们一起消失。现在**露头那一刻就记下这些控件**（weak 引用），
+    /// `ArtistBioSheet` 用它们画胶囊、点下去转发给控件本身（走 Spotify 自己的打开逻辑）。
+    static func cachedBioLinks(for name: String) -> [ArtistBioLinkRef] { bioLinks[name] ?? [] }
+
+    private static var bioLinks: [String: [ArtistBioLinkRef]] = [:]
+
+    /// 认得出哪几种社交链接：`needles` 在控件文字 / 无障碍标签里做**子串**匹配
+    /// （大小写不敏感），`title` 是画在胶囊上的短名。
+    private static let artistBioLinkKinds: [(kind: String, title: String, needles: [String])] = [
+        ("wikipedia", "维基百科", ["wikipedia", "维基", "ウィキ"]),
+        ("twitter", "Twitter", ["twitter", "推特"]),
+        ("instagram", "Instagram", ["instagram"]),
+        ("facebook", "Facebook", ["facebook"]),
+        ("tiktok", "TikTok", ["tiktok", "抖音"]),
+        ("whatsapp", "WhatsApp", ["whatsapp"]),
+        ("website", "网站", ["official site", "official website", "官网", "官方网站", "website", "网站"]),
+    ]
+
+    /// 在"关于艺人"那块卡里把社交链接**认下来**（有界：400 个节点、最多 6 条）。
+    ///
+    /// 认下来只记引用、不做任何跳转 —— 点不点得到交给 `ArtistBioSheet`（它会打日志）。
+    private static func captureBioLinks(from card: UIView, name: String) {
+        guard bioLinks[name] == nil else { return }
+
+        var refs: [ArtistBioLinkRef] = []
+        var queue: [UIView] = [card]
+        var visited = 0
+        while !queue.isEmpty, visited < 400, refs.count < 6 {
+            let view = queue.removeFirst()
+            visited += 1
+
+            // ⚠️ 先判"这颗能不能点"再挖文字 —— `eeveeControlText` 自己会走最多 200 个节点，
+            //    对卡里每一个子视图都调一遍就是 O(n²)（这一段是露头那一刻同步跑的）。
+            let isTappable = view is UIControl || !(view.gestureRecognizers ?? []).isEmpty
+            if isTappable {
+                let label = (view.accessibilityLabel ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                var haystack = label.lowercased()
+                if haystack.isEmpty {
+                    haystack = eeveeControlText(of: view)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .lowercased()
+                }
+                if !haystack.isEmpty,
+                   let match = artistBioLinkKinds.first(where: { entry in
+                       entry.needles.contains { haystack.contains($0) }
+                   }) {
+                    refs.append(ArtistBioLinkRef(kind: match.kind, title: match.title, control: view))
+                }
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+
+        guard !refs.isEmpty else { return }
+        bioLinks[name] = refs
+        let kinds = refs.map(\.kind).joined(separator: ",")
+        writeDebugLog("[ArtistBio] links found — \(kinds) (\(refs.count) control(s))")
+    }
+
     /// 这一页的艺人简介**已经读到过**了吗 —— `EntityPageSectionDrop` 折叠「关于艺人」那一格之前要问它。
     ///
     /// ★★ 2026-10-11（日志 100）：折叠与读取原本是**两条独立的线** —— 折叠按 `CreatorBiography`
@@ -804,15 +867,27 @@ enum EntityPageHeaderManager {
     /// 存下来那一刻顺手作废一次布局，折叠闸门才打得开（见 `relayoutAfterBioCapture`）。
     private static func captureBioTextOnSight(from view: UIView) {
         let name = artistNameStorage
-        guard !name.isEmpty, bioTexts[name] == nil, bioTexts.count < 32 else { return }
+        guard !name.isEmpty else { return }
+
+        // ★★ 2026-10-18（照片 141）：**社交链接那颗一起收下** —— 用户点名「原本有的维基 / 推特
+        //    链接之类的没显示」。这一段是懒加载的，控件一被回收就没了 ⇒ 现在（露头那一刻）
+        //    就把它们记下来，`ArtistBioSheet` 那颗胶囊点下去时再转发给它们自己。
+        captureBioLinks(from: view, name: name)
+
+        guard bioTexts[name] == nil, bioTexts.count < 32 else { return }
         // 先按 id 精确那颗 label 读（`3e91ac3` 那条，**任何长度都收** —— 四个字母的简介也认），
         // 认不出那张 label 才退"在卡片里按位置把文字拼起来"（见 `eeveeArtistBioBlockText`：
         // 段之间的空行因此回来，短简介也不再被字数门槛丢掉）。
-        let text = eeveeArtistBioText(in: view) ?? eeveeArtistBioBlockText(in: view)
-        guard let text, !text.isEmpty else { return }
+        let raw = eeveeArtistBioText(in: view) ?? eeveeArtistBioBlockText(in: view)
+        guard let raw, !raw.isEmpty else { return }
+        // ★★ 2026-10-18：**存之前先收拾** —— 卡里那两行"艺人名 / 每月有 x 名听众"不是简介
+        //    （用户看照片 141 点名的"多出来一些其他东西"），见 `eeveeSanitizedArtistBio`。
+        let text = eeveeSanitizedArtistBio(raw, artistName: name)
+        guard !text.isEmpty else { return }
         bioTexts[name] = text
         writeDebugLog(
             "[EntityPageHeader] about-artist captured on sight — \(name), \(text.count) char"
+                + (text.count == raw.count ? "" : " (cleaned from \(raw.count) char)")
         )
         if let page = eeveeAncestor(withIdentifier: "creator-page", of: view) {
             relayoutAfterBioCapture(in: page)

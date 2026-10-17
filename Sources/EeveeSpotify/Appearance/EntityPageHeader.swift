@@ -100,6 +100,39 @@ private func eeveeInsertGlass(in host: UIView, interactive: Bool) -> UIVisualEff
     return glass
 }
 
+// MARK: - 自己的字形
+
+/// **中空的播放三角形**（只描边、不填充）。
+///
+/// ★★ 2026-10-18（用户：「**这中间的播放按键三角形没做成透明的**」，照片 138：艺人页中间那颗
+///    白圆里的 ▶ 还是**实心黑**）：SF Symbols 的 `play` / `play.fill` **都是实心**，没有描边版
+///    ⇒ 和听歌页那颗一样自己画一个等边三角形再描边，标成 **template** 让调用方的 `tintColor`
+///    接着管颜色。
+///
+/// ⚠️ `UIBezierPath` 的连线圆角属性叫 **`lineJoinStyle`**（`CGLineJoin`）—— 写成 `lineJoin`
+///    是「没有这个成员」的编译错（2026-10-17 那次 IPA build 就是这么红的）。
+func eeveeHollowPlayTriangle(side: CGFloat) -> UIImage {
+    let lineWidth = max(1.5, side * 0.09)      // 52pt ⇒ 4.7pt
+    let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
+    return renderer.image { _ in
+        let inset = lineWidth / 2
+        let edge = side - inset * 2
+        let height = edge * 0.866              // 等边三角形的高
+        let top = (side - height) / 2
+
+        let path = UIBezierPath()
+        path.move(to: CGPoint(x: inset, y: top))
+        path.addLine(to: CGPoint(x: inset + edge, y: top + height / 2))
+        path.addLine(to: CGPoint(x: inset, y: top + height))
+        path.close()
+        path.lineWidth = lineWidth
+        path.lineJoinStyle = .round
+
+        UIColor.white.setStroke()
+        path.stroke()
+    }
+}
+
 // MARK: - 藏 / 找 / 点
 
 /// 把 Spotify 的视图**藏死**。三个动作缺一不可：
@@ -424,8 +457,81 @@ private let eeveeArtistBioUILabels: Set<String> = [
     "About", "More", "Show more", "Read more", "See more", "Play", "Follow", "Following", "Share",
 ]
 
-/// 「关于艺人」那一块里的**整段正文**：块里所有文字**按位置顺序**拼起来（每段一行）。
+/// 「关于艺人」那一块里那些**不是简介**的整行文字 —— 存正文之前按**整行**跳过。
 ///
+/// ★★ 2026-10-18（用户看照片 141：「点击 i 会**多出来**一些其他东西，比如艺人名字 /
+///    每月有 x 位听众」）：那张卡里除了正文，还画着**艺人名**与**收听人数**两行
+///    （收听那行有 id `artist-about-listeners`，日志 97 逐字），而
+///    `eeveeArtistBioBlockText` 是"把卡里所有文字按位置拼起来" ⇒ 这两行被当成正文收进了
+///    `bioTexts`。这里按行剔掉，**段与段之间的空行保留**。
+///
+/// ⚠️ 判据只在**已经认出来的那张卡片内部**用（`eeveeArtistBioBlockText` 的返回值），
+///    别拿去筛页面上别处的文字。
+private let eeveeArtistBioChromeLines: Set<String> = [
+    "关于", "关于艺人", "更多", "展开", "收起", "显示更多", "阅读更多", "查看全部",
+    "播放", "关注", "已关注", "关注中", "分享",
+    "About", "More", "Show more", "Read more", "See more", "Play", "Follow", "Following", "Share",
+    // Spotify 自己给 About 那块画的**社交链接按钮**（dump:21074-21079 的
+    // `SPTArtistAbout:sArtist*ButtonTitle` 就是它们的文案）—— 那是入口、不是正文。
+    "维基百科", "维基百科中打开", "在维基百科中打开", "Wikipedia",
+    "Twitter", "X", "Instagram", "Facebook", "TikTok", "WhatsApp",
+    "网站", "官网", "官方网站", "Website", "Official site",
+]
+
+/// 「每月有 x 名听众」那类行的特征词 —— 必须**同时**含数字才算（见 `eeveeSanitizedArtistBio`）。
+private let eeveeArtistBioListenerWords: [String] = [
+    "听众", "listener", "リスナー", "zuhörer", "auditeurs", "ascoltatori", "oyentes", "слушател",
+]
+
+/// 把从"关于艺人"卡里读到的文字**收拾成真正的简介**：剔掉艺人名那行、收听人数那行、
+/// Spotify 自己那几个按钮文案，并收掉首尾空行（段间空行保留）。
+///
+/// 读不到正文时（剔完什么都不剩）**原样返回** —— 宁可把原文交出去，也不能把简介吞掉。
+func eeveeSanitizedArtistBio(_ text: String, artistName: String) -> String {
+    let name = artistName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    var kept: [String] = []
+    var dropped = 0
+
+    for rawLine in text.components(separatedBy: "\n") {
+        let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        if line.isEmpty {
+            // 段之间的空行只留一行（Spotify 常常一段一个 label，拼起来之后空行就是段距）。
+            if let last = kept.last, !last.isEmpty { kept.append("") }
+            continue
+        }
+        let folded = line.lowercased()
+        if !name.isEmpty, folded == name {
+            dropped += 1
+            continue
+        }
+        if eeveeArtistBioChromeLines.contains(line) {
+            dropped += 1
+            continue
+        }
+        // ⚠️ 必须**带数字**才算收听人数那行 —— 简介正文里出现"听众"这个词太正常了。
+        if line.contains(where: { $0.isNumber }),
+           eeveeArtistBioListenerWords.contains(where: { folded.contains($0) }) {
+            dropped += 1
+            continue
+        }
+        kept.append(line)
+    }
+
+    while let last = kept.last, last.isEmpty { kept.removeLast() }
+    guard !kept.isEmpty else { return text }
+
+    let cleaned = kept.joined(separator: "\n")
+    if dropped > 0 {
+        let before = text.count
+        let after = cleaned.count
+        writeDebugLog(
+            "[ArtistBio] body cleaned — dropped \(dropped) non-bio line(s), \(before) → \(after) char"
+        )
+    }
+    return cleaned
+}
+
+/// 「关于艺人」那一块里的**整段正文**：块里所有文字**按位置顺序**拼起来（每段一行）。
 /// 为什么不是"取最长的那一段"（见 `eeveeArtistBio` 里那段说明）：字数门槛误伤短简介，
 /// 而"最长"在卡片里会挑错东西；Spotify 又常常**一段一个 label**，只取最长那一个会把正文
 /// 切成一段、段之间的空行也一起丢掉。
@@ -996,6 +1102,9 @@ final class EntityPageHeaderButton: UIControl {
 /// 白色的 Play 胶囊（Music app 那颗）。字形同样镜像 Spotify 的 Play。
 final class EntityPageHeaderPlay: UIControl {
 
+    /// 中空三角形按多大画（圆形态给的是 52pt 的画布，见 `layoutSubviews`；缩放交给 `contentMode`）。
+    static let hollowGlyphSide: CGFloat = 52
+
     private let glyphView = UIImageView()
     private let wordLabel = UILabel()
     private weak var source: UIView?
@@ -1016,7 +1125,10 @@ final class EntityPageHeaderPlay: UIControl {
 
         glyphView.contentMode = .scaleAspectFit
         glyphView.tintColor = .black
-        glyphView.image = UIImage(systemName: "play.fill")?.withRenderingMode(.alwaysTemplate)
+        // ★★ 2026-10-18（用户：「这中间的播放按键三角形没做成透明的」，照片 138 逐字：那颗 ▶ 还是
+        //    实心黑）：**不再用 `play.fill`**，改画我们自己的中空三角形（见 `eeveeHollowPlayTriangle`）。
+        glyphView.image = eeveeHollowPlayTriangle(side: Self.hollowGlyphSide)
+            .withRenderingMode(.alwaysTemplate)
         glyphView.isUserInteractionEnabled = false
         addSubview(glyphView)
 
@@ -1035,12 +1147,13 @@ final class EntityPageHeaderPlay: UIControl {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func feed(from control: UIView?) {
-        let sameSource = (source as? NSObject) === (control as? NSObject)
         source = control
-        // 同一个源控件就不重复取字形（见上面 `EntityPageHeaderButton.feed` 的说明）。
-        guard !sameSource || glyphView.image == nil else { return }
-        if let glyph = eeveeGlyph(of: control) {
-            glyphView.image = glyph.withRenderingMode(.alwaysTemplate)
+        // ★★ 2026-10-18：**字形不再取自源控件** —— Spotify 那颗 `play.fill` 是实心的，
+        //    照抄过来就把上面画好的中空三角形盖掉了（照片 138 那颗实心 ▶ 就是这么来的）。
+        //    这颗按钮的形状永远是我们自己的中空三角形，`feed` 现在只负责记下"点它要转发给谁"。
+        if glyphView.image == nil {
+            glyphView.image = eeveeHollowPlayTriangle(side: Self.hollowGlyphSide)
+                .withRenderingMode(.alwaysTemplate)
         }
     }
 

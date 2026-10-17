@@ -109,10 +109,21 @@ enum LyricInterludeTimeline {
                 return interlude.gapDuration >= minimumAnimatedGapDuration
             case (.preciseTiming, .lineSynchronized):
                 // 作者时间轴那一档**故意不认**推断出来的 LRC 间隙：
-                // 那里"人声尾部"是我们自己估的，把估计值当事实去显示倒计时会误报。
+                //   那里"人声尾部"是我们自己估的，把估计值当事实去显示倒计时会误报。
                 return false
-            case (.automatic, .precise):
-                return interlude.gapDuration >= minimumAnimatedGapDuration
+            case let (.automatic(minimumInferredGapDuration), .precise):
+                // ★★ 2026-10-18（日志 104 的现场）：**逐字来源也吃同一个阈值**。
+                //
+                //    原来这一档只看 `minimumAnimatedGapDuration`（1s 前导 + 1.8s 退出 = 2.8s），
+                //    于是"2.8s 的呼吸"也算一段间奏 —— 日志 104 里 Starboy 判出
+                //    `17 interlude(s) in 65 line(s)`：每 40pt 一条驻留行（见
+                //    `AppleMusicInterludeRow`，"不亮的时候也占着 40pt"）⇒ 整整 680pt 的
+                //    **空白行**，用户看到的就是「歌词有额外换行」。
+                //
+                //    现在与行级那条**共用 `.automatic` 给的阈值**（下界仍是 2.8s）：
+                //    Apple Music 也只给"真的没人唱"的那几段画呼吸点，不是每一次换气。
+                return interlude.gapDuration
+                    >= normalizedInferredThreshold(minimumInferredGapDuration)
             case let (.automatic(minimumInferredGapDuration), .lineSynchronized):
                 return interlude.gapDuration
                     >= normalizedInferredThreshold(minimumInferredGapDuration)

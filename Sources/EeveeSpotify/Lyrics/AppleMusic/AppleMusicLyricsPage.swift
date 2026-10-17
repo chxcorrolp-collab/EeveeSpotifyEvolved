@@ -334,8 +334,13 @@ struct AppleMusicLyricsPage: View {
         )
         // 诊断行：真机上要能一眼看出"这一首判出来几段间奏"。
         // ⚠️ 只在**重推**时打（换歌那一次），不是每帧 —— 不然日志会被刷爆。
+        //
+        // ★★ 2026-10-18（日志 104：Starboy = `17 interlude(s) in 65 line(s)`）：**把每段间隙
+        //    多长也带上** —— 那 17 条各占 40pt 的驻留行（`AppleMusicInterludeRow`）就是用户报的
+        //    「歌词有额外换行」。下一份日志直接看这串数就能定阈值（现在逐字来源也用 4s）。
+        let gaps = detected.map { String(format: "%.1f", $0.gapDuration) }.joined(separator: ",")
         writeDebugLog(
-            "[Interlude] \(detected.count) interlude(s) in \(lines.count) line(s)"
+            "[Interlude] \(detected.count) interlude(s) in \(lines.count) line(s), gaps=[\(gaps)]"
         )
     }
 

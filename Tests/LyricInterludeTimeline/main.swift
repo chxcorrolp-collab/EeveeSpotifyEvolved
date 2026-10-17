@@ -212,6 +212,46 @@ require(
     "authored gaps count even under .preciseTiming"
 )
 
+// ★★ 2026-10-18（日志 104 的 Starboy：`17 interlude(s) in 65 line(s)`）：**逐字来源也吃
+//    `.automatic` 给的阈值**（原来它只看 2.8s 的动画下界）。每段间奏在渲染层都占一条 40pt
+//    的驻留行，2.8s 的换气也画呼吸点 = 用户报的「歌词有额外换行」。
+//
+//    这里钉住那半边：3.0s 的作者间隙**过不了** 4s 的阈值、过得了 2s（被夹到 2.8s）的阈值。
+//    两段候选里那一段 0→10s 的前奏两边都算，所以期望分别是 1 与 2。
+let preciseTight = [
+    LyricLine(
+        id: "preciseTight:0",
+        time: 10,
+        duration: 2,
+        timingKind: .precise,
+        text: "aa",
+        syllables: [
+            LyricSyllable(text: "aa", startTime: 10, endTime: 12.5),
+        ]
+    ),
+    LyricLine(
+        id: "preciseTight:1",
+        time: 15.5,
+        duration: 2,
+        timingKind: .precise,
+        text: "bb"
+    ),
+]
+require(
+    LyricInterludeTimeline.interludes(
+        in: preciseTight,
+        detectionPolicy: .automatic(minimumInferredGapDuration: 4)
+    ).count == 1,
+    "a 3.0s authored breath must not clear the 4s automatic threshold"
+)
+require(
+    LyricInterludeTimeline.interludes(
+        in: preciseTight,
+        detectionPolicy: .automatic(minimumInferredGapDuration: 2)
+    ).count == 2,
+    "a 3.0s authored breath clears the clamped 2.8s minimum"
+)
+
 // MARK: - 6. 这一拍该显示什么：三个阶段必须无缝衔接
 
 let motion = AppleMusicInterludeMotionProfile.iOS26_6.timing(for: interlude)

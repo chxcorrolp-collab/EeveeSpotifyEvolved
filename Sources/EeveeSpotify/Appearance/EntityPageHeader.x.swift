@@ -1086,6 +1086,30 @@ enum EntityPageHeaderManager {
                     text: String(text),
                     ids: ids.prefix(6).joined(separator: ",")
                 ))
+
+                // ★ 2026-10-18：cell 里那些**可能**是"最新发行 / 艺人之选"的类（Release / Carousel /
+                //    SectionHeading / Pick / Card）也单独列出来 —— 它们的 id 可能为空，
+                //    但类名 + 文字足够下一轮定位。每格最多 8 条。
+                var interesting: [String] = []
+                var innerQueue: [UIView] = [view]
+                var innerVisited = 0
+                while !innerQueue.isEmpty, innerVisited < 120, interesting.count < 8 {
+                    let inner = innerQueue.removeFirst()
+                    innerVisited += 1
+                    let cls = NSStringFromClass(type(of: inner))
+                    let hit = ["Release", "Carousel", "SectionHeading", "Pick", "Card"]
+                        .contains { cls.localizedCaseInsensitiveContains($0) }
+                    if hit {
+                        let innerText = eeveeControlText(of: inner).prefix(30)
+                        interesting.append("\(cls) [\(innerText)]")
+                    }
+                    innerQueue.append(contentsOf: inner.subviews)
+                }
+                if !interesting.isEmpty {
+                    writeDebugLog(
+                        "[ArtistPageProbe] matches y=\(Int(frame.minY)) — \(interesting.joined(separator: " | "))"
+                    )
+                }
             }
             queue.append(contentsOf: view.subviews)
         }

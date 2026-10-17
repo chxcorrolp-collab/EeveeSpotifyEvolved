@@ -103,7 +103,13 @@ enum EntityPageAppearance {
     ///    现在换成 **1 − smoothstep**（对称 S 形）：首尾两段的落差从 **0.306 降到 0.043**（≈1/7），
     ///    同一段距离内那道边从 **53 级灰度降到 ~8 级** —— 肉眼不再能看出"这里贴了一条渐变"。
     ///    中段仍在跨度一半处落到 0.5（"多快吃掉主体"的观感没动）。
-    private static let meltEasing: [CGFloat] = [1, 0.957, 0.844, 0.684, 0.5, 0.316, 0.156, 0.043, 0]
+    /// ★ 2026-10-18：9 档 → **17 档**。9 档在 90pt 的跨度里每档约 11pt，仍然够让眼睛读出
+    /// "这里贴了一条渐变"（用户：「淡出那部分太刻意了」）⇒ 加密到 17 档，每档约 5.6pt，
+    /// 同一段距离的相邻落差再减半。曲线仍是 `1 − smoothstep`，观感方向没变。
+    private static let meltEasing: [CGFloat] = (0...16).map { index in
+        let p = CGFloat(index) / 16
+        return 1 - (p * p * (3 - 2 * p))
+    }
     /// ★★ 2026-10-18（用户：「**现在的模糊艺人底会有看不清字的情况，做成往下渐变变灰/黑的吧，pw 的逻辑**」）
     /// —— **页面的底整个换成 pw 的 `SGRArtworkField`**（`Redesigned/Kit/SGRField.m`，GPL 的 v0.21.1）：
     ///
@@ -123,6 +129,14 @@ enum EntityPageAppearance {
     ///    就是"深底 + 封面卡片 + 白字"（照片 123）。
     private static let blackFrom: CGFloat = 0.55
     private static let blackTo: CGFloat = 1
+    /// ★★ 2026-10-18（用户看 AM 参考图 136：「现在的艺人淡出那部分太刻意了，和图片不像」）：
+    /// **艺人页单独一条**更长的"灰 → 更深灰"渐变，不再和专辑/歌单页一样从 55% 一路压到纯黑。
+    ///
+    /// 参考图 136 的实测像素：y=47% 处 `#949494`、y=62%~78% 处 `#595959` —— 也就是
+    /// **整页一直是灰的，只是往下变深**，没有"到某一行突然开始黑"的那条带。
+    /// 我们把艺人页的终点改成 `#4A4A4A`（比参考图略深一点，保证白字），起点从 55% 推到 62%。
+    private static let artistFadeFrom: CGFloat = 0.62
+    private static let artistFadeTo = UIColor(white: 0.29, alpha: 1)
     /// pw 的 `SGRPalette.m:8-9`：底板颜色的**饱和度上限 0.55**、**线性亮度上限 0.07**。
     /// 后一条是最要紧的：**任何封面（哪怕一片白）都被压成一块很深的颜色** ⇒ 白字在上面读得清。
     /// 实测：`#F2F7FB`（Nanatsukaze 那张白猫）⇒ `#494B4C` 那一档；杰克逊那张 ⇒ 一块暗棕。
@@ -140,7 +154,7 @@ enum EntityPageAppearance {
     /// ⇒ **艺人页用 0.20，专辑 / 歌单页留 pw 的 0.07**（129 那张用户没嫌难看，而且 AM 的专辑页
     /// 本来就是深底）。要更亮/更暗就改这一个数。
     private static let maxFieldLuminance: CGFloat = 0.07
-    private static let artistFieldLuminance: CGFloat = 0.20
+    private static let artistFieldLuminance: CGFloat = 0.32
 
     // MARK: - 状态
 
@@ -520,7 +534,7 @@ enum EntityPageAppearance {
         let painted = page.bounds.insetBy(dx: 0, dy: -fieldBleed)
         if !view.frame.equalTo(painted) { view.frame = painted }
         // ⚠️ `paintField` 靠"上下各渗出去的那 600pt"反推页面高度与渐变落点 ⇒ **必须在这两行之后**调。
-        paintField(view, colour: colour)
+        paintField(view, colour: colour, kind: target.kind)
 
         // ★ 2026-10-13（**日志 79** 实测只有 7 处被清之后发现）：**每一拍都要补清**。
         //   cell 是**随滚动懒建**的 —— 只在建场那一拍清一次的话，往下滚出来的新 cell 会自己再画一层
@@ -624,10 +638,9 @@ enum EntityPageAppearance {
     ///
     /// ⚠️ **照片 95-97 的教训**：原来 57% 之后就是纯 `#121212` ⇒ 用户看到的是"**下半部分还是黑的**" ✗。
     /// 现在颜色是**封面压暗过的那一版**（`fieldColourFor`），不是 `#121212` ⇒ 整页一直带着这片颜色。
-    private static func paintField(_ view: GradientView, colour: UIColor) {
-        // 三页同一条：底色都是"封面压暗过的那一版 → 窗口 55% 起渐到纯黑"。
-        // 三页的差别只剩"封面是谁"（艺人页铺我们的满幅照片，专辑 / 歌单页留 Spotify 那张卡片，
-        // 见 `ensureHero`）。
+    private static func paintField(_ view: GradientView, colour: UIColor, kind: PageKind) {
+        // 专辑 / 歌单页仍走 pw 的"55% 起渐到纯黑"；**艺人页单独一条**更长的灰 → 深灰
+        //（见 `artistFadeFrom` / `artistFadeTo` 的说明）。三页的差别只剩"封面是谁"。
         let layer = view.gradient
         layer.startPoint = CGPoint(x: 0.5, y: 0)
         layer.endPoint = CGPoint(x: 0.5, y: 1)
@@ -636,20 +649,24 @@ enum EntityPageAppearance {
         let painted = max(1, view.bounds.height)
         let pageHeight = max(1, painted - 2 * fieldBleed)
         let window = windowHeight(fallback: pageHeight)
+        let startRatio = kind == .artist ? artistFadeFrom : blackFrom
+        let faded = kind == .artist ? artistFadeTo : UIColor.black
         // pw 的 locations 是**绝对**位置（窗口高度 × 0.55 / × 1）换算成整块画布的比例 ——
         // `from = height * kBlackFrom + bleed.top`（`SGRField.m:99-102`），这里 `fieldBleed`
         // 就是那个 bleed.top。
-        let from = min(1, max(0, (fieldBleed + window * blackFrom) / painted))
+        let from = min(1, max(0, (fieldBleed + window * startRatio) / painted))
         let to = min(1, max(from, (fieldBleed + window * blackTo) / painted))
         layer.locations = [NSNumber(value: 0), NSNumber(value: from), NSNumber(value: to)]
-        layer.colors = [colour.cgColor, colour.cgColor, UIColor.black.cgColor]
+        layer.colors = [colour.cgColor, colour.cgColor, faded.cgColor]
 
         let key = hex(of: colour)
         if key != lastLoggedHex {
             lastLoggedHex = key
             writeDebugLog(
-                "[\(logTag)] field colour is now #\(key) — pw's field on every page now"
-                    + " (a deep solid, fading to black down the page)"
+                "[\(logTag)] field colour is now #\(key) — "
+                    + (kind == .artist
+                        ? "artist page: a soft grey, deepening at 62%"
+                        : "pw's field: a deep solid, fading to black at 55%")
             )
         }
     }

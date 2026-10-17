@@ -924,6 +924,9 @@ enum EntityPageHeaderManager {
         scheduleLatestRelease(for: headerView, name: name)
         // 「艺人之选」优先：它就在同一页上（懒加载板块），滚到那一块时读一次就换掉卡片内容。
         captureArtistPick(in: page)
+        // ★★ 2026-10-17（用户：图片 145「这里会默认不展开『显示更多』…… 不展开又很难看」）：
+        //    进页后替用户点一次那颗展开按钮（原地铺开这一段 → 那条黑带与半截行都不再出现）。
+        scheduleSectionExpansion(in: page)
         // 卡片要占 ~106pt ⇒ 页头容器得跟着长高（用户选 A：卡片画在我们自己的页头里）。
         makeRoomForReleaseCard(in: header)
 
@@ -1300,6 +1303,58 @@ enum EntityPageHeaderManager {
                 applyPick(pick, to: headerView)
             }
             return
+        }
+    }
+
+    // MARK: - 「显示更多」：进页替用户展开一次
+
+    private static var expandScheduledPages = Set<ObjectIdentifier>()
+
+    /// 用户 2026-10-17（图片 145）：「这里会默认不展开『显示更多』这个东西，**但是不展开又很难看**」。
+    ///
+    /// 那一颗是 Spotify 的 `Components.UI.ListSectionFooter.Button`：它把"热门"那一段截在 6 行，
+    /// 底部再盖一条往黑的渐变（`ScrollGradientOverlay`）让胶囊读得清 —— 用户看到的就是
+    /// **半截的第 6 行 + 一条黑带**。他自己验证过（照片 121）：「把热门歌曲十首歌展开之后就好了」。
+    ///
+    /// ⇒ 进页 1 秒后（等 section 建出来）**替用户点一次**：原地铺开，不再有黑带与半截行。
+    /// 每页只排一次；点到几颗、有没有点动都进日志。
+    private static func scheduleSectionExpansion(in page: UIView) {
+        let key = ObjectIdentifier(page)
+        guard !expandScheduledPages.contains(key) else { return }
+        expandScheduledPages.insert(key)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak page] in
+            guard let page, page.window != nil else { return }
+            expandSectionFooters(in: page)
+        }
+    }
+
+    private static func expandSectionFooters(in page: UIView) {
+        var found: [UIControl] = []
+        var queue: [UIView] = [page]
+        var visited = 0
+        while !queue.isEmpty, visited < 1200, found.count < 4 {
+            let view = queue.removeFirst()
+            visited += 1
+            if let control = view as? UIControl,
+               (control.accessibilityIdentifier ?? "").contains("ListSectionFooter.Button") {
+                found.append(control)
+                continue
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+
+        guard !found.isEmpty else {
+            writeDebugLog("[EntityPageHeader] section expansion — no footer button on the page")
+            return
+        }
+
+        for control in found {
+            let path = eeveeActivate(control) ?? "NOTHING"
+            writeDebugLog(
+                "[EntityPageHeader] section expansion — \(path)"
+                    + " on \(String(describing: control.accessibilityIdentifier ?? "-"))"
+            )
         }
     }
 

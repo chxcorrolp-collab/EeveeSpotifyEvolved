@@ -615,7 +615,7 @@ struct EeveeSpotify: Tweak {
         //   **跟着滚动淡入淡出**；歌单页是 `Components.Header.UI.ArtworkImage`），
         //   但**封面那一格没有 id、`ViewTreeDumper` 又在深度 24 截断** ⇒ 树里看不到它。
         //   这个探针只在两个头部里往下走走、把"像封面的"打出来（不 hook、不改任何东西，
-        //   每种头部最多 3 次就自己停）。拿到那一行才做 hero，不猜。
+        //   **每页每种头部最多 2 次、最多 6 页**就自己停；2026-10-17 起按**页**计数，见那个文件）。
         HeaderArtworkProbe.start()
 
         // ★ 2026-10-13（用户：「我就一个要求：看起来像 Apple Music」）：

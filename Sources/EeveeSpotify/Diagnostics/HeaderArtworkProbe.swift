@@ -20,8 +20,14 @@ import UIKit
 /// ⇒ 树里根本看不到它 ✗。所以补这一个探针：**只在那两个头部里往下走**（限深限数），
 /// 把"像封面的"（方形、≥ 80pt）连同类名 / 尺寸 / 位置打出来。
 ///
-/// ⚠️ **纯只读**：不 hook、不调用、不改任何东西。每 2s 看一眼，每种头部最多报 3 次就自己停
-/// （报完把定时器停掉，不留常驻节拍）。
+/// ⚠️ **纯只读**：不 hook、不调用、不改任何东西。每 2s 看一眼；**每一页、每种头部最多报 2 次**，
+/// 看满 6 页（或行数用尽）就自己停，不留常驻节拍。
+///
+/// ★★ 2026-10-17：计数单位从「头部类型」改成「**页 + 头部**」。日志 104 实测：
+///    艺人页停留 6 秒就把 3 次配额全烧光（23:48:57 / 23:48:58 / 23:49:01 三次全在同一页），
+///    之后 23:49:17 进的那个**歌单页零命中** ⇒ §3 要等的「歌单页 page ids」永远等不到。
+///    现在每个**新页面**都会各拿到自己的配额，且 `page ids` 在候选封面**之前**打
+///    （撞上 `maxLines` 时不再被截掉那一段）。
 enum HeaderArtworkProbe {
 
     /// 要找的头部容器（按 `accessibilityIdentifier` 认，日志 75 / 77 逐字核过）。
@@ -30,16 +36,20 @@ enum HeaderArtworkProbe {
         "Components.Header.UI.ArtworkImage",
     ]
 
-    /// 每种头部最多报几次（一次 = 一行 + 一串候选）。
-    private static let maxReportsPerHeader = 3
-    /// 全局行数上限（防刷屏）。
-    private static let maxLines = 90
+    /// **同一页、同一种头部**最多报几次（一次 = 一行 + 一串候选 + 整页 id）。
+    private static let maxReportsPerTarget = 2
+    /// 最多看几页（够了就停，不留常驻节拍）。
+    private static let maxPages = 6
+    /// 全局行数上限（防刷屏）。6 页 × 约 25 行 ≈ 150，留一倍余量。
+    private static let maxLines = 320
     /// 头部子树往下走几层 / 最多看多少个节点。
     private static let maxDepth = 10
     private static let maxNodes = 120
 
     private static var timer: Timer?
-    private static var reportedHeaders: [String: Int] = [:]
+    /// key = "<页面 ObjectIdentifier>::<头部 identifier>"。
+    private static var reportsByTarget: [String: Int] = [:]
+    private static var reportedPageIDs: Set<ObjectIdentifier> = []
     private static var lines = 0
 
     static func start() {
@@ -60,24 +70,38 @@ enum HeaderArtworkProbe {
 
     private static func tick() {
         guard lines < maxLines else { stop(); return }
+        guard reportedPageIDs.count < maxPages else { stop(); return }
         guard let window = frontWindow() else { return }
 
         for identifier in headerIdentifiers {
-            guard (reportedHeaders[identifier] ?? 0) < maxReportsPerHeader else { continue }
-            guard let header = firstView(in: window, withIdentifier: identifier) else { continue }
-            reportedHeaders[identifier] = (reportedHeaders[identifier] ?? 0) + 1
-            report(header, identifier: identifier, in: window)
+            guard let header = firstView(in: window, withIdentifier: identifier),
+                  let page = pageAncestor(of: header, in: window) else { continue }
+            // ⚠️ 计数键 =「页 + 头部」。按头部**类型**计数会让一个页把配额全烧掉
+            //    （日志 104：艺人页 3 次，歌单页 0 次，见文件头说明）。
+            let key = "\(ObjectIdentifier(page))::\(identifier)"
+            let reported = reportsByTarget[key] ?? 0
+            guard reported < maxReportsPerTarget else { continue }
+            reportsByTarget[key] = reported + 1
+            _ = reportedPageIDs.insert(ObjectIdentifier(page))
+            report(header, identifier: identifier, page: page, in: window)
         }
 
-        if headerIdentifiers.allSatisfy({ (reportedHeaders[$0] ?? 0) >= maxReportsPerHeader }) {
+        if reportedPageIDs.count >= maxPages {
             stop()
-            writeDebugLog("[HeaderProbe] done — every header reported; probe stopped")
+            writeDebugLog(
+                "[HeaderProbe] done — \(reportedPageIDs.count) page(s) reported; probe stopped"
+            )
         }
     }
 
     // MARK: - 报一行
 
-    private static func report(_ header: UIView, identifier: String, in window: UIView) {
+    private static func report(
+        _ header: UIView,
+        identifier: String,
+        page: UIView,
+        in window: UIView
+    ) {
         let frame = header.convert(header.bounds, to: window)
         let className = String(describing: type(of: header))
         lines += 1
@@ -87,33 +111,35 @@ enum HeaderArtworkProbe {
                 + " id=\(identifier)"
         )
 
+        // ★★ 2026-10-17：**`page ids` 先打、候选封面后打**。
+        //   原来候选在前，一页的候选串能吃掉十几行 ⇒ 撞上 `maxLines` 时被截掉的正是
+        //   "整页 id" —— 而 §3（歌单页搜索条 / chips）要的就是那一段。
+        //
+        // 为什么整页 id 必须列（2026-10-13，日志 80 的教训）：歌单页的控制行
+        //   （分享 / ⋯ / 随机 / 播放）、curation pill 行（添加 / 编辑 / 排序 / 姓名和详情）
+        //   与"在此页面上查找"那个搜索框**都不在头部里** ⇒ 只摸头部的话，"藏掉 Spotify 那些按键"
+        //   在歌单页**一个都命中不了**（日志 80 里连一行 `hid … chrome` 都没有 ✗）。
+        //   这里只列 id + 尺寸 + 位置，限深限数。
+        var ids: [String] = []
+        var seenIds = 0
+        collectIdentifiers(in: page, of: window, depth: 0, seen: &seenIds, into: &ids)
+        for chunk in chunks(ids, size: 3) {
+            guard lines < maxLines else { break }
+            lines += 1
+            writeDebugLog("[HeaderProbe]   page ids: " + chunk.joined(separator: " | "))
+        }
+
         var candidates: [String] = []
         var seen = 0
         walk(header, header, in: window, depth: 0, seen: &seen, into: &candidates)
 
         for chunk in chunks(candidates, size: 4) {
-            lines += 1
             guard lines < maxLines else { break }
+            lines += 1
             writeDebugLog("[HeaderProbe]   candidates: " + chunk.joined(separator: " | "))
         }
         if candidates.isEmpty {
             writeDebugLog("[HeaderProbe]   candidates: (none — nothing square and large enough in there)")
-        }
-
-        // ★ 2026-10-13 追加（**日志 80** 的教训）：**整页里带 id 的视图**也要列出来。
-        //   歌单页的控制行（分享 / ⋯ / 随机 / 播放）、curation pill 行（添加 / 编辑 / 排序 / 姓名和详情）
-        //   与"在此页面上查找"那个搜索框**都不在头部里** ⇒ 只摸头部的话，"藏掉 Spotify 那些按键"
-        //   在歌单页**一个都命中不了**（日志 80 里连一行 `hid … chrome` 都没有 ✗）。
-        //   这里只列 id + 尺寸 + 位置，限深限数。
-        if let page = pageAncestor(of: header, in: window) {
-            var ids: [String] = []
-            var seenIds = 0
-            collectIdentifiers(in: page, of: window, depth: 0, seen: &seenIds, into: &ids)
-            for chunk in chunks(ids, size: 3) {
-                guard lines < maxLines else { break }
-                lines += 1
-                writeDebugLog("[HeaderProbe]   page ids: " + chunk.joined(separator: " | "))
-            }
         }
     }
 

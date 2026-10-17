@@ -924,6 +924,10 @@ enum EntityPageHeaderManager {
         scheduleLatestRelease(for: headerView, name: name)
         // 「艺人之选」优先：它就在同一页上（懒加载板块），滚到那一块时读一次就换掉卡片内容。
         captureArtistPick(in: page)
+        // ★★ 2026-10-17（用户：「这最新发布卡片不应该是自己造吗，为什么要查询」）：
+        //    「热门新歌」那一块也在同一页上（日志 111：`[ArtistPageProbe] … [热门新歌]`）
+        //    ⇒ 卡片的数据**从页面读**；苹果目录退化成最后兜底（见 `scheduleLatestRelease`）。
+        captureLatestRelease(in: page)
         // ★★ 2026-10-17（用户：图片 145「这里会默认不展开『显示更多』…… 不展开又很难看」）：
         //    进页后替用户点一次那颗展开按钮（原地铺开这一段 → 那条黑带与半截行都不再出现）。
         scheduleSectionExpansion(in: page)
@@ -1250,6 +1254,65 @@ enum EntityPageHeaderManager {
     /// 做一次**有界**尝试（≤ 900 节点 / 深 12）：找到标题就取它**下面那一格**（同 section 的下一格，
     /// 或下一个 section 的第一格）的封面 + 最长的一段文字 + 次长的一段；找到才换，找不到就继续用
     /// 最新发布（**绝不拿猜出来的东西冒充**）。
+    /// 找"某个标题行**下面那一格**"——「艺人之选」与「热门新歌」共用同一套。
+    ///
+    /// ★ 2026-10-17（第三版，用户：「这最新发布卡片**不应该是自己造吗，为什么要查询**」）：
+    ///   它本来就在页面上 —— 日志 111 逐字：
+    ///
+    /// ```
+    /// 13:07:20 [ArtistPageProbe] matches y=996  — …NoIntrinsicContentSizeButton [艺人之选]
+    /// 13:07:20 [ArtistPageProbe] matches y=1330 — …NoIntrinsicContentSizeButton [热门新歌]
+    /// ```
+    ///
+    ///   ⇒ 先读页面（封面 + 标题 + 副标题都在那一格里），**不要**拿艺人的名字去问苹果的目录：
+    ///   那一套既受商店地区影响（`cn` 目录对这位艺人 **0 条**），又受罗马字/假名影响
+    ///   （`Nanatsukaze` vs `ナナツカゼ`）—— 全是页面里本来没有的问题。
+    ///
+    /// - Returns: 那一格 + 它的 `IndexPath`（索引只进日志）。
+    private static func sectionCard(
+        in page: UIView,
+        headingMatches: (String) -> Bool
+    ) -> (cell: UIView, path: IndexPath)? {
+        var queue: [(view: UIView, depth: Int)] = [(page, 0)]
+        var visited = 0
+
+        while !queue.isEmpty, visited < 900 {
+            let (view, depth) = queue.removeFirst()
+            visited += 1
+
+            if let label = view as? UILabel,
+               let text = label.text,
+               !text.isEmpty,
+               headingMatches(text) {
+                // ⚠️ `enclosingCell` 返回 `UIView?`（它同时认 table cell），而 `indexPath(for:)`
+                //    只吃 `UICollectionViewCell` ⇒ 必须显式转一次。
+                guard let ancestor = enclosingCell(of: label),
+                      let cell = ancestor as? UICollectionViewCell,
+                      let collection = eeveeEnclosingCollectionView(of: cell),
+                      let indexPath = collection.indexPath(for: cell) else { return nil }
+
+                var candidates: [IndexPath] = []
+                if indexPath.item + 1 < collection.numberOfItems(inSection: indexPath.section) {
+                    candidates.append(IndexPath(item: indexPath.item + 1, section: indexPath.section))
+                }
+                if indexPath.section + 1 < collection.numberOfSections,
+                   collection.numberOfItems(inSection: indexPath.section + 1) > 0 {
+                    candidates.append(IndexPath(item: 0, section: indexPath.section + 1))
+                }
+                for candidate in candidates {
+                    if let next = collection.cellForItem(at: candidate) {
+                        return (next, candidate)
+                    }
+                }
+                return nil
+            }
+
+            guard depth < 12 else { continue }
+            queue.append(contentsOf: view.subviews.map { ($0, depth + 1) })
+        }
+        return nil
+    }
+
     static func captureArtistPick(in page: UIView) {
         let name = currentArtistName
         guard !name.isEmpty else { return }
@@ -1261,52 +1324,74 @@ enum EntityPageHeaderManager {
             return
         }
 
-        var queue: [(view: UIView, depth: Int)] = [(page, 0)]
-        var visited = 0
-        var heading: UILabel?
-        while !queue.isEmpty, visited < 900, heading == nil {
-            let (view, depth) = queue.removeFirst()
-            visited += 1
-            if let label = view as? UILabel,
-               let text = label.text,
-               isPickHeading(text) {
-                heading = label
-                break
-            }
-            guard depth < 12 else { continue }
-            queue.append(contentsOf: view.subviews.map { ($0, depth + 1) })
+        guard let found = sectionCard(in: page, headingMatches: isPickHeading),
+              let pick = makePick(from: found.cell) else { return }
+        artistPickCache[name] = pick
+        writeDebugLog(
+            "[Release] artist pick — \(pick.title)"
+                + " (from \(found.path.section),\(found.path.item))"
+        )
+        if let headerView = lastArtistHeaderView, currentArtistName == name {
+            applyPick(pick, to: headerView)
         }
-        guard let heading else { return }
+    }
 
-        // ⚠️ `enclosingCell` 返回的是 `UIView?`（它同时认 table cell），而 `indexPath(for:)`
-        //    只吃 `UICollectionViewCell` ⇒ **必须显式转一次**（2026-10-17 IPA build 报
-        //    `cannot convert value of type 'UIView' to expected argument type 'UICollectionViewCell'`）。
-        guard let ancestor = enclosingCell(of: heading),
-              let cell = ancestor as? UICollectionViewCell,
-              let collection = eeveeEnclosingCollectionView(of: cell),
-              let indexPath = collection.indexPath(for: cell) else { return }
+    // MARK: - 「最新发布」：先读页面自己那一块
 
-        var candidates: [IndexPath] = []
-        if indexPath.item + 1 < collection.numberOfItems(inSection: indexPath.section) {
-            candidates.append(IndexPath(item: indexPath.item + 1, section: indexPath.section))
-        }
-        if indexPath.section + 1 < collection.numberOfSections,
-           collection.numberOfItems(inSection: indexPath.section + 1) > 0 {
-            candidates.append(IndexPath(item: 0, section: indexPath.section + 1))
-        }
+    private static var releaseSectionCache: [String: ArtistPick] = [:]
+    private static var releaseSectionMisses: [String: Int] = [:]
+    private static var didLogReleaseSection = false
+    /// 页面上一直没读到那一块时，要过多少拍才去问苹果的目录（0.6s 一拍 ⇒ 10 拍 ≈ 6s）。
+    ///
+    /// ★ 2026-10-17（用户：「为什么要查询」）：苹果那套现在是**最后兜底**，不是首选。
+    private static let releaseSectionPasses = 10
 
-        for candidate in candidates {
-            guard let next = collection.cellForItem(at: candidate),
-                  let pick = makePick(from: next) else { continue }
-            artistPickCache[name] = pick
-            writeDebugLog(
-                "[Release] artist pick — \(pick.title)"
-                    + " (from \(candidate.section),\(candidate.item))"
-            )
-            if let headerView = lastArtistHeaderView, currentArtistName == name {
-                applyPick(pick, to: headerView)
+    /// 那一块在 Spotify 里叫什么（多语言各写一条，与 `isPickHeading` 同一个思路）。
+    ///
+    /// 出处：日志 111 逐字 `[ArtistPageProbe] matches y=1330 — …[热门新歌]`（y=1622 又一次）。
+    private static func isReleaseHeading(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        let needles = [
+            "热门新歌", "最新发布", "新发布", "新发行", "发行作品",
+            "popular releases", "new releases", "latest release", "new music", "releases",
+            "新曲", "最新リリース", "リリース",
+        ]
+        return needles.contains { lowered.contains($0) }
+    }
+
+    /// ★★ 2026-10-17 第三版（用户：「这最新发布卡片**不应该是自己造吗，为什么要查询**」）。
+    ///
+    /// 对 —— 这一块**本来就在页面上**（`[ArtistPageProbe] … [热门新歌]`，y=1330 / 1622），
+    /// 所以这张卡片的数据**从页面里读**（同一套 `sectionCard`，与「艺人之选」共用）：
+    ///
+    /// * 封面 = 那一格里的第一张像样的图，标题 / 副标题 = 那一格里最长 / 次长的两段文字；
+    /// * **不问网络** ⇒ 没有"商店地区没这首歌"、也没有"罗马字 vs 假名对不上"这两类问题
+    ///   （用户这边艺人名就是 `Nanatsukaze`，而日本店把 `artistName` 写成 `ナナツカゼ`）。
+    ///
+    /// 页面那一块是懒加载的（滚到才建出来）⇒ 每拍**机会式**看一次，读到就画；
+    /// 一直读不到才由 `scheduleLatestRelease` 落到苹果目录那条兜底（见那里的 10 拍）。
+    static func captureLatestRelease(in page: UIView) {
+        let name = currentArtistName
+        guard !name.isEmpty else { return }
+        if releaseSectionCache[name] != nil {
+            if !didLogReleaseSection, let release = releaseSectionCache[name] {
+                didLogReleaseSection = true
+                writeDebugLog("[Release] latest release from the page — \(release.title)")
             }
             return
+        }
+
+        releaseSectionMisses[name] = (releaseSectionMisses[name] ?? 0) + 1
+
+        guard let found = sectionCard(in: page, headingMatches: isReleaseHeading),
+              let release = makePick(from: found.cell) else { return }
+        releaseSectionCache[name] = release
+        writeDebugLog(
+            "[Release] latest release from the page — \(release.title)"
+                + " (from \(found.path.section),\(found.path.item))"
+        )
+        if let headerView = lastArtistHeaderView, currentArtistName == name {
+            applyPick(release, to: headerView)
         }
     }
 
@@ -1472,12 +1557,21 @@ enum EntityPageHeaderManager {
 
     /// 每一位艺人只取一次「最新发布」（缓存优先 ⇒ 同步就能画）。
     private static func scheduleLatestRelease(for headerView: EntityPageHeaderView, name: String) {
-        // 已经有"艺人之选"⇒ 卡片归它（用户：优先展示艺人之选）。
+        // ① 已经有"艺人之选"⇒ 卡片归它（用户：优先展示艺人之选）。
         if let pick = artistPickCache[name] {
             applyPick(pick, to: headerView)
             return
         }
 
+        // ② 其次是**页面上那一块**（「热门新歌」/「最新发布」，见 `captureLatestRelease`）——
+        //    这是"自己造"的那条，不问网络。
+        if let release = releaseSectionCache[name] {
+            applyPick(release, to: headerView)
+            return
+        }
+
+        // ③ 苹果的目录（`ArtistLatestReleaseSource`）现在只是**最后兜底**：
+        //    页面上的那一块一直没读到（懒加载，可能用户没滚到）才查一次。
         if let cached = ArtistLatestReleaseSource.cached(for: name) {
             applyLatestRelease(cached, to: headerView)
             return
@@ -1488,7 +1582,16 @@ enum EntityPageHeaderManager {
             headerView.updateRelease(title: nil, date: nil, meta: nil)
         }
         guard releaseArtist != name else { return }
+
+        // ★ 2026-10-17（用户：「为什么要查询」）：**先等页面上那几次机会**，等不到才去问苹果。
+        let misses = releaseSectionMisses[name] ?? 0
+        guard misses >= releaseSectionPasses else { return }
+
         releaseArtist = name
+        writeDebugLog(
+            "[Release] the page had no release section after \(misses) pass(es) —"
+                + " asking the Apple catalogue as a fallback"
+        )
 
         ArtistLatestReleaseSource.fetch(artist: name) { release in
             guard let current = lastArtistHeaderView, currentArtistName == name else { return }

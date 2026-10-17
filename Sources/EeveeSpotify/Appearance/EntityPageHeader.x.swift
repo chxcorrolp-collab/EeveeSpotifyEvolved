@@ -433,6 +433,13 @@ enum EntityPageHeaderManager {
     private static var didReportPinnedMoreMissing = false
     /// ★ 2026-10-18：`⋯` 挂到 window 之后，只报一次几何/可交互性（用来判断"点不到"是位置还是层级）。
     private static var didReportPinnedMoreGeometry = false
+    /// ★ 2026-10-18：歌单页「在此页面上查找」那一行的容器/滚动几何，只报一次（治"进入后还能往上划"）。
+    private static var didReportPlaylistMetrics = false
+    /// ★ 2026-10-18：艺人页 section / cell 的文字探针（找「最新发行 / 艺人之选」，不用转储视图树）。
+    private static weak var artistProbePage: UIView?
+    private static var artistProbeReports = 0
+    private static var artistProbeLastPass: CFAbsoluteTime = 0
+    private static var artistProbeSignature = ""
 
     /// 尾部按钮的兜底字形：**做成常量**（原来每一拍都 `UIImage(systemName:)` 造一张新的，
     /// 而这一拍在折叠的每一帧都会走到 —— 与"字形只取一次"同一条纪律）。
@@ -557,6 +564,7 @@ enum EntityPageHeaderManager {
                 "hidPlaylistFind",
                 "playlist page: hid Spotify's find-in-playlist field (it lives in PL.Header, not in the header block)"
             )
+            reportPlaylistMetrics(headerRoot: headerRoot, findField: findField)
         }
 
         header.update(title: texts.title, creator: texts.creator, length: texts.length, about: texts.about)
@@ -1034,6 +1042,68 @@ enum EntityPageHeaderManager {
                 + ", follow \(followNote) \(describe(follow))"
                 + ", followSignals \(eeveeOnSignals(follow))"
         )
+
+        // ★ 2026-10-18：找「最新发行 / 艺人之选」用（用户不想开转储视图树）。
+        probeArtistPageSections(in: page)
+    }
+
+    /// ★ 2026-10-18（用户：「播放按键和热门歌曲中间塞个方框……最新发布歌曲 / 艺人之选」）：
+    /// 把艺人页里**每个 CollectionViewCell 的 y / 第一个文字 / ids** 按位置打出来，
+    /// 每页最多 10 次、0.8s 节流、内容没变不重复。用户滚到「最新发行」那一段时，
+    /// 日志里就会出现那一格的真名与文字 —— 下一轮按它做方框，不用开转储视图树。
+    private static func probeArtistPageSections(in page: UIView) {
+        if artistProbePage !== page {
+            artistProbePage = page
+            artistProbeReports = 0
+            artistProbeLastPass = 0
+            artistProbeSignature = ""
+        }
+        guard artistProbeReports < 10 else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - artistProbeLastPass >= 0.8 else { return }
+        artistProbeLastPass = now
+
+        var cells: [(y: CGFloat, text: String, ids: String)] = []
+        var queue: [UIView] = [page]
+        var visited = 0
+        while !queue.isEmpty, visited < 2000 {
+            let view = queue.removeFirst()
+            visited += 1
+            if NSStringFromClass(type(of: view)).contains("CollectionViewCell") {
+                var ids: [String] = []
+                var idQueue: [UIView] = [view]
+                var idVisited = 0
+                while !idQueue.isEmpty, idVisited < 40 {
+                    let child = idQueue.removeFirst()
+                    idVisited += 1
+                    if let id = child.accessibilityIdentifier, !id.isEmpty { ids.append(id) }
+                    idQueue.append(contentsOf: child.subviews)
+                }
+                let text = eeveeControlText(of: view).prefix(40)
+                let frame = view.convert(view.bounds, to: page)
+                cells.append((
+                    y: frame.minY,
+                    text: String(text),
+                    ids: ids.prefix(6).joined(separator: ",")
+                ))
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+
+        cells.sort { $0.y < $1.y }
+        let shown = Array(cells.prefix(14))
+        let signature = shown
+            .map { "\(Int($0.y))|\($0.text)|\($0.ids)" }
+            .joined(separator: "||")
+        guard !signature.isEmpty, signature != artistProbeSignature else { return }
+        artistProbeSignature = signature
+        artistProbeReports += 1
+
+        for cell in shown {
+            writeDebugLog(
+                "[ArtistPageProbe] cell y=\(Int(cell.y)) ids=[\(cell.ids)] text=\(cell.text)"
+            )
+        }
     }
 
     /// ★★ 2026-10-18（用户：「点击收藏之后，按钮不会变绿，删除艺人之后，才会变绿」）：
@@ -1497,6 +1567,38 @@ enum EntityPageHeaderManager {
         more.firesDeep = true
 
         eeveeConceal(wrapperFor(menu, in: headerRoot))
+    }
+
+    /// ★ 2026-10-18（用户：「歌单页进入后还是能往上接着划……进入的位置可以上移吗」）：
+    /// 把隐藏的搜索框那一行的**真实 frame / 父链 / 滚动 offset / topInset** 打一次。
+    /// 下一份日志就能分清"空档是那一行的高度"还是"contentInset 多了一截"，再决定折高度还是改 offset。
+    private static func reportPlaylistMetrics(headerRoot: UIView, findField: UIView) {
+        guard !didReportPlaylistMetrics else { return }
+        didReportPlaylistMetrics = true
+
+        var chain: [String] = []
+        var node: UIView? = findField
+        var level = 0
+        while let current = node, level < 4 {
+            let frame = current.convert(current.bounds, to: headerRoot)
+            chain.append(
+                "\(NSStringFromClass(type(of: current)))"
+                    + " \(Int(frame.minX)),\(Int(frame.minY)),\(Int(frame.width)),\(Int(frame.height))"
+            )
+            node = current.superview
+            level += 1
+        }
+
+        let scroll = eeveeOutermostScroll(from: headerRoot)
+        let offset = scroll.map { "\(Int($0.contentOffset.x)),\(Int($0.contentOffset.y))" } ?? "-"
+        let inset = scroll.map { "\(Int($0.adjustedContentInset.top))" } ?? "-"
+        let host = headerRoot.window ?? headerRoot
+        let headerFrame = headerRoot.convert(headerRoot.bounds, to: host)
+        writeDebugLog(
+            "[EntityPageHeader] playlist find-field chain — \(chain.joined(separator: " < "));"
+                + " scroll offset=\(offset) topInset=\(inset);"
+                + " PL.Header \(Int(headerFrame.minY))h\(Int(headerFrame.height))"
+        )
     }
 
     /// ★ 2026-10-18：离开实体页时把挂在 window 上的 `⋯` 收走（见 `pinMoreButton`）。

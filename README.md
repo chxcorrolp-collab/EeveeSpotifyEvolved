@@ -61,7 +61,7 @@ A derivative work based on [EeveeSpotifyReincarnated](https://github.com/Sideloa
 | --- | --- | --- |
 | Public release | [`v1.0.0`](https://github.com/zbzxbg/EeveeSpotifyEvolved/releases) | 9.1.88 |
 
-Development last updated: `2026/10/16`(build 149).
+Development last updated: `2026/10/17`(build 154).
 
 > [!WARNING]
 > Development versions are not publicly distributed to users.

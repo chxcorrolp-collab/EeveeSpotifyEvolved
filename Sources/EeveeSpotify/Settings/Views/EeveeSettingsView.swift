@@ -172,14 +172,20 @@ struct EeveeSettingsView: View {
                     imageSystemName: "sparkle"
                 ) { AnyView(EeveeExperimentsSettingsView()) }
 
-                // Flag 覆盖：注入远程开关。⚠️ 它需要 navigationController（页内还要推 flag 目录）。
+                // Flag 覆盖：注入远程开关。⚠️ 它需要 navigationController（页内还要推「手动写入」）。
+                //
+                // ★ 2026-10-17（用户：「关于 flag 这部分…用上游的」）：入口换成**浏览器**
+                //   （`RemoteFlags` 自动扫出来的清单 + 搜索 + 只看改过的 + 按种类给编辑器）。
+                //   原来那个"自己填 name/scope/模式/值"的编辑页没有删 —— 它现在是浏览器页里
+                //   的一行「手动写入」（两页写同一张表），因为采集按 Spotify 版本做，
+                //   刚装/刚升级时浏览器可能是空的，那时还得有一条能动手的路。
                 settingsRow(
                     color: Color(hex: "#5E5CE6"),
                     title: "flag_override_title",
                     subtitle: "settings_sub_flags",
                     imageSystemName: "slider.horizontal.3"
                 ) {
-                    AnyView(EeveeFlagOverrideSettingsView(navigationController: navigationController))
+                    AnyView(EeveeFlagBrowserView(navigationController: navigationController))
                 }
 
                 settingsRow(

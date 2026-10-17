@@ -364,6 +364,17 @@ struct EeveeSpotify: Tweak {
         // `SpotifyResponsePatcher.seedCustomizeDataIfNeeded`。
         SpotifyResponsePatcher.seedCustomizeDataIfNeeded()
 
+        // ★ 2026-10-17：远端配置（flag）的**读时拦截**（移植自上游 `RemoteFlags`）。
+        //
+        // 与上面那条是两条**互补**的路： customize 改写管"服务端下发的那张表"，
+        // 这一条钩的是 `RemoteConfigurationSDK` 的取值入口（bool/int/enum），
+        // 所以连"没进 customize 响应、但客户端会去读"的 flag 也盖得住。
+        // 两条路读的是同一张表（`FlagOverrideStore`），值不会打架。
+        //
+        // ⚠️ 它同时是**采集器**：升级 Spotify 后第一次启动会装上这组 hook、把每条读到的
+        //   flag 记下来（20 秒后写 `flags.json`），设置页那个浏览器页列的就是这张表。
+        activateRemoteFlags()
+
         // 播放器控件触感：开关关着时连 hook 都不装（见 PlayerHaptics.x.swift），
         // 所以不开触感的用户是零开销。开关在设置页读一次，改动需重启。
         activatePlayerHaptics()

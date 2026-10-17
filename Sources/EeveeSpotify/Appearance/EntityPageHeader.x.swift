@@ -1441,12 +1441,9 @@ enum EntityPageHeaderManager {
     // MARK: - 「最新发布」：先读页面自己那一块
 
     private static var releaseSectionCache: [String: ArtistPick] = [:]
+    /// 每页试了几次"读页面那一块"——**只进日志**（真的闸门是 `scheduleLatestRelease` 里的墙钟）。
     private static var releaseSectionMisses: [String: Int] = [:]
     private static var didLogReleaseSection = false
-    /// 页面上一直没读到那一块时，要过多少拍才去问苹果的目录（0.6s 一拍 ⇒ 10 拍 ≈ 6s）。
-    ///
-    /// ★ 2026-10-17（用户：「为什么要查询」）：苹果那套现在是**最后兜底**，不是首选。
-    private static let releaseSectionPasses = 10
 
     /// 那一块在 Spotify 里叫什么（多语言各写一条，与 `isPickHeading` 同一个思路）。
     ///
@@ -1699,6 +1696,15 @@ enum EntityPageHeaderManager {
     }
 
     /// 每一位艺人只取一次「最新发布」（缓存优先 ⇒ 同步就能画）。
+    /// 每个艺人页**第一次被看到**的时刻 —— 苹果兜底按**墙钟**等，不按"第几拍"。
+    ///
+    /// ★ 2026-10-17 日志 112 的现场（用户：「那个艺人页自己画的**最新发布框似乎没展示**」）：
+    /// 上一版用"页头布局跑满 10 拍"当闸门，而 `[Release]` 一行都没有 —— 说明这页的布局拍数
+    /// **根本没到 10**（页头稳定之后就不再重排），于是既没读到页面那一块、也没触发苹果兜底，
+    /// 卡片**静默地永远不出现**。⇒ 换成墙钟：进页 6 秒后还没有页面数据就去问一次，并且**一定留一行日志**。
+    private static var releaseSectionFirstSeen: [String: Date] = [:]
+    private static let releaseFallbackDelay: TimeInterval = 6
+
     private static func scheduleLatestRelease(for headerView: EntityPageHeaderView, name: String) {
         // ① 已经有"艺人之选"⇒ 卡片归它（用户：优先展示艺人之选）。
         if let pick = artistPickCache[name] {
@@ -1724,15 +1730,19 @@ enum EntityPageHeaderManager {
         if releaseArtist != name {
             headerView.updateRelease(title: nil, date: nil, meta: nil)
         }
+        if releaseSectionFirstSeen[name] == nil {
+            releaseSectionFirstSeen[name] = Date()
+        }
         guard releaseArtist != name else { return }
 
-        // ★ 2026-10-17（用户：「为什么要查询」）：**先等页面上那几次机会**，等不到才去问苹果。
-        let misses = releaseSectionMisses[name] ?? 0
-        guard misses >= releaseSectionPasses else { return }
+        // ★ 2026-10-17（第二版闸门，见上面 `releaseSectionFirstSeen` 的说明）：按**秒**等，不按拍。
+        let seenAt = releaseSectionFirstSeen[name] ?? Date()
+        let waited = Date().timeIntervalSince(seenAt)
+        guard waited >= releaseFallbackDelay else { return }
 
         releaseArtist = name
         writeDebugLog(
-            "[Release] the page had no release section after \(misses) pass(es) —"
+            "[Release] no page section after \(Int(waited))s —"
                 + " asking the Apple catalogue as a fallback"
         )
 

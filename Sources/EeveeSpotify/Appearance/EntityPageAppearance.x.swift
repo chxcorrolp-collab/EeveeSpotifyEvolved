@@ -342,6 +342,10 @@ enum EntityPageAppearance {
     /// 两种形态各找各的，与 `ensureSharpHero` 里的判据完全一样（同一个 `washPlane`）。
     private static func concealNativeWash(for target: Target) {
         guard let cover = target.cover else { return }
+        // ★★ 2026-10-17 第二版（日志 112）：**先出清单，再分支** ——
+        //   探测原来写在 `concealAlbumWash` 里，而走 `washPlane` 那条分支时它永远不会跑，
+        //   于是"图片 144 那条粉还在"这件事在日志里**没有任何证据**（`wash probe` 0 条）。
+        probePageWash(in: target.page)
         if let plane = washPlane(for: cover), plane.bounds.width > 1 {
             concealWash(on: plane)
         } else {
@@ -1284,13 +1288,10 @@ enum EntityPageAppearance {
         let widthFloor = pageWidth * 0.85
         let bottomCeiling = pageHeight * 0.8
 
-        // ★ 2026-10-17：**每页一次**的"这层色到底是谁画的"清单 —— 只按类名认
-        //（Gradient / Blur / Backdrop / Wash / Scrim），不管它过不过几何判据。
-        // 上一次只知道"藏了 1 块"，结果用户照样看见那层粉 ⇒ 下一份日志要能回答"还有谁"。
-        // 一行都找不到时会明写"不是 Gradient/Blur 视图"——那就说明那层色其实是我们的 field。
-        let probe = washProbePage !== page
-        if probe { washProbePage = page }
-        var probeLines: [String] = []
+        // ★ 2026-10-17（第二版）：探针**已经搬到 `concealNativeWash` 开头**（`probePageWash`）——
+        //   日志 112 里 `wash probe` 一条都没有：这台设备走的是 `washPlane` 那条分支，
+        //   而探测器当时藏在这里 ⇒ 永远轮不到它，于是"粉还在、却没有证据"。
+        //   这里只留"藏了哪些"的候选日志（`wash candidate`）。
 
         var queue: [(view: UIView, insideHeader: Bool, depth: Int)] = page.subviews.map { ($0, false, 1) }
         var visited = 0
@@ -1303,21 +1304,6 @@ enum EntityPageAppearance {
 
             let name = NSStringFromClass(type(of: view))
             let identifier = view.accessibilityIdentifier ?? ""
-
-            if probe, probeLines.count < 4 {
-                let looksLikeWash = ["Gradient", "Blur", "Backdrop", "Wash", "Scrim"]
-                    .contains { name.contains($0) }
-                if looksLikeWash {
-                    let frame = view.convert(view.bounds, to: page)
-                    if frame.maxY > 1, frame.minY < bottomCeiling {
-                        let parent = String(describing: type(of: view.superview ?? view))
-                        probeLines.append(
-                            "\(name) \(frameDescription(frame))"
-                                + " id=\(identifier.isEmpty ? "-" : identifier) parent=\(parent)"
-                        )
-                    }
-                }
-            }
 
             // ① 页头：类名带 HeaderView，**或者 id 带 Header**（`CreativeWorkHeader` / `PL.Header`）。
             let isHeaderRoot = (name.contains("HeaderView") && !name.contains("NavigationBar"))
@@ -1354,25 +1340,62 @@ enum EntityPageAppearance {
             queue.append(contentsOf: view.subviews.map { ($0, inHeader, depth + 1) })
         }
 
-        // ★ 2026-10-17：这一页的"色层清单"（每页一次，见上面的 `probe`）。
-        if probe {
-            if probeLines.isEmpty {
-                writeDebugLog(
-                    "[\(logTag)] wash probe — no Gradient/Blur/Backdrop view in the top 80% of this"
-                        + " page; the colour band there is not one of those (look at our own field)"
-                )
-            } else {
-                let list = probeLines.joined(separator: " ;; ")
-                writeDebugLog("[\(logTag)] wash probe — \(list)")
-            }
-        }
-
         guard taken > 0, !didReportAlbumWash else { return }
         didReportAlbumWash = true
         writeDebugLog(
             "[\(logTag)] album wash — concealed \(taken) GradientView(s) (header subtree"
                 + " or a page-wide band in the top 80%)"
         )
+    }
+
+    /// **这一页的色层清单**（每页一次）—— 只按类名认（Gradient / Blur / Backdrop / Wash / Scrim），
+    /// 不管它过不过几何判据。
+    ///
+    /// ★★ 2026-10-17 第二版（日志 112 的现场：`wash probe` **一条都没有**，而用户说
+    /// "图片 144 的问题还在"）：探测原来写在 `concealAlbumWash` 里，而这台设备走的是
+    /// `concealNativeWash` 的**另一条分支**（`washPlane` 存在 ⇒ `concealWash(on:)`）
+    /// ⇒ 探测永远轮不到。现在挪到 `concealNativeWash` 开头，**两条分支都先出清单**。
+    ///
+    /// 一行都没有时会明写"不是 Gradient/Blur 视图"——那就说明那层色是我们自己的 field。
+    private static func probePageWash(in page: UIView) {
+        guard washProbePage !== page else { return }
+        washProbePage = page
+
+        let bottomCeiling = page.bounds.height * 0.8
+        var lines: [String] = []
+        var queue: [UIView] = page.subviews
+        var visited = 0
+
+        while !queue.isEmpty, visited < 1200, lines.count < 4 {
+            let view = queue.removeFirst()
+            visited += 1
+
+            let name = NSStringFromClass(type(of: view))
+            let looksLikeWash = ["Gradient", "Blur", "Backdrop", "Wash", "Scrim"]
+                .contains { name.contains($0) }
+            if looksLikeWash {
+                let frame = view.convert(view.bounds, to: page)
+                if frame.maxY > 1, frame.minY < bottomCeiling {
+                    let identifier = view.accessibilityIdentifier ?? ""
+                    let parent = String(describing: type(of: view.superview ?? view))
+                    lines.append(
+                        "\(name) \(frameDescription(frame))"
+                            + " id=\(identifier.isEmpty ? "-" : identifier) parent=\(parent)"
+                    )
+                }
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+
+        if lines.isEmpty {
+            writeDebugLog(
+                "[\(logTag)] wash probe — no Gradient/Blur/Backdrop view in the top 80% of this"
+                    + " page; the colour band there is not one of those (look at our own field)"
+            )
+        } else {
+            let list = lines.joined(separator: " ;; ")
+            writeDebugLog("[\(logTag)] wash probe — \(list)")
+        }
     }
 
     /// 帧 → 日志里那种 `x,y,w,h`（整数，省得一行日志几百个字符）。

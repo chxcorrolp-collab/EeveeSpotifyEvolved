@@ -873,6 +873,13 @@ func eeveeFire(_ control: UIView?, skippingControlAction: Bool = false) -> Strin
     // ② 手势：先自己，再（有界地）往下钻子树。
     if let fired = eeveeFireGesture(in: control) { return fired }
 
+    // ②½ ★★ 2026-10-18（用户：「右上角的三个点的按钮点击无反应」）：
+    //    **再往子树里找一颗真的有 target 的 `UIControl`**。按 id 找到的是外层
+    //    `EncoreButton`，真正把菜单弹出来的那颗 `CondensedButton` / 内部按钮可能在它里面；
+    //    旧版只往"手势"里钻，**子控件自己的 target/action 从来没试过**。
+    //    有界（深度 4 / 120 个节点）、只发第一颗有 target 的，不会把一次点击变成两次。
+    if let fired = eeveeFireSubControlAction(in: control) { return fired }
+
     // ③ ★★ 2026-10-10（**日志 96 是判决**）：有界地再往上看两层。
     //
     //    现场：用户**自己**点艺人页的"关于艺人"那一块，页面**真的跳走了**
@@ -1018,6 +1025,96 @@ func eeveeFireGesture(in root: UIView, depthLimit: Int = 6, nodeLimit: Int = 200
         for sub in view.subviews { queue.append((sub, depth + 1)) }
     }
     return nil
+}
+
+/// 往子树里找一颗**注册了 target/action 的 `UIControl`**，替用户按下去。
+///
+/// 只给 `eeveeFire` 的第 ②½ 档用：外层拿到的是 `EncoreButton`，菜单真正的动作可能挂在
+/// 它内部那颗 `CondensedButton` 上。有界（深度 4 / 120 节点），**只发第一颗**有 target 的
+/// —— 一次点击绝不能变成两次。
+func eeveeFireSubControlAction(in root: UIView) -> String? {
+    var queue: [(view: UIView, depth: Int)] = root.subviews.map { ($0, 1) }
+    var visited = 0
+    while !queue.isEmpty, visited < 120 {
+        let (view, depth) = queue.removeFirst()
+        visited += 1
+        if let control = view as? UIControl {
+            for (event, label) in eeveeFireEvents where eeveeHasTargets(control, event) {
+                control.sendActions(for: event)
+                return "subControl.\(NSStringFromClass(type(of: control))).\(label)"
+            }
+        }
+        guard depth < 4 else { continue }
+        for sub in view.subviews { queue.append((sub, depth + 1)) }
+    }
+    return nil
+}
+
+/// 只进日志：一颗控件到底"为什么点不动"——target/action、手势、`UIMenu`、子控件各有哪些。
+///
+/// ★★ 2026-10-18（用户：「右上角的三个点的按钮点击无反应」）：上一版已经跳过 `sendActions`
+/// 直接走手势，仍然没反应 ⇒ 不再猜。下一次点击 `⋯` 时把这一行打出来，就能分清：
+///   ① 它其实有 target/action（只是事件类型不对）；
+///   ② 它是一个 `UIButton.menu`（靠 UIKit 自己的触摸弹出，`sendActions` 天生无效）；
+///   ③ 动作挂在子树里某颗子控件上（见 `eeveeFireSubControlAction`）；
+///   ④ 只有手势，而手势的 target 在更上面一层。
+func eeveeDescribeClickability(_ root: UIView?) -> String {
+    guard let root else { return "nil" }
+
+    var parts: [String] = []
+    parts.append("class=\(NSStringFromClass(type(of: root)))")
+    parts.append("id=\(root.accessibilityIdentifier ?? "-")")
+    parts.append("uicontrol=\(root is UIControl)")
+
+    if let control = root as? UIControl {
+        var events: [String] = []
+        for (event, label) in eeveeFireEvents {
+            let targets = control.allTargets.compactMap { target -> String? in
+                let actions = control.actions(forTarget: target, forControlEvent: event) ?? []
+                guard !actions.isEmpty else { return nil }
+                // `allTargets` 是 `Set<AnyHashable>` ⇒ 先当 `AnyObject` 再取动态类名
+                //（直接 `type(of: target)` 会得到 `AnyHashable.Type`，不是 `AnyClass`）。
+                let object = target as AnyObject
+                return "\(NSStringFromClass(type(of: object))).\(actions.joined(separator: "+"))"
+            }
+            if !targets.isEmpty {
+                events.append("\(label)=\(targets.joined(separator: "|"))")
+            }
+        }
+        parts.append("targets=[\(events.isEmpty ? "none" : events.joined(separator: ";"))]")
+    }
+
+    if let button = root as? UIButton {
+        parts.append("menu=\(button.menu == nil ? "nil" : "yes")")
+        parts.append("showsMenuAsPrimaryAction=\(button.showsMenuAsPrimaryAction)")
+    }
+
+    let gestures = (root.gestureRecognizers ?? []).map { NSStringFromClass(type(of: $0)) }
+    parts.append("gestures=[\(gestures.isEmpty ? "none" : gestures.joined(separator: ","))]")
+    let interactions = root.interactions.map { NSStringFromClass(type(of: $0 as AnyObject)) }
+    parts.append("interactions=[\(interactions.isEmpty ? "none" : interactions.joined(separator: ","))]")
+
+    var subs: [String] = []
+    var queue: [(view: UIView, depth: Int)] = root.subviews.map { ($0, 1) }
+    var visited = 0
+    while !queue.isEmpty, visited < 80, subs.count < 3 {
+        let (view, depth) = queue.removeFirst()
+        visited += 1
+        if let control = view as? UIControl {
+            var labels: [String] = []
+            for (event, label) in eeveeFireEvents where eeveeHasTargets(control, event) {
+                labels.append(label)
+            }
+            if !labels.isEmpty {
+                subs.append("\(NSStringFromClass(type(of: control))) [\(labels.joined(separator: "+"))]")
+            }
+        }
+        guard depth < 4 else { continue }
+        for sub in view.subviews { queue.append((sub, depth + 1)) }
+    }
+    parts.append("subControls=[\(subs.isEmpty ? "none" : subs.joined(separator: ","))]")
+
+    return parts.joined(separator: "; ")
 }
 
 func eeveeFireRecognizers(of view: UIView) -> String? {

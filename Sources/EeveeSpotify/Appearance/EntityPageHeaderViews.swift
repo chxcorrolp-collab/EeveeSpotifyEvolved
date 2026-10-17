@@ -46,6 +46,27 @@ final class EntityPageHeaderButton: UIControl {
     /// 日志里必须能分清他说的是哪一颗（见 `updateRow` 与 `tapped`）。
     var role = "side button"
 
+    /// ★★ 2026-10-18（用户：「如果未收藏艺人，点击收藏之后，按钮不会变绿，删除艺人之后，才会变绿」）：
+    /// **点击之后**再去读一次源控件的状态。
+    ///
+    /// 根因是时序：`tapped()` 第一句就 `refreshTint()`，而那一刻 Spotify **还没**把 Follow 的
+    /// "已关注"写上去 —— 于是读到的是**点击前**的旧状态；之后如果页面没有新的布局回合，
+    /// 这颗按钮就一直停在旧状态，直到下一次点击（于是"取消关注之后反而变绿"）。
+    /// 这里在转发之后排几次复查，让状态跟上来（`refreshArtistFollow` 还会一起换字形）。
+    var afterFire: (() -> Void)?
+
+    /// 复查节拍：Follow 是网络请求，0.2s 往往还没回来；3.0s 是最后兜底。
+    /// 只在按钮还挂在窗口上时执行（离开页面就不再打扰）。
+    private static let afterFireDelays: [TimeInterval] = [0.2, 0.7, 1.6, 3.0, 5.0]
+
+    /// `⋯` 的点击能力只打一次（见 `eeveeDescribeClickability`）—— 一次会话里够定位就行。
+    private static var didLogMoreClickability = false
+
+    /// 给调用方（`EntityPageHeaderView.updateFollow`）一个"立刻重读"的入口。
+    func refreshTintNow() {
+        refreshTint()
+    }
+
     /// ★★ 2026-10-16（用户：「歌单页右上角有一个**点不动的三点按键**」）：
     /// Spotify 那颗 `⋯` 是 `Encore.Button` 一族，菜单靠**它自己的交互**弹出来，不是 target/action ——
     /// 日志 100 逐字：`fired: UIControl.touchUpInside`（转发"成功"了，界面一动不动）。
@@ -164,6 +185,14 @@ final class EntityPageHeaderButton: UIControl {
             target = eeveeMaterialiseBio(from: self)
         }
         var scrolled = false
+        // ★★ 2026-10-18：右上角那颗 `⋯` 连续两版都"转发成功、界面不动" ⇒ 第一次点击时把它的
+        //    target/action、手势、`UIMenu`、子控件各有哪些**逐项打进日志**（只打一次）。
+        if role == "more", !Self.didLogMoreClickability {
+            Self.didLogMoreClickability = true
+            writeDebugLog(
+                "[EntityPageHeader] ⋯ clickability — \(eeveeDescribeClickability(target ?? source))"
+            )
+        }
         // ★ 2026-10-16：三档都带 `skippingControlAction` —— 右上角那颗 `⋯` 靠它跳过"送 target/action"
         //   那一档（Spotify 的 `⋯` 不吃 `sendActions`，见 `skipsControlAction` 的说明）。
         var path = target == nil
@@ -183,6 +212,14 @@ final class EntityPageHeaderButton: UIControl {
                 : "NOTHING (the target is not built and the page has nothing to scroll)"
         }
 
+        // ★★ 2026-10-18：`⋯` 还有最后一档 —— **无障碍激活**。很多自绘控件（包括 Encore 的）
+        //    把"点一下"实现成 `accessibilityActivate()`（VoiceOver 用的就是这条），而 target/action
+        //    与手势都可能没有。只在前面几档全部落空时试，返回 true/false 都记进日志。
+        if role == "more", path.hasPrefix("NOTHING"), let target {
+            let activated = target.accessibilityActivate()
+            path += activated ? " | accessibilityActivate=true" : " | accessibilityActivate=false"
+        }
+
         // ⚠️ 不要在这些字符串**插值里写引号**：`swift_member_check.py` 的去字符串扫描器会提前
         //    收尾、把剩下的英文当裸标识符误报（2026-10-17 踩过，见 `EntityPageStatusBar`）。先拼好。
         let kind = (target ?? source).map { NSStringFromClass(type(of: $0)) } ?? "-"
@@ -192,6 +229,18 @@ final class EntityPageHeaderButton: UIControl {
             "[EntityPageHeader] \(role) tapped — class \(kind), uicontrol=\(isControl),"
                 + " scrolledIntoView=\(scrolled), fired: \(path); \(signals)"
         )
+
+        // ★★ 2026-10-18：点击之后源控件的状态才变（Follow 最明显，见 `afterFire`）。
+        //    别只靠"下一次布局回合"——艺人页关注之后不一定还会布局一次。
+        if let afterFire {
+            for delay in Self.afterFireDelays {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self, self.window != nil else { return }
+                    self.refreshTint()
+                    afterFire()
+                }
+            }
+        }
     }
 
     override func layoutSubviews() {
@@ -219,7 +268,14 @@ final class EntityPageHeaderButton: UIControl {
     }
 }
 
-/// 白色的 Play 胶囊（Music app 那颗）。字形同样镜像 Spotify 的 Play。
+/// 中间那颗播放键。**和左右两颗同一套**：透明玻璃圆 + 白描边线条字形。
+///
+/// ★★ 2026-10-18（用户：「回退点击播放按键的播放按钮变透明的设计（设计成和旁边那两个按键
+///    一样的透明背景，只有线条吧）」）：
+///    这颗原来是**实心白圆盘 + 黑色实心/中空三角形**（照片 138），两侧却是 44pt 的浅色玻璃圆 +
+///    白色线条字形 —— 同一行三颗，只有中间那颗像块补丁。现在把白底去掉、玻璃圆留下，
+///    字形改成**白色中空三角**（`eeveeHollowPlayTriangle`），三颗的材质、描边与字形粗细一致。
+///    ⚠️ 玻璃仍是 `eeveeMakeLightGlassView`（和两侧同一个函数），不是为了"半透明白"另写一套。
 final class EntityPageHeaderPlay: UIControl {
 
     /// 中空三角形按多大画（圆形态给的是 52pt 的画布，见 `layoutSubviews`；缩放交给 `contentMode`）。
@@ -228,23 +284,21 @@ final class EntityPageHeaderPlay: UIControl {
     private let glyphView = UIImageView()
     private let wordLabel = UILabel()
     private weak var source: UIView?
-    /// 胶囊里那片玻璃（见 `init`）。
+    /// 圆形里那片玻璃（见 `init`）。
     private var glass: UIVisualEffectView?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        // ★ 2026-10-13（用户看真机：「播放那个不是液态玻璃」）：pw 的 `SGRPlayCapsule` 是
-        //   **白底 + 里面再嵌一片玻璃**（v0.21.1 的 `SGRGlassCapsuleInside(self, &kCapsuleGlassKey,
-        //   bounds.size, YES)`，interactive 打开），所以这里照做：白底留一点透明（让玻璃有东西
-        //   可折射：底下的封面与取色底），玻璃嵌在最底层，字形与文字保持黑色（浅玻璃上才读得清）。
-        //   iOS 26 以下拿不到 `UIGlassEffect` 时退浅色材质 —— 见 `eeveeMakeLightGlassView`。
-        backgroundColor = UIColor.white.withAlphaComponent(0.9)
+        // 透明背景：底下的封面 / 取色底直接透出来，靠玻璃圆与白线字形保持可读性
+        //（两侧那两颗就是这么做的，见 `EntityPageHeaderButton.init`）。
+        backgroundColor = .clear
         layer.masksToBounds = true
         _ = eeveeInsertGlass(in: self, interactive: true)
         glass = subviews.first as? UIVisualEffectView
 
         glyphView.contentMode = .scaleAspectFit
-        glyphView.tintColor = .black
+        // 两侧字形用的是 `.label`（深色界面上就是白）—— 中间这颗跟它们走，不再用黑色。
+        glyphView.tintColor = .label
         // ★★ 2026-10-18（用户：「这中间的播放按键三角形没做成透明的」，照片 138 逐字：那颗 ▶ 还是
         //    实心黑）：**不再用 `play.fill`**，改画我们自己的中空三角形（见 `eeveeHollowPlayTriangle`）。
         glyphView.image = eeveeHollowPlayTriangle(side: Self.hollowGlyphSide)
@@ -254,7 +308,7 @@ final class EntityPageHeaderPlay: UIControl {
 
         wordLabel.text = "am_header_play".localized
         wordLabel.font = .systemFont(ofSize: 17, weight: .semibold)
-        wordLabel.textColor = .black
+        wordLabel.textColor = .label
         wordLabel.textAlignment = .center
         addSubview(wordLabel)
 
@@ -322,11 +376,10 @@ final class EntityPageHeaderPlay: UIControl {
         let isCircle = abs(bounds.width - bounds.height) < 8
         if wordLabel.isHidden != isCircle { wordLabel.isHidden = isCircle }
 
-        // 形状决定底色：AM 那颗是**纯白**（照片 113 里我们这颗是"白 90% + 玻璃" ⇒ 在亮照片上
-        // 灰得看不出来）；胶囊形态仍留一点透明，好让底下的封面透出来（pw 的做法）。
-        let wanted: UIColor = isCircle ? .white : UIColor.white.withAlphaComponent(0.9)
-        if backgroundColor != wanted { backgroundColor = wanted }
-        glass?.alpha = isCircle ? 0 : 1
+        // ★★ 2026-10-18：**不再有白底**。两种形态都只留玻璃圆 + 线条字形，
+        //    与左右两颗完全同材质（见类型说明）——所以这里连"圆形纯白 / 胶囊白 90%"那条分支一起删了。
+        if backgroundColor != .clear { backgroundColor = .clear }
+        glass?.alpha = 1
 
         // [字形][6pt][Play] 整体居中（圆形态里只剩字形，自然就是居中的）
         // ★★ 2026-10-06（用户：「播放按钮里面的按键**不够大**」）：圆形态 44 → **52**
@@ -468,6 +521,26 @@ final class EntityPageHeaderView: UIView {
             control.isHidden = !shown
             setNeedsLayout()
         }
+    }
+
+    /// ★★ 2026-10-18：右边那颗 Follow 点击之后要**重新读一次**状态并换字形/描边。
+    /// 由 `EntityPageHeaderManager` 在艺人页上装；别的页面不装（`afterFire` 保持 nil）。
+    var onTrailingTapped: (() -> Void)? {
+        didSet { trailingButton.afterFire = onTrailingTapped }
+    }
+
+    /// 把"关 / 开"两档的兜底字形与绿色描边一起刷新（艺人页 Follow）。
+    ///
+    /// - Parameters:
+    ///   - followed: 状态读出来是"已关注"吗（`eeveeIsOn`）。
+    ///   - glyph: 这一档该画的兜底字形（`star` / `checkmark`）。
+    ///   - source: 当前那颗 Follow 控件（可能和上一拍不是同一个实例）。
+    func updateFollow(followed: Bool, glyph: UIImage?, source: UIView?) {
+        trailingButton.fallbackGlyph = glyph
+        trailingButton.prefersFallbackGlyph = !followed
+        // feed 里会调 refreshTint（即使源没变也先刷新颜色），字形在 `feed` 的早退之后保持上面那张兜底图。
+        if let source { trailingButton.feed(from: source) }
+        trailingButton.refreshTintNow()
     }
 
     /// ★★ 2026-10-17：**长按播放键 = 随机播放**（见 `EntityPageHeaderPlay.feedLongPress` 的说明）。

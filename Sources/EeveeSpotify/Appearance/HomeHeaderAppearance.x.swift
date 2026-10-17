@@ -51,7 +51,7 @@ import ObjectiveC.runtime
 ///      会原样写回 ⇒ 灰纱不会被"粘死"。
 ///    ⚠️ 为什么隐藏分支要排在 `isEnabled`（= `homeLargeTitle`）**之前**：设置页的三态是
 ///      「原样 = 两颗都 false / AM 式 = `homeLargeTitle == true` / **隐藏 = `hideHomeHeader == true`，
-///      `homeLargeTitle` 的值被忽略**」（`Settings/Sections/HomeLibrary/Views/HomeAndLibrarySettingsView.swift`
+///      `homeLargeTitle` 的值被忽略**」（`Settings/Sections/Pages/Views/PagesAppearanceSettingsView.swift`
 ///      文件头 + `HomeHeaderStyle`）。而那个选择器可以从「原样」（它会写 `homeLargeTitle = false`）
 ///      **直接切到「隐藏」** ⇒ `false + true` 不是历史值、是今天就到的组合；
 ///      隐藏行为若还看 `homeLargeTitle`，"顶部条没了、灰纱还在"就会在这个组合里复发。

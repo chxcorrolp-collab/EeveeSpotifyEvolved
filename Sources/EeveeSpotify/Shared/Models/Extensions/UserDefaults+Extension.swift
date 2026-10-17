@@ -55,6 +55,9 @@ extension UserDefaults {
     private static let amoledThemeKey = "amoledTheme"
     private static let accentColorRGBKey = "accentColorRGB"
     private static let entityPageAMHeaderKey = "entityPageAMHeader"
+    /// ★ 2026-10-18：艺人页那两格（见 `EntityPageHeaderManager.applyToArtistPage`）。
+    private static let artistHideListenersKey = "artistHideListeners"
+    private static let artistHideTabsKey = "artistHideTabs"
     private static let homeTileTintKey = "homeTileTint"
     private static let miniBarRoundArtworkKey = "miniBarRoundArtwork"
 
@@ -120,6 +123,8 @@ extension UserDefaults {
         amoledThemeKey,
         accentColorRGBKey,
         entityPageAMHeaderKey,
+        artistHideListenersKey,
+        artistHideTabsKey,
         homeTileTintKey,
         miniBarRoundArtworkKey,
 
@@ -430,6 +435,36 @@ extension UserDefaults {
         }
         set {
             container.set(newValue, forKey: entityPageAMHeaderKey)
+        }
+    }
+
+    /// ★ 2026-10-18（用户：「把那些分散的/未添加的艺人页的部分加上」）：
+    /// **艺人页的「每月有 x 名听众」那一行**要不要藏。默认**不藏**（保留信息）。
+    ///
+    /// 它只影响我们自绘的 AM 页头：原生那一行本来就被 `blankArtistChrome` 藏掉了，
+    /// 页头里显示的是我们从 `Components.Header.UI.Metadata` 读出来再画的一份。
+    static var artistHideListeners: Bool {
+        get {
+            container.object(forKey: artistHideListenersKey) as? Bool ?? false
+        }
+        set {
+            container.set(newValue, forKey: artistHideListenersKey)
+        }
+    }
+
+    /// ★ 2026-10-18：**艺人页的 Music / Video / Merch 标签栏**要不要藏（并让下面的列表上移）。
+    ///
+    /// 默认 **true** —— 这是 2026-10-17 以来一直的行为（照 pw 的 `ArtistField.x` 做的），
+    /// 这颗开关只是把它**变成可选**，不改变默认观感。关掉时 `applyToArtistPage` 会把
+    /// 原 `alpha` / 点击 / 分页滚动位置逐个写回（见 `restoreArtistStrip`）。
+    static var artistHideTabs: Bool {
+        get {
+            container.object(forKey: artistHideTabsKey) == nil
+                ? true
+                : container.bool(forKey: artistHideTabsKey)
+        }
+        set {
+            container.set(newValue, forKey: artistHideTabsKey)
         }
     }
 

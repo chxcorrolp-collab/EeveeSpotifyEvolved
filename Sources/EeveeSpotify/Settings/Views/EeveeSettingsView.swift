@@ -13,10 +13,16 @@ import UIKit
 ///   · 根页分**四组**（播放与歌词 / 外观 / 进阶 / 维护），每一行都带**副标题**
 ///     （`NavigationSectionView.subtitle`）—— 一眼能看出这一行进去有什么；
 ///   · 那 8 个子页全部提到根页按语义归组，一步可达；
-///   · 「扩展」页里那 24 个开关按**页面**拆成四页：
+///   · 「扩展」页里那 24 个开关按**页面**拆成几页：
 ///     `NowPlayingSettingsView` / `TabBarAndMiniBarSettingsView` /
-///     `HomeAndLibrarySettingsView` / `EntityPageSettingsView`；
-///   · 四个新页各自带一颗「重置本页」（`SettingsResetSection`）。
+///     `PagesAppearanceSettingsView`；
+///   · 每个新页各自带一颗「重置本页」（`SettingsResetSection`）。
+///
+/// ★ 2026-10-18（用户：「外观 页有点乱，不如把 首页音乐库 和 专辑/歌单页 合在一起，
+///   然后把那些分散的/未添加的艺人页的部分加上」）：
+///   原来「首页与音乐库」与「专辑 / 歌单页」是**两个入口**，各自只有三四颗开关；而 AM 页头
+///   与取色底本来就同时管专辑 / 歌单 / **艺人**三页 ⇒ 艺人页被藏在「专辑 / 歌单页」的名字后面。
+///   现在两页合成 `PagesAppearanceSettingsView` 一页，见该文件头。
 ///
 /// ⚠️ 刻意**没有**跟上游那样加 logo 大标题：我们 bundle 里只有 `github.png`，
 /// 上游那个 `EeveeLogo.png` 不是本项目的素材（与 Spicy Lyrics 条款里"图片权利"是同一个坑）。
@@ -134,19 +140,14 @@ struct EeveeSettingsView: View {
                     imageSystemName: "rectangle.on.rectangle"
                 ) { AnyView(TabBarAndMiniBarSettingsView()) }
 
+                // ★ 2026-10-18：原「首页与音乐库」+「专辑 / 歌单页」两行合成这一行
+                //   （见 `PagesAppearanceSettingsView` 的文件头）。
                 settingsRow(
                     color: Color(hex: "#64D2FF"),
                     title: "home_and_library_title",
                     subtitle: "settings_sub_home_library",
-                    imageSystemName: "house.fill"
-                ) { AnyView(HomeAndLibrarySettingsView()) }
-
-                settingsRow(
-                    color: Color(hex: "#AF52DE"),
-                    title: "entity_page_section",
-                    subtitle: "settings_sub_entity_page",
-                    imageSystemName: "square.stack.3d.up.fill"
-                ) { AnyView(EntityPageSettingsView()) }
+                    imageSystemName: "rectangle.stack.fill"
+                ) { AnyView(PagesAppearanceSettingsView()) }
 
                 settingsRow(
                     color: Color(hex: "#64D2FF"),

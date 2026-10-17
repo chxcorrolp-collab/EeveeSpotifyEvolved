@@ -223,6 +223,17 @@ enum EntityPageAppearance {
         "AddToButton",
         "DownloadButton",
         "WatchFeedEntityExplorerButton",
+        // ★★ 2026-10-18（用户：「歌单页的那个**搜索歌单内歌曲框**还在」）：
+        //    歌单页的「在此页面上查找」搜索框不在页头里（`HeaderArtworkProbe` 的注释早就写了），
+        //    所以它一直躲过 `block.subviews` 那一轮。这里按 id 补进 chrome 名单 ——
+        //    三个名字分别对应：页头工具条里的搜索框、歌单搜索 VC 自己的搜索条、
+        //    以及页面级的通用搜索条。它们只在被 `hideChrome` 扫到的实体页上生效。
+        //    ⚠️ 只把 `alpha` 置 0（和本名单里别的项一样），**不折高度** —— 这一行到底该不该
+        //    留空档要等下一页的 `[HeaderProbe] page ids:` 定；`[PageRepaint] hid … chrome`
+        //    那一行会告诉我们到底命中了哪个 id。
+        "Toolbar.SearchField",
+        "PL.SearchViewController.SearchBar",
+        "Components.UI.SearchBar",
     ]
     private static var hiddenChrome: [(view: UIView, alpha: CGFloat)] = []
     private static var hiddenChromeViews: Set<ObjectIdentifier> = []

@@ -15,9 +15,8 @@
 //     · `tab_bar_glass_section` 3 颗 + `mini_bar_glass_section` 1 颗
 //         → `Settings/Sections/TabBar/Views/TabBarAndMiniBarSettingsView.swift`
 //     · `declutter_home_player_section` 3 颗 + `library_section` + `home_section`
-//         → `Settings/Sections/HomeLibrary/Views/HomeAndLibrarySettingsView.swift`
 //     · `playlist_cover_section` 1 颗 + `entity_page_section` 2 颗
-//         → `Settings/Sections/EntityPage/Views/EntityPageSettingsView.swift`
+//         → 2026-10-18 起两页合成 `Settings/Sections/Pages/Views/PagesAppearanceSettingsView.swift`
 //
 //   子页入口（8 个，全部提到**根页**按语义归组，一步可达）：
 //     · 隐私与上报 / 触感 / Flag 覆盖 / 屏蔽艺人 / 减少打扰 → 根页「进阶」组

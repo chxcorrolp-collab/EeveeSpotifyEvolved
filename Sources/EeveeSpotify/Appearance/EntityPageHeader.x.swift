@@ -54,6 +54,8 @@ enum EntityPageHeaderManager {
     /// （`eeveeFindView(layout, "Components.Header.UI.ArtworkImage")` / `blockIn(layout,…)`）。
     private static var cachedCover: UIView?
     private static var cachedBlock: UIView?
+    /// ★ 2026-10-18：歌单页头里那个「在此页面上查找」搜索框（AM 页头接管后不该留着）。
+    private static var cachedFindField: UIView?
     /// ★ 2026-10-13（性能）：上一拍认下的那四个标签（见 `TextViews`）。
     private static var cachedTextViews: TextViews?
     /// 专辑页那条路（见 `applyToAlbumPage`）：头容器、封面、三个文字容器，以及"kind·日期那行晚到"
@@ -72,6 +74,42 @@ enum EntityPageHeaderManager {
     private static var cachedArtistFollow: UIView?
     /// 艺人页左边那颗 `i` 的转发目标：**艺人简介卡**（`CreatorBiographyCard`）。
     private static var cachedArtistBio: UIView?
+    /// ★★ 2026-10-18：Follow 点击后的延迟复查要用这两样（见 `refreshArtistFollow`）。
+    /// 都是**弱引用**：离开艺人页之后不该把整页留住。
+    private static weak var lastArtistPage: UIView?
+    private static weak var lastArtistHeaderView: EntityPageHeaderView?
+
+    /// ★ 2026-10-18：艺人页标签栏的**原值**记录（关开关时逐个写回）。
+    /// 视图一律弱引用 —— 离开艺人页之后不该把整页/滚动视图留住。
+    private final class ArtistStripPageState {
+        weak var scroll: UIScrollView?
+        let enabled: Bool
+        let transform: CGAffineTransform
+
+        init(scroll: UIScrollView) {
+            self.scroll = scroll
+            enabled = scroll.isScrollEnabled
+            transform = scroll.transform
+        }
+    }
+
+    private final class ArtistStripState {
+        weak var strip: UIView?
+        let alpha: CGFloat
+        let interactive: Bool
+        let accessibilityHidden: Bool
+        let pages: [ArtistStripPageState]
+
+        init(strip: UIView, pages: [ArtistStripPageState]) {
+            self.strip = strip
+            alpha = strip.alpha
+            interactive = strip.isUserInteractionEnabled
+            accessibilityHidden = strip.accessibilityElementsHidden
+            self.pages = pages
+        }
+    }
+
+    private static var artistStripState: ArtistStripState?
     /// ★★ 2026-10-18 第二轮：从页面根出发那条兜底搜索**每页只试两拍**（见 `applyToArtistPage`）——
     /// 这两个数就是它的记账（换页清零；主力是 `ArtistBiographyViewHook`）。
     private static weak var artistBioSearchPage: UIView?
@@ -502,6 +540,23 @@ enum EntityPageHeaderManager {
         // 所以**每一拍都要重新走一遍**。
         for sub in block.subviews where sub !== header { eeveeConceal(sub) }
 
+        // ★★ 2026-10-18（用户：「歌单页的那个**搜索歌单内歌曲框**还在」）：
+        //    「在此页面上查找」那颗搜索框在 **PL.Header 里、不在 block 里**（上游
+        //    `GlassPlaylist.x` 也是从 header 里找 `Components.Header.UI.Toolbar.SearchField`）
+        //    ⇒ 上面那轮 `block.subviews` 永远命不中。AM 页头接管后它不该留在页头，
+        //    这里单独藏一次（连它的圆底包装一起，走 `wrapperFor`）。
+        if let findField = find(
+            "Components.Header.UI.Toolbar.SearchField",
+            in: headerRoot,
+            cache: &cachedFindField
+        ) {
+            eeveeConceal(wrapperFor(findField, in: headerRoot))
+            logOnce(
+                "hidPlaylistFind",
+                "playlist page: hid Spotify's find-in-playlist field (it lives in PL.Header, not in the header block)"
+            )
+        }
+
         header.update(title: texts.title, creator: texts.creator, length: texts.length, about: texts.about)
 
         // ★ 五个挂点全部走缓存（pw 的 `SGRFindByIdentifier` 同一条纪律）：命中过就不再搜树。
@@ -773,7 +828,12 @@ enum EntityPageHeaderManager {
         applying = true
         defer { applying = false }
 
-        hideArtistTabStrip(in: page)
+        // ★ 2026-10-18：标签栏从"无条件藏"变成一颗开关（默认仍是藏，见 `UserDefaults.artistHideTabs`）。
+        if UserDefaults.artistHideTabs {
+            hideArtistTabStrip(in: page)
+        } else {
+            restoreArtistStrip()
+        }
 
         // 名字：pw 的树里那是 `UIView {16, 334}` 里的 `Encore.AdaptiveTitle`（45pt）；
         // 拿不到就退回"字号最大的那个标签"（与歌单页同一条兜底）。
@@ -815,6 +875,12 @@ enum EntityPageHeaderManager {
             header.bringSubviewToFront(headerView)
         }
         if headerView.frame != header.bounds { headerView.frame = header.bounds }
+        // ★★ 2026-10-18：Follow 状态复查要能找回"这一页 / 这个页头"（见 `refreshArtistFollow`）。
+        lastArtistPage = page
+        lastArtistHeaderView = headerView
+        if headerView.onTrailingTapped == nil {
+            headerView.onTrailingTapped = { EntityPageHeaderManager.refreshArtistFollow() }
+        }
         // ★★ 2026-10-17：**只有这一页的页头会缩**（520 → 100pt 的导航栏）⇒ 也只有这一页要那条
         //    "装不下就渐隐让位"。歌单/专辑页的页头是定高的，给它打开只会把整块内容弄没（照片 124）。
         headerView.fadesWhenTight = true
@@ -826,7 +892,13 @@ enum EntityPageHeaderManager {
         let cover = find("Components.Header.UI.ArtworkImage", in: header, cache: &cachedArtistCover)
         blankArtistChrome(in: header, avoiding: cover, skipping: headerView)
 
-        headerView.update(title: name, creator: "", length: meta, about: "")
+        // ★ 2026-10-18：月听众那行也做成开关（默认保留）。`meta` 仍算出来给日志用。
+        headerView.update(
+            title: name,
+            creator: "",
+            length: UserDefaults.artistHideListeners ? "" : meta,
+            about: ""
+        )
 
         // 三颗：shuffle / play / Follow。pw 从**页头**里找它们，但那一行会随 `ImageHeaderView`
         // 一起缩成 100pt 的导航栏，所以这里和专辑页一样：浮动控件按 `floatingIn` 从**页面**找，
@@ -945,6 +1017,60 @@ enum EntityPageHeaderManager {
         )
     }
 
+    /// ★★ 2026-10-18（用户：「点击收藏之后，按钮不会变绿，删除艺人之后，才会变绿」）：
+    /// **点击之后重新读一次 Follow 的状态**。
+    ///
+    /// 为什么不能只靠 `applyToArtistPage` 的下一拍：`tapped()` 里那次 `refreshTint()` 发生在
+    /// **转发之前**，读到的是点击前的旧状态；而 Spotify 更新关注状态**不保证**会让页头再布局一次
+    /// （用户看到的正是"点关注不变绿、再点取消反而变绿"——迟了一整次点击）。
+    ///
+    /// 由 `EntityPageHeaderButton.afterFire` 在点击后 0.2 / 0.7 / 1.6 / 3.0 / 5.0s 各叫一次：
+    /// 重新认一次控件（Spotify 可能整颗换掉）、读状态、换 `star` / `checkmark` 与绿色描边。
+    static func refreshArtistFollow() {
+        guard isEnabled else { return }
+        guard let page = lastArtistPage, page.window != nil,
+              let headerView = lastArtistHeaderView, headerView.window != nil else { return }
+
+        // ⚠️ **每次都重新认**（清掉缓存再搜）：Spotify 换关注状态时可能整颗 Follow 重建，
+        //    旧实例还挂在树上（只是被我们 blank 了）⇒ 只信缓存会一直读到"关注/已关注"的旧值。
+        //    一次点击最多搜 4 次，页头已建好；这比"状态永远差一拍"便宜得多。
+        cachedArtistFollow = nil
+        var follow: UIView?
+        if let header = artistHeaderContainer(in: page) {
+            follow = findControl(
+                "Curation.FollowButtonElementKit.FollowButton",
+                in: header,
+                cache: &cachedArtistFollow
+            ) ?? eeveeFindView(header, identifier: "FollowButton*").map { firstControl(in: $0) ?? $0 }
+        }
+        guard let follow else {
+            logOnce("followRefreshMissing", "follow state after tap — the Follow control is not in the tree")
+            return
+        }
+
+        cachedArtistFollow = follow
+        let followed = eeveeIsOn(follow)
+        headerView.updateFollow(
+            followed: followed,
+            glyph: UIImage(systemName: followed ? "checkmark" : "star"),
+            source: follow
+        )
+        logOnce(
+            "followRefresh-\(followed)",
+            "follow state after tap — followed=\(followed); \(eeveeOnSignals(follow))"
+        )
+    }
+
+    /// ★ 2026-10-18：设置页改了「艺人页」那两格之后，如果艺人页还在下面，**当场重跑一遍**。
+    ///
+    /// 设置页是盖在艺人页上的；它自己不一定会让下面的页面再布局一次。没有这一句的话，
+    /// 用户切完开关要退回去再滚一下才看得到变化（月听众那行尤其明显）。
+    static func reapplyArtistPageAppearance() {
+        guard isEnabled, !applying,
+              let page = lastArtistPage, page.window != nil else { return }
+        applyToArtistPage(page)
+    }
+
     /// 艺人页的页头容器：`TemplateKit` 的 `HeaderContainer`（**没有 accessibility id**，按类名认）。
     private static func artistHeaderContainer(in page: UIView) -> UIView? {
         var queue: [UIView] = [page]
@@ -1060,6 +1186,22 @@ enum EntityPageHeaderManager {
     /// 再把同层的分页 scroll 整体上移一格的高度、并关掉分页。
     static func hideArtistTabStrip(in page: UIView) {
         guard let strip = eeveeFindView(page, identifier: "Components.UI.TabsSectionHeading") else { return }
+
+        // 换了一页 / 旧记录已经失效 ⇒ 先把旧的写回去，再给这一条重新记原值。
+        if let state = artistStripState, state.strip !== strip {
+            restoreArtistStrip()
+        }
+        if artistStripState == nil {
+            var pages: [ArtistStripPageState] = []
+            if let parent = strip.superview {
+                for sibling in parent.subviews {
+                    guard let scroll = sibling as? UIScrollView else { continue }
+                    pages.append(ArtistStripPageState(scroll: scroll))
+                }
+            }
+            artistStripState = ArtistStripState(strip: strip, pages: pages)
+        }
+
         if strip.alpha != 0 { strip.alpha = 0 }
         if strip.isUserInteractionEnabled { strip.isUserInteractionEnabled = false }
         strip.accessibilityElementsHidden = true
@@ -1073,6 +1215,26 @@ enum EntityPageHeaderManager {
             if pages.transform != move { pages.transform = move }
         }
         logOnce("artistStrip", "artist page: the Music/Video/Merch strip is gone, the Music list moved up \(Int(lift))pt")
+    }
+
+    /// 关掉「隐藏 Music / Video / Merch 标签栏」时，把 `hideArtistTabStrip` 动过的每一格写回。
+    ///
+    /// ★ 2026-10-18：这颗开关默认是**开**（保持 2026-10-17 以来的观感）；关掉时必须能还原，
+    /// 否则用户只能重启 Spotify 才能看见标签栏。记录只存**原值**，不猜"应该是什么"。
+    static func restoreArtistStrip() {
+        guard let state = artistStripState else { return }
+        if let strip = state.strip {
+            strip.alpha = state.alpha
+            strip.isUserInteractionEnabled = state.interactive
+            strip.accessibilityElementsHidden = state.accessibilityHidden
+        }
+        for page in state.pages {
+            guard let scroll = page.scroll else { continue }
+            scroll.isScrollEnabled = page.enabled
+            scroll.transform = page.transform
+        }
+        artistStripState = nil
+        writeDebugLog("[EntityPageHeader] artist page: the Music/Video/Merch strip is back (the hide-tabs switch is off)")
     }
 
     /// 是不是**我们自己**插进 Spotify 视图树里的东西 —— 统一靠 id 前缀 `eevee-` 认。

@@ -1622,9 +1622,15 @@ func activateEntityPageHeader() {
     // ★★ 2026-10-18：Spotify 自己的「关于艺人」数据线（`SPTArtistAboutDataLoader`）——
     //    装得上就等于"一进页面就有**完整正文 + 真链接**"；装不上就退回界面读文字那条老路
     //    （走的是哪一条，日志里都写清楚）。
-    let aboutLoader = SPTArtistAboutDataLoaderHook.canInstall()
+    //    ⚠️ 探测在 `ArtistAboutDataLoaderProbe` 里、不在 hook 类里 —— Orion 不准 hook 类
+    //       带 `static func`（见那个 enum 的说明）。
+    let aboutLoader = ArtistAboutDataLoaderProbe.canInstall(
+        className: SPTArtistAboutDataLoaderHook.targetName
+    )
     if aboutLoader { ArtistAboutDataHookGroup().activate() }
-    let aboutEncoding = SPTArtistAboutDataLoaderHook.typeEncoding()
+    let aboutEncoding = ArtistAboutDataLoaderProbe.typeEncoding(
+        className: SPTArtistAboutDataLoaderHook.targetName
+    )
     writeDebugLog(
         "[EntityPageHeader] on — AM header \(EntityPageHeaderManager.isEnabled ? "ON" : "OFF"),"
             + " page look \(EntityPageAppearance.isEnabled ? "ON" : "OFF")"

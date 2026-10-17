@@ -120,24 +120,28 @@ struct ArtistBioCardHookGroup: HookGroup {}
 ///     ⇒ 类不在/换名 = 只是少这条线，绝不连累页头那一组。
 struct ArtistAboutDataHookGroup: HookGroup {}
 
-class SPTArtistAboutDataLoaderHook: ClassHook<NSObject> {
-    typealias Group = ArtistAboutDataHookGroup
-    static let targetName = "SPTArtistAboutDataLoader"
+/// `SPTArtistAboutDataLoader` 的**运行时形状探测**（装 hook 之前问一次）。
+///
+/// ⚠️ 必须放在 hook 类**外面**：Orion 的预处理会把 `ClassHook` 里的 `static func`
+/// 当成"类方法 hook"，直接报
+/// `A method hook/addition cannot be static. … If this is a helper function, declare it as private or fileprivate.`
+/// —— 而且是在生成 `EeveeSpotify.xc.swift` 那一步就拒绝，后面整条 make 全部连锁失败
+/// （2026-10-17 CI 实测）。标 `private` 能过 Orion，但那样又跨不了文件、`EntityPageHeader.x.swift`
+/// 里的调用点就取不到 ⇒ 只能搬到类外。守卫见 `Tools/eevee-hookfinder/orion_hook_guard.py` 规则 6。
+enum ArtistAboutDataLoaderProbe {
 
-    /// 装 hook 之前的**运行时形状核对** —— 把"签名不对就在调用时崩"变成"不装 + 一行日志"。
-    ///
+    /// 二进制的类 → 方法表里逐字的那两个名字（别改）。
+    static let selectorName = "fetchArtistAboutForArtist:withCompletion:"
+
     /// 判据只有两条，都从**真实方法**上读（不看我们的声明）：
     ///   · 选择器 `fetchArtistAboutForArtist:withCompletion:` 存在；
     ///   · 类型编码的**形状**对得上：`v`（void 返回）… `@?`（有一个块参数）。
     ///
     /// 真机上是 `v32@0:8@16@?24`（二进制的类 → 方法表逐字），这里只认形状、不认具体数字，
     /// 换一版 Spotify 只要仍是"对象 + 块"就继续装。
-    static func canInstall() -> Bool {
-        guard let cls = NSClassFromString(targetName),
-              let method = class_getInstanceMethod(
-                  cls,
-                  NSSelectorFromString("fetchArtistAboutForArtist:withCompletion:")
-              ),
+    static func canInstall(className: String) -> Bool {
+        guard let cls = NSClassFromString(className),
+              let method = class_getInstanceMethod(cls, NSSelectorFromString(selectorName)),
               let raw = method_getTypeEncoding(method) else {
             return false
         }
@@ -146,18 +150,22 @@ class SPTArtistAboutDataLoaderHook: ClassHook<NSObject> {
     }
 
     /// 运行时类型编码（只进日志，排障用）。
-    static func typeEncoding() -> String {
-        guard let cls = NSClassFromString(targetName),
-              let method = class_getInstanceMethod(
-                  cls,
-                  NSSelectorFromString("fetchArtistAboutForArtist:withCompletion:")
-              ),
+    static func typeEncoding(className: String) -> String {
+        guard let cls = NSClassFromString(className),
+              let method = class_getInstanceMethod(cls, NSSelectorFromString(selectorName)),
               let raw = method_getTypeEncoding(method) else {
             return "-"
         }
         return String(cString: raw)
     }
+}
 
+class SPTArtistAboutDataLoaderHook: ClassHook<NSObject> {
+    typealias Group = ArtistAboutDataHookGroup
+    static let targetName = "SPTArtistAboutDataLoader"
+
+    // ⚠️ 这个类里**只放 hook 方法**：任何 `static func` 都会让 Orion 拒绝生成，
+    // 形状探测那两条因此搬去了上面的 `ArtistAboutDataLoaderProbe`。
     func fetchArtistAbout(
         forArtist artist: AnyObject,
         withCompletion completion: @escaping (AnyObject?, Error?) -> Void

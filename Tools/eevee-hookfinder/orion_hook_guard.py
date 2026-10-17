@@ -15,7 +15,7 @@
   这些全是**同一个原因**的下游连锁 —— 很容易被误判成"Orion 宏坏了 / 注入没生效"，
   于是花时间去查构建系统。其实编译器说得没错：那个编译单元里根本没有这些类型。
 
-本脚本检查五件事（都是纯文本规则，不是编译器）：
+本脚本检查六件事（都是纯文本规则，不是编译器）：
   1. 用到 Orion 类型（HookGroup / ClassHook / IvarHook / FunctionHook …）的文件，
      必须有 `import Orion`；
   2. `ClassHook` 里 override 的方法体内必须调用 `orig.<同名>(...)` —— 不调等于把原实现吃掉；
@@ -28,6 +28,12 @@
   5. ★ 2026-10-13 新增：**hook 类不能是 `final` / `private` / `fileprivate`** ——
      Orion 要为它生成胶水子类，实测编译直接报
      `A class hook cannot be private, fileprivate, or final`（一次白跑 15 分钟的 IPA）。
+  6. ★ 2026-10-17 新增：**`ClassHook` 里不能有 `static func`**（辅助函数得标
+     `private` / `fileprivate`，或者搬出类外）。实测 Orion 的预处理器在生成
+     `EeveeSpotify.xc.swift` 那一步就拒绝：
+     `A method hook/addition cannot be static. … If this is a helper function, declare it
+     as private or fileprivate.` —— 后果是整条 make 连锁失败
+     （`SPTArtistAboutDataLoaderHook` 的两个探测函数就是这么炸的）。
 
 用法：
     python Tools/eevee-hookfinder/orion_hook_guard.py            # 扫 Sources/EeveeSpotify
@@ -123,10 +129,28 @@ def strip_comments_and_strings(src: str) -> str:
 
 
 def class_body(src: str, class_match: re.Match[str]) -> str:
-    """取这个 class 的大致范围（到下一个顶层声明为止）。"""
+    """取这个 class 的大致范围（到下一个顶层声明为止）。
+
+    ⚠️ 边界必须认**带修饰符的顶层声明**（`private enum` / `final class` / `@_cdecl func`…）：
+    2026-10-17 加规则 6 时实测，只认裸 `enum` 会让一个 hook 类的范围一直延伸进它下面的
+    `private enum`，把那个 enum 里的 `static func` 误报成"hook 类里的 static func"
+    （`RemoteFlagsHooks.x.swift` 当场一条假红）。
+    """
     rest = src[class_match.end():]
-    nxt = re.search(r"(?m)^(?:class|struct|enum|extension|func|let|var)\s", rest)
+    nxt = re.search(
+        r"(?m)^(?:@\w+[ \t]+)*"
+        r"(?:(?:public|internal|private|fileprivate|final|open|indirect)[ \t]+)*"
+        r"(?:class|struct|enum|extension|func|let|var|actor|protocol)\s",
+        rest,
+    )
     return src[class_match.start(): class_match.end() + (nxt.start() if nxt else len(rest))]
+
+
+# ── 规则 6 的判据：`ClassHook` 里的 `static func`（辅助函数必须 private / fileprivate）──
+STATIC_IN_HOOK = re.compile(
+    r"(?m)^[ \t]*(?P<attrs>(?:@\w+[ \t]+)*)"
+    r"(?P<vis>private[ \t]+|fileprivate[ \t]+)?static[ \t]+func[ \t]+(?P<name>\w+)"
+)
 
 
 def check_file(path: Path, defined_groups: set[str]) -> list[str]:
@@ -153,6 +177,20 @@ def check_file(path: Path, defined_groups: set[str]) -> list[str]:
                 "Orion 要为它生成胶水子类，编译会直接报 "
                 "`A class hook cannot be private, fileprivate, or final`；"
                 "去掉这些修饰符（`class " + name + ": ClassHook<…>`）"
+            )
+
+        # ── 规则 6：hook 类里不能有 `static func` ───────────────────────────
+        # Orion 把 hook 类里的 `static func` 当成"类方法 hook"，预处理器在生成
+        # `EeveeSpotify.xc.swift` 时就拒绝（`A method hook/addition cannot be static`），
+        # 后面整条 make 连锁失败。辅助函数只能标 `private` / `fileprivate`，或搬出类外。
+        for helper in STATIC_IN_HOOK.finditer(body):
+            if helper.group("vis"):
+                continue
+            problems.append(
+                f"{path}: {name} 里声明了 `static func {helper.group('name')}(…)` —— "
+                "Orion 会把它当成类方法 hook 并拒绝生成 xc.swift"
+                "（`A method hook/addition cannot be static`），整条 make 都会连锁失败；"
+                "辅助函数请标 `private` / `fileprivate`，或者搬到 hook 类外面"
             )
 
         for alias in GROUP_ALIAS.finditer(body):

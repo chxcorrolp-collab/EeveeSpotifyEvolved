@@ -40,20 +40,46 @@ A derivative work based on [EeveeSpotifyReincarnated](https://github.com/Sideloa
 > [!IMPORTANT]
 > After testing, this modified version can reliably display lyrics for every song on Spotify 9.1.88, including when the Genius fallback is enabled.
 
+## Features
 
 ### Lyrics
 
-- **Seven sources** — Spicy Lyrics, NetEase, AMLL, Musixmatch, PetitLyrics, LRCLIB and Genius.
-- You can also choose a **lyrics fallback chain**: `Musixmatch → PetitLyrics → LRCLIB → Genius`.
+- **Eight sources** — seven built-in ones (Spicy Lyrics, NetEase, AMLL, Musixmatch, PetitLyrics, LRCLIB and Genius), plus an **experimental** Apple Music official TTML source (Settings → Experiments; it needs your own `media-user-token`, because Apple has no public lyrics API).
+- **Fallback chain** — `Musixmatch → PetitLyrics → LRCLIB → Genius`, or AMLL first / Genius fallback, whichever you pick in the lyrics settings.
 - **Word-by-word karaoke** — real word timing, long-tone emphasis and interlude handling, not just line sync.
 - **Romanization** — Chinese, Korean and Japanese can be shown or hidden independently.
 
 ### Look and feel
 
-- In one sentence: make Spotify look like Apple Music (this feature is under development…)
+- The Apple Music page layout for album, playlist and artist pages: full-bleed cover, colour field, AM-style header.
+- A single cover for playlists instead of the four-up mosaic.
+- Liquid-glass tab bar and mini player.
 
-> [!TIP]
-> If unexpected issues occur on the Now Playing page, such as lyrics not showing or outdated song teaser cards, simply exit the Now Playing page and re-enter it to resolve the issue. (This only applies to users who have not enabled "Hide Spotify song Now Playing modules".)
+## Install
+
+Download the latest `.deb` from [Releases](https://github.com/zbzxbg/EeveeSpotifyEvolved/releases) if you are jailbroken, or build your own IPA (see [Building an IPA](#building-an-ipa-with-this-tweak)).
+
+| Install method | Artifact | Why |
+| --- | --- | --- |
+| Jailbroken | the `.deb` | `make package FINALPACKAGE=1`; rootless and RootHide variants are both published |
+| TrollStore | `-patched.ipa` | Not re-signed, entitlements intact; the shim is harmless and the Safari appex stays |
+| Paid certificate (1 year) | `-patched.ipa` | The profile covers the extra bundles, and the shim covers what re-signing breaks |
+| SideStore / AltStore / Sideloadly / leaked enterprise certificate (for free) | `.ipa` (no patch) | Those profiles usually have no wildcard, so the Watch app and native appex have to be stripped (`Tools/strip-ipa.sh`) |
+| LiveContainer | `.ipa` (no patch) | LiveContainer virtualises keychain, app groups and preferences itself; the shim on top conflicts |
+
+<details>
+<summary>Two installation details (the sideload shim, and the Orion runtime)</summary>
+
+Both IPA pipelines build the same tweak; the difference is whether `zxPluginsInject.dylib` is LC-injected. That dylib is a sideload shim — keychain access-group rebind, iCloud entitlement neutering, app-group `group.*` stubs — all of which only break when an app is re-signed by a different team. If a sideloaded build misbehaves around login or keychain, try the patched one — that is what the shim is for.
+
+**Orion runtime.** The `.deb` does not bundle `Orion.framework` — it declares `Depends: dev.theos.orion`, which your package manager resolves from <https://repo.theos.dev/> (add that repo, or the install fails with an unmet dependency). The IPA pipelines bundle the framework into the app instead, since a sideloaded app has no package manager to satisfy a dependency.
+
+</details>
+
+## Troubleshooting
+
+- **The CI stops at the `Build .deb` step.** While this project is under active development, the `.deb` packaging step in the IPA workflows (and in the deb release workflow) can fail on the current `main`. That is a known problem in the source at that moment, not something you did wrong. Wait a few hours, pull the latest repository and run the workflow again — or investigate it and fix it yourself (pull requests are welcome).
+- **Now Playing misbehaves** (lyrics not showing, or a stale "coming soon" card): leave the Now Playing page and enter it again. This only applies if you have not enabled "Hide Spotify song Now Playing modules".
 
 ## Versions
 
@@ -71,29 +97,15 @@ Development last updated: `2026/10/17`(build 154).
 - Minimum: iOS 16.1
 - Recommended: iOS 26 or later
 
-## Install
-
-Download the latest `.deb` from [Releases](https://github.com/zbzxbg/EeveeSpotifyEvolved/releases) if you are jailbroken, or build your own IPA below.
-
-| Install method | Artifact | Why |
-| --- | --- | --- |
-| Jailbroken | the `.deb` | `make package FINALPACKAGE=1`; rootless and RootHide variants are both published |
-| TrollStore | `-patched.ipa` | Not re-signed, entitlements intact; the shim is harmless and the Safari appex stays |
-| Paid certificate (1 year) | `-patched.ipa` | The profile covers the extra bundles, and the shim covers what re-signing breaks |
-| SideStore / AltStore / Sideloadly / leaked enterprise certificate (for free) | `.ipa` (no patch) | Those profiles usually have no wildcard, so the Watch app and native appex have to be stripped (`Tools/strip-ipa.sh`) |
-| LiveContainer | `.ipa` (no patch) | LiveContainer virtualises keychain, app groups and preferences itself; the shim on top conflicts |
-
-Both IPA pipelines build the same tweak; the difference is whether `zxPluginsInject.dylib` is LC-injected. That dylib is a sideload shim — keychain access-group rebind, iCloud entitlement neutering, app-group `group.*` stubs — all of which only break when an app is re-signed by a different team. If a sideloaded build misbehaves around login or keychain, try the patched one — that is what the shim is for.
-
-> [!NOTE]
-> **Orion runtime.** The `.deb` does not bundle `Orion.framework` — it declares `Depends: dev.theos.orion`, which your package manager resolves from <https://repo.theos.dev/> (add that repo, or the install fails with an unmet dependency). The IPA pipelines bundle the framework into the app instead, since a sideloaded app has no package manager to satisfy a dependency.
-
 ## Building an IPA with this tweak
+
+> [!WARNING]
+> The `Build .deb` step inside these workflows can fail while `main` is mid-development — see [Troubleshooting](#troubleshooting) before filing an issue.
 
 <details>
 <summary>CI (nothing installed locally), or a local build on macOS</summary>
 
-You supply your own decrypted Spotify IPA; this repository never ships one or says where to get one (see Reverse-engineered data and takedowns below).
+You supply your own decrypted Spotify IPA; this repository never ships one or says where to get one (see [Reverse-engineered data and takedowns](#reverse-engineered-data-and-takedowns) below).
 
 ### CI (nothing installed locally)
 
@@ -130,13 +142,14 @@ ALLOW_LIQUID_GLASS=0 ./build-ipa-local.sh /path/to/Spotify-vanilla.ipa
 
 Some of the modified features in this fork have been verified to work in this environment. (Because there are quite a few features, I can't test them all by myself.)
 
-
 ## Acknowledgements
 
 (The code from the following projects has been modified to fit this project.)
 
 - Thanks to [whoeevee](https://github.com/whoeevee) for creating the original EeveeSpotify project.
 - The Spicy Lyrics lyrics provider, as well as the logging and export functionality, comes from [SideloadLabs](https://github.com/SideloadLabs/EeveeSpotifyReincarnated).
+- The **Apple Music official TTML** source (Settings → Experiments) follows [`zhaarey/apple-music-downloader`](https://github.com/zhaarey/apple-music-downloader) for finding the web player's developer token (`internal/amp-api/token.go`), and [`dropcreations/Manzana-Apple-Music-Lyrics`](https://github.com/dropcreations/Manzana-Apple-Music-Lyrics) for the songs/lyrics endpoints (`api/api.py`).
+- Lyrics are fetched at runtime from their providers — Spicy Lyrics, NetEase, AMLL, Musixmatch, PetitLyrics, LRCLIB, Genius and Apple Music; none of their content is bundled.
 - The inspiration for the karaoke lyrics and interludes came from [MeloX](https://github.com/youshen2/MeloX).
 - The liquid glass-related design was inspired by [spoti.pw](https://spoti.pw). Code from v0.21.1 and earlier (GPL-3.0, © Vojtěch Škopek) is used; the full notice is available in-app under "Licenses". v0.22.0+ is PolyForm Strict: none of its source code was read or reused.
 - The layout design of the Now Playing page and the main pages was inspired by [kumone](https://github.com/missuo/kumone).
@@ -146,6 +159,11 @@ Some of the modified features in this fork have been verified to work in this en
 
 This project interoperates with Spotify's iOS client, which means parts of it were derived from a locally decrypted copy of that client. So that there is no ambiguity about what is (and is not) included in this repository:
 
+**In short:** this repository contains derived *technical identifiers* and the scripts that regenerate them. It contains no Spotify binary, no decrypted `.ipa`, no audio or lyrics files, and no account credentials.
+
+<details>
+<summary>Full statement — what is here, and what will not be added</summary>
+
 **What is here.** Derived *technical identifiers* needed to attach to the client's own extension points: Swift/ObjC class names, feature-flag names and scopes, gRPC service paths, view-hierarchy inventories, and a few resolver-configuration snapshots (`.bnk`) — plus the reverse-engineering notes and scripts used to derive them (`Tools/eevee-hookfinder/`). All of it can be regenerated from a copy you supply yourself — see `Scripts/dump-spotify-symbols.py`.
 
 **What is not here, and will not be added.**
@@ -154,6 +172,8 @@ This project interoperates with Spotify's iOS client, which means parts of it we
 - No lyrics files: lyrics are fetched at runtime by the user's device from third-party providers, and none of their content is bundled.
 - No Spotify account credentials, tokens, or captured traffic.
 - No Spotify application binary and no decrypted `.ipa` — `*.ipa`, `Decrypted IPA/` and `Tweaked IPA/` are intentionally ignored by git.
+
+</details>
 
 **If you are a rights holder** and want something removed, open an issue or contact the maintainer directly and it will be removed — no need for a formal takedown notice. The same applies to third-party projects credited in this document.
 

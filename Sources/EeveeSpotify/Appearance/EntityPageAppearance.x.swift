@@ -408,10 +408,23 @@ enum EntityPageAppearance {
         //    **进来先跑一拍**。定时器 0.6s 才响 ⇒ 那一帧里页面还是 Spotify 自己的黑底，
         //    然后我们的底才"跳"上来。先 tick 一次，取色底与页头就跟着第一帧一起出现。
         tick()
+        burstTicks()
         writeDebugLog(
             "[\(logTag)] armed — Melox page look \(UserDefaults.entityPageDissolve ? "ON" : "OFF"),"
                 + " hiding Spotify's repeated buttons \(UserDefaults.entityPageHideChrome ? "ON" : "OFF")"
         )
+    }
+
+    /// 进页 / 换页之后那 0.6 秒里的**补拍**。
+    ///
+    /// ★★ 2026-10-17（用户：图片 148/149「首次进入艺人页有 spotify 底子残留」）：定时器最早也要
+    /// 0.6s 才响，而页头与封面往往是那一拍**之后**才建出来 ⇒ 头 0.6 秒里页面一直是 Spotify 自己的
+    /// 底/原生页头（`tick()` 里那句"换页立刻再跑一次"只救了"换页那一刻"，救不了"内容稍后才到"）。
+    /// 这里补三拍，落在第一帧、半帧、第二帧附近，取色底与 wash 的遮蔽都跟着提前。
+    private static func burstTicks() {
+        for delay in [0.08, 0.22, 0.42] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { tick() }
+        }
     }
 
     private static func tick() {
@@ -442,6 +455,9 @@ enum EntityPageAppearance {
             // ★★ 2026-10-17（用户：图片 142「刚进入艺人页可能会有 spotify 的原黑色底」）：
             //    换页这一拍**立刻再跑一次**（`currentPage` 已更新 ⇒ 不会递归）。
             //    定时器最坏要等 0.6s，那一段里页面还是 Spotify 自己的黑底/原生页头。
+            //    ★ 2026-10-17 第三版：再加上头 0.6 秒里的补拍（`burstTicks`）——
+            //    新页面的封面/页头通常比这个"立刻"晚一点才建出来（用户：图片 148/149）。
+            burstTicks()
             tick()
             return
         }
@@ -451,6 +467,13 @@ enum EntityPageAppearance {
         //    见 `EntityPageSectionDrop.reportLikedSongsRowClassOnce`。它不依赖任何钩子，
         //    所以"钩子压根没被叫"那一支照样能给出下一步该挂哪个类（每页一次）。
         EntityPageSectionDrop.reportLikedSongsRowClassOnce(in: target.page)
+
+        // ★★ 2026-10-17 第三版（用户：图片 148/149「喜欢的歌曲 里面的那些**根据标签挑选歌曲** /
+        //    歌单页的**那四个设置**可以隐藏了」）：专辑 / 歌单页上把那两排藏掉。
+        //    见 `EntityPageCurationHide`（判据、日志、还原都在那一个文件里）。
+        if target.kind != .artist {
+            EntityPageCurationHide.apply(to: target.page)
+        }
 
         // ★★ 2026-10-18：**这一页的底色用哪个颜色**只算一次（底 / 照片的化开共用它）。
         let colour = pageColour(for: target)
@@ -1240,42 +1263,83 @@ enum EntityPageAppearance {
         //    ⇒ 专辑页（`CreativeWorkTemplateView`）的 wash 一旦不是那个形状（或不止一块），
         //    它就整块留着，压在我们的底上。
         //
-        //    现在：从页面往下**有界 BFS**（深 10 / 600 节点），凡是"在 HeaderView 子树上"的
-        //    `GradientView` 都藏掉（最多 8 块）；`eevee-` 前缀与我们自己的 field / scrim / hero
-        //    一律跳过 —— 那几块是**要显示**的。
+        // ★★★ 2026-10-17 第三版（**日志 111 的现场：图片 144 那条粉色还在**）：
+        //
+        //    `[PageField] album wash — concealed 1 GradientView(s) inside the page header` —— 藏了一块，
+        //    用户却照样看见那层色。两条结论：
+        //
+        //    ① **"在页头子树上"这个判据太窄**：真机树上专辑页的页头是
+        //       `UIView id=CreativeWorkPlatform.Components.UI.CreativeWorkHeader`（**类名就是 `UIView`**，
+        //       一个 `HeaderView` 都不含，日志 111 的 `[HeaderProbe] CreativeWorkHeader — …` 逐字），
+        //       歌单页那边是 `id=PL.Header`。按类名找"HeaderView"必然漏。
+        //    ② 于是判据改成**按 id** 或**按几何**：块宽 ≥ 页宽 85%、底边还在页面 80% 以内、
+        //       高度不超过整页 → 就是"页头那一大块色"，不管它挂在谁下面。
+        //
+        //    另外：这一趟现在**每次都把候选打进日志**（前 3 个：类名 / 帧 / 父类 / id），
+        //    下一份日志就能回答"到底是谁画的那层粉"，不用再猜。
+        let pageWidth = page.bounds.width
+        let pageHeight = page.bounds.height
+        let widthFloor = pageWidth * 0.85
+        let bottomCeiling = pageHeight * 0.8
+
         var queue: [(view: UIView, insideHeader: Bool, depth: Int)] = page.subviews.map { ($0, false, 1) }
         var visited = 0
         var taken = 0
+        var reported = 0
 
-        while !queue.isEmpty, visited < 600, taken < 8 {
+        while !queue.isEmpty, visited < 1000, taken < 6 {
             let (view, insideHeader, depth) = queue.removeFirst()
             visited += 1
 
             let name = NSStringFromClass(type(of: view))
             let identifier = view.accessibilityIdentifier ?? ""
-            let isHeaderRoot = name.contains("HeaderView") && !name.contains("NavigationBar")
+            // ① 页头：类名带 HeaderView，**或者 id 带 Header**（`CreativeWorkHeader` / `PL.Header`）。
+            let isHeaderRoot = (name.contains("HeaderView") && !name.contains("NavigationBar"))
+                || (identifier.contains("Header") && !identifier.contains("NavigationBar"))
             let inHeader = insideHeader || isHeaderRoot
 
-            if inHeader,
-               name.contains("GradientView"),
+            if name.contains("GradientView"),
                !identifier.hasPrefix("eevee-"),
                view !== field,
                view !== scrim,
                !(sharpHero.map { view === $0 } ?? false) {
-                concealWash(on: view)
-                taken += 1
-                continue
+                // ② 几何：整页宽的一条色带，而且还在页面上半部分。
+                let band = view.bounds.width >= widthFloor
+                    && view.bounds.height <= pageHeight * 0.9
+                let frame = view.convert(view.bounds, to: page)
+                let inTopHalf = frame.maxY > 1 && frame.maxY <= bottomCeiling
+                if inHeader || (band && inTopHalf) {
+                    if reported < 3 {
+                        reported += 1
+                        let parent = String(describing: type(of: view.superview ?? view))
+                        writeDebugLog(
+                            "[\(logTag)] wash candidate — \(name) \(frameDescription(frame))"
+                                + " id=\(identifier.isEmpty ? "-" : identifier) parent=\(parent)"
+                                + " header=\(inHeader)"
+                        )
+                    }
+                    concealWash(on: view)
+                    taken += 1
+                    continue
+                }
             }
 
-            guard depth < 10 else { continue }
+            guard depth < 12 else { continue }
             queue.append(contentsOf: view.subviews.map { ($0, inHeader, depth + 1) })
         }
 
         guard taken > 0, !didReportAlbumWash else { return }
         didReportAlbumWash = true
         writeDebugLog(
-            "[\(logTag)] album wash — concealed \(taken) GradientView(s) inside the page header"
+            "[\(logTag)] album wash — concealed \(taken) GradientView(s) (header subtree"
+                + " or a page-wide band in the top 80%)"
         )
+    }
+
+    /// 帧 → 日志里那种 `x,y,w,h`（整数，省得一行日志几百个字符）。
+    private static func frameDescription(_ frame: CGRect) -> String {
+        "\(Int(frame.minX.rounded())),\(Int(frame.minY.rounded())),"
+            + "\(Int(frame.width.rounded())),\(Int(frame.height.rounded()))"
     }
 
     /// pw 的 `applyBackground` 逐字：沿**封面的祖先链**找 id = `_backgroundViewContainer` 的容器，
@@ -1574,6 +1638,8 @@ enum EntityPageAppearance {
         // 状态栏还回 app 自己那一档（我们只在"这个页面的取色"这件事上有意见）。
         EntityPageStatusBar.release()
         restoreChrome(reason: reason)
+        // ★★ 2026-10-17：歌单页那排 pill / 「喜欢的歌曲」那排 chips 也要还回去（关开关 / 换页）。
+        EntityPageCurationHide.restore()
         field?.removeFromSuperview()
         field = nil
         if !clearedBackgrounds.isEmpty {

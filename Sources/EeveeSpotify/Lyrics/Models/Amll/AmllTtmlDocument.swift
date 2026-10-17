@@ -76,11 +76,32 @@ final class AmllTtmlNode {
     /// 给不支持 ruby 的渲染器看的括号。两者都不属于歌词正文。
     static let rubyAnnotationNames: Set<String> = ["rt", "rp"]
 
+    /// 只承载注音的 **`tts:ruby` 取值**（`text` = 注音文本本身，`textContainer` = 它的容器）。
+    ///
+    /// ★★ 2026-10-17：**AMLL 真正的 ruby 写法不是 `<ruby>/<rt>`，而是 `tts:ruby` 属性**
+    /// （官方文档 <https://amll.dev/guides/lyric/ttml> 的「Ruby 注音」一节）：
+    /// ```
+    /// <span tts:ruby="container">
+    ///   <span tts:ruby="base">所</span>
+    ///   <span tts:ruby="textContainer">
+    ///     <span tts:ruby="text" begin="00:27.690" end="00:27.820">しょ</span>
+    ///   </span>
+    /// </span>
+    /// ```
+    /// 不跳这两档，`text()` 会拼成 `所しょ詮せん`（正文混进读音）；更糟的是**时间只挂在
+    /// `tts:ruby="text"` 上**，所以 `parseTimedSpans` 会把"注音"当成歌词词条、把 base 丢掉
+    /// ⇒ 屏幕上整行变成一片假名读音（见 `AmllTtmlParser.rubySyllable(in:)`）。
+    static let rubyAnnotationStyles: Set<String> = ["text", "textContainer"]
+
+    /// 这个节点的 `tts:ruby` 取值（没有就是 nil）。`attribute("ruby")` 按 localName 取，前缀无关。
+    var rubyStyle: String? { attribute("ruby") }
+
     /// 递归拼接全部文本；`excludingRoles` 里的 role 子树整棵跳过。
     ///
-    /// ★ 2026-10-17：`<rt>` / `<rp>` 一并跳过（`AmllTtmlNode.rubyAnnotationNames`）。
-    /// 不跳它，正文会被拼成 `漢かん` —— 真机上就是那一行多出读音；逐词 span 里的读音
-    /// 也会一起进词条（高亮的字范围跟着偏）。
+    /// ★ 2026-10-17：`<rt>` / `<rp>` 与 `tts:ruby="text"/"textContainer"` 一并跳过
+    /// （`rubyAnnotationNames` / `rubyAnnotationStyles`）。
+    /// 不跳它们，正文会被拼成 `漢かん`（或 `所しょ`）—— 真机上就是那一行多出读音；
+    /// 逐词 span 里的读音也会一起进词条（高亮的字范围跟着偏）。
     ///
     /// ⚠️ 更正（2026-10-17 复核）：`Lyrics-Audit` 那份笔记里还写着"随后 mapper 的对齐
     /// 不变量会把那一行的逐词丢掉" —— **不成立**。`AmllLyricsMapper.wordTokens` 拿
@@ -91,6 +112,7 @@ final class AmllTtmlNode {
     func text(excludingRoles excludedRoles: Set<String> = []) -> String {
         if excludedRoles.contains(where: hasRole) { return "" }
         if AmllTtmlNode.rubyAnnotationNames.contains(localName) { return "" }
+        if let rubyStyle, AmllTtmlNode.rubyAnnotationStyles.contains(rubyStyle) { return "" }
         return contents.map { content in
             switch content {
             case .text(let text): return text

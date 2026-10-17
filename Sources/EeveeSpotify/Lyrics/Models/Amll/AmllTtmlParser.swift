@@ -283,9 +283,20 @@ enum AmllTtmlParser {
         let contents = parent.contents
 
         for index in contents.indices {
-            guard case .child(let span) = contents[index],
-                  span.localName == "span",
-                  !span.hasRole("x-translation"),
+            guard case .child(let span) = contents[index], span.localName == "span" else { continue }
+
+            // ★★ 2026-10-17：**ruby 注音容器**（`tts:ruby="container"`）单独处理 ——
+            //    它的正文（base）与注音都不带 begin/end，时间只挂在 `tts:ruby="text"` 上。
+            //    见 `rubySyllable(in:)` 与 `AmllTtmlNode.rubyAnnotationStyles`。
+            if span.rubyStyle == "container" {
+                guard var syllable = rubySyllable(in: span) else { continue }
+                syllable.text += trailingSeparator(after: index, in: contents)
+                guard !syllable.text.isEmpty else { continue }
+                result.append(syllable)
+                continue
+            }
+
+            guard !span.hasRole("x-translation"),
                   !span.hasRole("x-roman"),
                   !span.hasRole("x-bg"),
                   let startMs = parseTimeMs(span.attribute("begin")),
@@ -295,18 +306,59 @@ enum AmllTtmlParser {
             var text = span.text(excludingRoles: ["x-translation", "x-roman", "x-bg"])
 
             // 紧随其后的纯空白文本节点 → 并入本词（换行不算词间空格）。
-            if index + 1 < contents.count,
-               case .text(let separator) = contents[index + 1],
-               !separator.contains("\n"),
-               separator.allSatisfy(\.isWhitespace) {
-                text += separator
-            }
+            text += trailingSeparator(after: index, in: contents)
 
             guard !text.isEmpty else { continue }
             result.append(AmllTtmlSyllable(text: text, startMs: startMs, endMs: endMs))
         }
 
         return result
+    }
+
+    /// `index` 之后那个**纯空白文本节点**（换行不算词间空格，见 `parseTimedSpans`）。
+    private static func trailingSeparator(
+        after index: Int,
+        in contents: [AmllTtmlNode.Content]
+    ) -> String {
+        guard index + 1 < contents.count,
+              case .text(let separator) = contents[index + 1],
+              !separator.contains("\n"),
+              separator.allSatisfy(\.isWhitespace) else { return "" }
+        return separator
+    }
+
+    /// 一个 ruby 容器（`tts:ruby="container"`）→ **一个词条**：正文取 base、时间取注音的并集。
+    ///
+    /// AMLL 的 ruby 是 `tts:ruby` 属性（不是 HTML 的 `<ruby>/<rt>`），官方文档
+    /// <https://amll.dev/guides/lyric/ttml> 的「Ruby 注音」一节：
+    /// ```
+    /// <span tts:ruby="container">
+    ///   <span tts:ruby="base">所</span>
+    ///   <span tts:ruby="textContainer">
+    ///     <span tts:ruby="text" begin="00:27.690" end="00:27.820">しょ</span>
+    ///   </span>
+    /// </span>
+    /// ```
+    /// ⚠️ 不特判的话：容器自己没有 begin/end ⇒ 整段被跳过（**正文丢了**），而有时间戳的
+    ///    `tts:ruby="text"` 注音又不在 `<p>` 的直接子级里、不会被当词条 —— 但 `plainText`
+    ///    会把注音一起拼进来 ⇒ 用户看到的是「所しょ詮せん」这种正文混读音。
+    private static func rubySyllable(in container: AmllTtmlNode) -> AmllTtmlSyllable? {
+        // `text()` 已经跳过 `textContainer` / `text` ⇒ 这里拿到的就是 base 的正文。
+        let text = container.text().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+
+        var startMs = parseTimeMs(container.attribute("begin"))
+        var endMs = parseTimeMs(container.attribute("end"))
+        for node in container.descendants(where: { $0.rubyStyle == "text" }) {
+            if let begin = parseTimeMs(node.attribute("begin")) {
+                startMs = min(startMs ?? begin, begin)
+            }
+            if let end = parseTimeMs(node.attribute("end")) {
+                endMs = max(endMs ?? end, end)
+            }
+        }
+        guard let start = startMs, let end = endMs, end >= start else { return nil }
+        return AmllTtmlSyllable(text: text, startMs: start, endMs: end)
     }
 
     /// 解析背景人声子树。v1 只负责把内容取出来，拼到行尾的决策在 mapper 里。

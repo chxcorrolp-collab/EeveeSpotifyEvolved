@@ -100,6 +100,9 @@ petit_fallback_netease_description = "选项生效需要歌词来源选择为 Pe
 amll_fuzzy_search = "AMLL 模糊搜索";
 amll_fuzzy_search_description = "选项生效需要开启「AMLL 优先」或歌词来源选择 AMLL。选项开启后，AMLL 的歌词搜索会从精确搜索转换为模糊搜索；原有的高质量逐词时间轴与「只接受逐词歌词」的特色不会改变。";
 
+netease_cross_validation = "NetEase交叉验证";
+netease_cross_validation_description = "此选项开启后可能会缓解/解决非中国大陆用户使用 NetEase 歌词源时，NetEase 不会正确返回歌曲歌词的问题。但选项开启后会增加歌曲请求用时。";
+
 /* MARK: Premium PopUps */
 
 have_premium_popup = "看来您有一个真实有效的 Premium 订阅，因此此插件不会修补数据或限制 Premium 服务器端功能的使用。可以在 EeveeSpotify 设置中管理此操作。";

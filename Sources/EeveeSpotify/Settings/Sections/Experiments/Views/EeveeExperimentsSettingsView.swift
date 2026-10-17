@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// 「实验」页：只放**尚未真机定性**的功能（一律默认关，用户主动开）。
+/// 「实验」页：只放**尚未真机定性**的功能（默认关，用户主动开）。
 ///
 /// 准入三条（2026-10-17 与用户对齐）：
 ///   ① 还没在真机上验证过效果；
@@ -9,6 +9,13 @@ import UIKit
 ///   ③ 改完要重启或清缓存才生效。
 /// 三条里占一条才进来。**行为早已定性、只是"依赖外部"的开关不属于这里** ——
 /// 「分享到 LiveContainer」因此于 2026-10-17 搬到「杂项设定」（见 `EeveeMiscellaneousSettingsView`）。
+///
+/// ⚠️ **"默认关"有一个已记录的例外**：「NetEase 交叉验证」（2026-10-17）。
+///    它是**给非中国大陆 IP 的用户兜错歌**的，而"要不要它"取决于出口 IP 而不是
+///    用户看不看这一页 —— 默认关等于让唯一需要它的人永远发现不了它。
+///    默认值改成"地区或时区任一指向非中国大陆就默认开"，理由与代价权衡见
+///    `ExperimentsOptions.defaultNeteaseCrossValidation` 上方那段。
+///    其余实验仍然一律默认关，这条例外不外扩。
 struct EeveeExperimentsSettingsView: View {
     @State var experimentsOptions = UserDefaults.experimentsOptions
 
@@ -46,6 +53,19 @@ struct EeveeExperimentsSettingsView: View {
                 Toggle(
                     "amll_fuzzy_search".localized,
                     isOn: $experimentsOptions.amllFuzzySearch
+                )
+            }
+
+            // ★ 2026-10-17：NetEase 交叉验证。
+            //   开关本身只改一个 Bool —— 判据与执行全在
+            //   `NetEaseCrossValidation.swift` / `NeteaseCrossValidationRunner.swift`，
+            //   接在 `NeteaseLyricsRepository.getLyrics` 的选歌那一步上。
+            //   footer 里那句"会增加歌曲请求用时"是用户要求写进去的，也是真的：
+            //   只有**低置信度候选**才会去问裁判源（高置信度一律零开销）。
+            Section(footer: Text("netease_cross_validation_description".localized)) {
+                Toggle(
+                    "netease_cross_validation".localized,
+                    isOn: $experimentsOptions.neteaseCrossValidation
                 )
             }
         }

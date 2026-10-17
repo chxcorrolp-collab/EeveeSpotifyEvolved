@@ -30,6 +30,14 @@ class NeteaseLyricsRepository: LyricsRepository {
 
     static let shared = NeteaseLyricsRepository()
 
+    /// 「NetEase 交叉验证」开关的生效状态**每次启动只记一行**。
+    ///
+    /// 为什么要这一行：验证只在"低置信度候选"上触发，正常播放时一条 `verify` 日志都不会有 ——
+    /// 那就没法从日志判断"开关到底开上了没有"。把这句钉在第一次取词上，一行解决。
+    /// ⚠️ 写成 `private static var`（不是 `private(set) static var`）：`swift_member_check.py`
+    /// 的成员正则不认 `private(set)` 这种括号写法，会把它判成"类里没有这个成员"。
+    private static var didLogCrossValidationState = false
+
     private init() {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 15
@@ -834,6 +842,28 @@ class NeteaseLyricsRepository: LyricsRepository {
         return (out, matched)
     }
 
+    /// 把网易下发的**原始 LRC** 压成"用来做交叉验证的歌词行"。
+    ///
+    /// 不追求与最终渲染的行一一对应 —— 交叉验证比的是字符 n-gram 重合率，**不看行**。
+    /// 优先用 `parseLrc` 拿到的正文；解析不出来（网易的静态歌词没有 `[mm:ss]` 时间戳）
+    /// 就退化成"剥掉行首时间戳后的原始行"，让制作信息之类在归一化那一步自然消失。
+    ///
+    /// ⚠️ 必须用**原文**：拿译文或罗马音去比会天然不重合（`NeteaseCrossValidation`
+    /// 里那道 `script-mismatch` 只兜得住"整份都是罗马字"的情形）。
+    private func verificationLines(fromLrc lrc: String) -> [String] {
+        let parsed = parseLrc(lrc)
+        if !parsed.isEmpty {
+            return parsed.map { $0.content }
+        }
+        return lrc.components(separatedBy: .newlines).map { line in
+            line.replacingOccurrences(
+                of: "^\\s*\\[[^\\]]*\\]\\s*",
+                with: "",
+                options: .regularExpression
+            )
+        }
+    }
+
     // MARK: - LyricsRepository
 
     func getLyrics(_ query: LyricsSearchQuery, options: LyricsOptions) throws -> LyricsDto {
@@ -991,11 +1021,20 @@ class NeteaseLyricsRepository: LyricsRepository {
             return false
         }
 
-        var chosen: [String: Any]?
-        var chosenIndex = -1
-        var fallbackByDurationOnly: Int?
-        /// 那个"最差可用"候选的时长差（毫秒）—— 越小越像同一版录音。
-        var fallbackDelta = Int.max
+        // MARK: 候选排序（2026-10-17 重写：从"挑一个"改成"排一串"）
+        //
+        // 旧版在这里选出一个 `chosen` 就直接去取词。改成一串的原因只有一个：
+        // **交叉验证判错之后要能换下一条**（见下面的「交叉验证」段与
+        // `NetEaseCrossValidation.swift`）。手上只有"胜者"就没得换。
+        //
+        // 排序口径与旧版**完全一致**，只是把"只留第一名"改成"全留下"：
+        //   ① 歌名 + 歌手 + 时长三道闸门全过的，按相关度顺序排在最前；
+        //   ② 然后是"歌名 + 时长对、但歌手对不上／网易没给歌手名"的，**按 Δ时长升序**
+        //      —— 排序按地区变，而"哪一条和 Spotify 的时长最接近"跟地区无关。
+        var strictlyMatchedIndices: [Int] = []
+        var durationOnlyCandidates: [(index: Int, delta: Int)] = []
+        /// 拿不到 Spotify 时长（本地文件）时没有 Δ 可比 ⇒ 与旧行为一致，只记第一个。
+        var firstDurationOnlyWithoutDelta: Int?
 
         for (index, song) in songs.enumerated() {
             let durationOK: Bool
@@ -1012,8 +1051,7 @@ class NeteaseLyricsRepository: LyricsRepository {
 
             switch artistMatches(song) {
             case .some(true):
-                chosen = song
-                chosenIndex = index
+                strictlyMatchedIndices.append(index)
             case .some(false), .none:
                 // 标题对、时长对，但**歌手对不上**（翻唱 / 同曲异名）或**网易没给歌手名** ——
                 // 记下来当"最差可用"，优先继续找歌手也对得上的。
@@ -1024,31 +1062,25 @@ class NeteaseLyricsRepository: LyricsRepository {
                 //    这条兜底只在"歌手闸门也过不去"时才走（例如 Spotify 写 `Natsunose`、
                 //    网易写 `ナツノセ`，跨书写系统认不出来），所以它越确定越好。
                 if let spotifyDurationMs, let ms = candidateDuration(song) {
-                    let delta = abs(ms - spotifyDurationMs)
-                    if delta < fallbackDelta {
-                        fallbackDelta = delta
-                        fallbackByDurationOnly = index
-                    }
-                } else if fallbackByDurationOnly == nil {
-                    fallbackByDurationOnly = index
+                    durationOnlyCandidates.append((index, abs(ms - spotifyDurationMs)))
+                } else if firstDurationOnlyWithoutDelta == nil {
+                    firstDurationOnlyWithoutDelta = index
                 }
                 continue
             }
-            if chosen != nil { break }
         }
 
-        if chosen == nil, let index = fallbackByDurationOnly {
-            chosen = songs[index]
-            chosenIndex = index
-            writeDebugLog(
-                "[NetEase] title matched but artist did not — closest duration wins"
-                    + " (index \(index), Δ\(fallbackDelta == Int.max ? -1 : fallbackDelta)ms,"
-                    + " \(songs.count) results)"
-            )
+        // 把两条排序拼成一条有序候选表（见上面「候选排序」段的 ①②）。
+        var orderedCandidateIndices: [Int] = strictlyMatchedIndices
+        for candidate in durationOnlyCandidates.sorted(by: { $0.delta < $1.delta }) {
+            orderedCandidateIndices.append(candidate.index)
+        }
+        if let extra = firstDurationOnlyWithoutDelta {
+            orderedCandidateIndices.append(extra)
         }
 
-        // 还是选不出来 ⇒ 把前 8 条候选的标题/歌手/时长/两道闸门打进日志（只在失败时打）。
-        if chosen == nil {
+        // 一条都没过闸门 ⇒ 把前 8 条候选的标题/歌手/时长/两道闸门打进日志（只在失败时打）。
+        if orderedCandidateIndices.isEmpty {
             for (index, song) in songs.prefix(8).enumerated() {
                 let name = song["name"] as? String ?? "?"
                 let artists = candidateArtists(song).joined(separator: " / ")
@@ -1058,9 +1090,6 @@ class NeteaseLyricsRepository: LyricsRepository {
                         + " \(ms) title=\(titleMatches(song)) artist=\(artistMatches(song) ?? false)"
                 )
             }
-        }
-
-        guard let chosen else {
             if let spotifyDurationMs {
                 writeDebugLog(
                     "[NetEase] no candidate duration matches Spotify"
@@ -1072,6 +1101,114 @@ class NeteaseLyricsRepository: LyricsRepository {
             throw LyricsError.noSuchSong
         }
 
+        // 走到"最低一档"（歌手全对不上）时照旧报一句 —— 文案与旧版**逐字一致**，
+        // `Tools/log_triage.py` 与历史交接文档都认这一行。
+        if strictlyMatchedIndices.isEmpty, let firstIndex = orderedCandidateIndices.first {
+            let delta = durationOnlyCandidates
+                .first(where: { $0.index == firstIndex })?
+                .delta
+            writeDebugLog(
+                "[NetEase] title matched but artist did not — closest duration wins"
+                    + " (index \(firstIndex), Δ\(delta.map { "\($0)" } ?? "-1")ms,"
+                    + " \(songs.count) results)"
+            )
+        }
+
+        // MARK: 交叉验证（实验开关「NetEase 交叉验证」）
+        //
+        // 触发条件：**只在"三道闸门没有全过"的候选上验**（歌手对不上 / 网易没给歌手名）。
+        // 历史上所有错歌现场都是这一类（日志 45 的翻唱、日志 102 的 `TSUBAKI`、
+        // 日志 108 的 `Thank You — Royal 44`），而"歌名 + 歌手 + 时长都对得上"的候选
+        // 再验等于把每首歌的请求量翻几倍去确认一件几乎不会错的事 —— 那是白花的钱。
+        //
+        // 判错的处置：**不弃用 NetEase**，而是换下一条候选（用户看中它的 yrc 逐字 /
+        // 翻译 / 罗马音，换源等于赢了正确性、输了功能）。全换不出来才交下一个源。
+        let crossValidationEnabled = UserDefaults.experimentsOptions.neteaseCrossValidation
+        if !NeteaseLyricsRepository.didLogCrossValidationState {
+            NeteaseLyricsRepository.didLogCrossValidationState = true
+            writeDebugLog(
+                "[NetEase] cross-validation " + (crossValidationEnabled ? "ON" : "OFF")
+            )
+        }
+
+        var chosenIndex = -1
+        var chosenRaw: (lrc: String?, tlyric: String?, romalrc: String?)?
+        var chosenLrc = ""
+        var attempts = 0
+        var lastError: Error?
+
+        for index in orderedCandidateIndices {
+            // 防病态：候选表可能有上百条，而验证一次要花几个裁判请求 ⇒ 最多试 6 条。
+            guard attempts < 6 else {
+                writeDebugLog("[NetEase] gave up after \(attempts) candidate(s) — noSuchSong")
+                break
+            }
+            guard let songId = songId(from: songs[index]) else { continue }
+            attempts += 1
+
+            let raw: (lrc: String?, tlyric: String?, romalrc: String?)
+            do {
+                raw = try fetchLyricsRaw(songId: songId)
+            } catch {
+                // 第一条就取词失败 ⇒ 与旧行为一致，把错误**抛出去**（网络问题不该被吞成查无此歌）。
+                if attempts == 1 {
+                    writeDebugLog("[NetEase] Fetch lyrics error: \(error)")
+                    throw error
+                }
+                lastError = error
+                writeDebugLog("[NetEase] candidate[\(index)] fetch failed — skipping")
+                continue
+            }
+
+            guard let lrc = raw.lrc, !lrc.isEmpty else {
+                if attempts == 1 {
+                    writeDebugLog("[NetEase] No usable lyrics")
+                } else {
+                    writeDebugLog("[NetEase] candidate[\(index)] has no usable lyrics — skipping")
+                }
+                continue
+            }
+
+            // 「纯音乐，请欣赏」= 可信分类，没有歌词可比对 ⇒ 直接收下。
+            if lrc.contains("纯音乐") {
+                chosenIndex = index
+                chosenRaw = raw
+                chosenLrc = lrc
+                break
+            }
+
+            let isStrictlyMatched = strictlyMatchedIndices.contains(index)
+            if crossValidationEnabled, !isStrictlyMatched {
+                let outcome = NeteaseCrossValidationRunner.verify(
+                    query: query,
+                    options: options,
+                    neteaseLines: verificationLines(fromLrc: lrc)
+                )
+                if outcome.verdict == .reject {
+                    let name = songs[index]["name"] as? String ?? "?"
+                    let percent = String(format: "%.2f", outcome.overlap)
+                    writeDebugLog(
+                        "[NetEase] cross-validation rejected candidate[\(index)] \(name)"
+                            + " (arbiter=\(outcome.arbiterName), overlap=\(percent)) — trying next"
+                    )
+                    continue
+                }
+            }
+
+            chosenIndex = index
+            chosenRaw = raw
+            chosenLrc = lrc
+            break
+        }
+
+        guard let resolvedRaw = chosenRaw else {
+            if let lastError = lastError {
+                writeDebugLog("[NetEase] all candidates failed, last error: \(lastError)")
+            }
+            throw LyricsError.noSuchSong
+        }
+
+        let chosen = songs[chosenIndex]
         let chosenArtists = candidateArtists(chosen).joined(separator: " / ")
         let chosenDuration = candidateDuration(chosen).map { "\($0)ms" } ?? "?"
         writeDebugLog(
@@ -1089,16 +1226,12 @@ class NeteaseLyricsRepository: LyricsRepository {
             throw LyricsError.noSuchSong
         }
 
-        let raw: (lrc: String?, tlyric: String?, romalrc: String?)
-        do {
-            raw = try fetchLyricsRaw(songId: songId)
-        } catch {
-            writeDebugLog("[NetEase] Fetch lyrics error: \(error)")
-            throw error
-        }
+        let raw = resolvedRaw
+        // `chosenLrc` 在上面的候选循环里已经保证非空，所以这里不再重复 guard。
+        let lrc = chosenLrc
 
         // 网易「纯音乐，请欣赏」= 这首歌是纯音乐（可信分类）：直接返回纯音乐占位。
-        if let lrc = raw.lrc, lrc.contains("纯音乐") {
+        if lrc.contains("纯音乐") {
             writeDebugLog("[NetEase] Instrumental — returning empty lyrics")
             var dto = LyricsDto(lines: [], timeSynced: false, romanization: .original)
             // ★ 2026-10-11：**把"源说过这是纯音乐"记在 dto 上** —— 听歌页那层据此写
@@ -1106,12 +1239,6 @@ class NeteaseLyricsRepository: LyricsRepository {
             dto.isInstrumental = true
             lyricsCache.setObject(CachedLyrics(dto: dto), forKey: cacheKey as NSString)
             return dto
-        }
-
-        // 不把上游「空歌词 → 纯音乐占位」的 bug 带过来：没有可用歌词就抛查无此歌。
-        guard let lrc = raw.lrc, !lrc.isEmpty else {
-            writeDebugLog("[NetEase] No usable lyrics")
-            throw LyricsError.noSuchSong
         }
 
             var lines: [LyricsLineDto]

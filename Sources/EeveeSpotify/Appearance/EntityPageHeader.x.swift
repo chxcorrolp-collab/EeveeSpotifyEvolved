@@ -1353,39 +1353,49 @@ enum EntityPageHeaderManager {
         }
     }
 
-    /// 这一颗是不是"展开这一段"那颗 footer。
+    /// 这一颗是不是"**原地展开**这一段"那颗 footer。
     ///
-    /// ★ 2026-10-17（第二版）：原来只认 `accessibilityIdentifier` 里的 `ListSectionFooter.Button`，
-    ///   但 Encore 的 id 有时**只到组件名**（日志 109 的 `⋯` 就是 `id=Components.UI.ContextMenuButton`，
-    ///   后面没有编号）⇒ 放宽成"`ListSectionFooter` 就够"，再加一条**按字形文字**的兜底
-    ///   （多语言各写一条，与 `isPickHeading` 同一个思路）。
+    /// ★★ 2026-10-17（第三版，日志 111 的现场）：上一版把判据放宽成"文字里出现
+    ///   `显示全部 / show all / see all / すべて表示` 也算" —— **那是导航**，不是展开。
+    ///   日志 111 逐字（进艺人页 1 秒后，连点三颗）：
+    ///
+    /// ```
+    /// section expansion — activate.touchUpInside(…Encore…6Button9Secondary) on Components.UI.ListSectionFooter.Button
+    /// section expansion — activate.touchUpInside(…Encore…6Button8Tertiary) on Components.UI.NavigationButtonHome
+    /// section expansion — activate.touchUpInside(…Encore…6Button9Secondary) on Components.UI.ListSectionFooter.Button
+    /// ```
+    ///
+    /// 第二颗是**标签栏的主页键**（`NavigationButtonHome`），第三颗把页面**导航到了「全部歌曲」**
+    /// —— 用户的现场："进入的时候，是自动跳转 全部歌曲 这个东西的"。⇒ 判据收紧成三条：
+    ///
+    /// ① **必须**是 `ListSectionFooter` 那一族（id 里带这个词）—— 没有 id 的**一律不点**，
+    ///    这就是上一版误点主页键的来源（它当时只靠文字命中）；
+    /// ② 文字里要有"**更多**"（`更多 / more / もっと`）；
+    /// ③ 文字里**不能**有"**全部**"（`全部 / all / すべて`）—— 那是"去完整列表"，点了就离开这一页。
     private static func isSectionFooter(_ control: UIControl) -> Bool {
-        if (control.accessibilityIdentifier ?? "").contains("ListSectionFooter") { return true }
+        guard (control.accessibilityIdentifier ?? "").contains("ListSectionFooter") else { return false }
         // 文字两处都看：无障碍标签是一处，`UIButton.titleLabel` / 子树里的 UILabel 是另一处
         //（`eeveeControlText` 就是取后者 —— 自绘的 Encore 按钮往往只有它）。
-        let texts = [
+        let text = [
             control.accessibilityLabel ?? "",
             control.accessibilityValue ?? "",
             eeveeControlText(of: control),
-        ]
-        let needles = [
-            "显示更多", "显示全部", "展開",
-            "show more", "show all", "see more", "see all",
-            "もっと見る", "すべて表示",
-        ]
-        return texts.contains { text in
-            let lowered = text.lowercased()
-            guard !lowered.isEmpty else { return false }
-            return needles.contains { lowered.contains($0) }
-        }
+        ].joined(separator: " ").lowercased()
+        guard !text.isEmpty else { return false }
+        let expands = ["更多", "more", "もっと"].contains { text.contains($0) }
+        let navigates = ["全部", "all", "すべて"].contains { text.contains($0) }
+        return expands && !navigates
     }
 
-    /// 点一颗/几颗「显示更多」；**点到了返回 true**（调用方据此停止重试）。
+    /// 点最多**两颗**「显示更多」；**点到了返回 true**（调用方据此停止重试）。
+    ///
+    /// ⚠️ 上一版最多点 4 颗 —— 页面上恰好有两颗 footer 时会连着导航两次（见 `isSectionFooter`）。
+    /// 现在判据已经排除导航型，数量也收一半。
     private static func expandSectionFooters(in page: UIView) -> Bool {
         var found: [UIControl] = []
         var queue: [UIView] = [page]
         var visited = 0
-        while !queue.isEmpty, visited < 1200, found.count < 4 {
+        while !queue.isEmpty, visited < 1200, found.count < 2 {
             let view = queue.removeFirst()
             visited += 1
             if let control = view as? UIControl, isSectionFooter(control) {

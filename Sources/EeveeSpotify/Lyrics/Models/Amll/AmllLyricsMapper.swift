@@ -31,7 +31,13 @@ enum AmllLyricsMapper {
     /// - Parameter authorUsername: `AmllSongItem.primaryAuthorUsername`（歌词主要贡献者的 GitHub
     ///   用户名）。★ 2026-10-16：**AMLL 仓库 README 明确希望下游展示歌词作者**，而这一路
     ///   以前**只把它打进日志**、从来没进过署名 —— 用户看到的署名永远是裸的源名。
-    static func makeDto(_ parsed: AmllTtmlResult, authorUsername: String? = nil) -> LyricsDto {
+    /// - Parameter logTag: 日志前缀。默认 `AMLL`；Apple Music 官方 TTML 那条线传 `AMTTML`
+    ///   （同一个 mapper 被两个仓库复用，但日志里要能分清是哪条线在跑）。
+    static func makeDto(
+        _ parsed: AmllTtmlResult,
+        authorUsername: String? = nil,
+        logTag: String = "AMLL"
+    ) -> LyricsDto {
         var lines: [LyricsLineDto] = []
         var translations: [String] = []
 
@@ -39,7 +45,7 @@ enum AmllLyricsMapper {
         var wordLines: [[LyricsWordDto]?] = []
         var backgroundVocals: [LyricsBackgroundVocalDto?] = []
         for line in parsed.lines {
-            let tokens = wordTokens(for: line)
+            let tokens = wordTokens(for: line, logTag: logTag)
             // 行文本直接用 primaryText（解析层保证它**不含** x-bg），
             // 与 wordTokens 的自检口径一致：主词的拼接结果 == primaryText。
             let content = line.primaryText
@@ -87,10 +93,10 @@ enum AmllLyricsMapper {
             for index in lines.indices {
                 lines[index].words = wordLines[index]
             }
-            writeDebugLog("[AMLL] word-level coverage \(usableWordLines)/\(lines.count) — keeping words")
+            writeDebugLog("[\(logTag)] word-level coverage \(usableWordLines)/\(lines.count) — keeping words")
         } else {
             writeDebugLog(
-                "[AMLL] word-level coverage \(usableWordLines)/\(lines.count) below threshold — line-synced only"
+                "[\(logTag)] word-level coverage \(usableWordLines)/\(lines.count) below threshold — line-synced only"
             )
         }
 
@@ -102,7 +108,12 @@ enum AmllLyricsMapper {
             : .original
 
         if parsed.hasRomanization,
-           let replaced = applyOfficialRomanization(to: lines, parsed: parsed, languageCode: languageCode) {
+           let replaced = applyOfficialRomanization(
+               to: lines,
+               parsed: parsed,
+               languageCode: languageCode,
+               logTag: logTag
+           ) {
             lines = replaced
             romanization = .romanized
             languageCode = "ja"
@@ -119,7 +130,7 @@ enum AmllLyricsMapper {
             : nil
 
         writeDebugLog(
-            "[AMLL] mapped \(lines.count) line(s), translation=\(translation == nil ? "none" : "yes"), romanization=\(romanization)"
+            "[\(logTag)] mapped \(lines.count) line(s), translation=\(translation == nil ? "none" : "yes"), romanization=\(romanization)"
         )
 
         // ── 署名 ──────────────────────────────────────────────────────────
@@ -130,8 +141,9 @@ enum AmllLyricsMapper {
         //      · `providerCredit`（长）进注入 payload 的 `providedBy` / 页脚 —— 带上作者。
         var credit = ""
         if let author = authorUsername?.trimmingCharacters(in: .whitespacesAndNewlines), !author.isEmpty {
+            // ⚠️ 署名格式刻意固定成 "AMLL · @作者"（Apple Music 官方那条线不传作者 ⇒ 没有这一行）。
             credit = "AMLL · @\(author)"
-            writeDebugLog("[AMLL] credited to community author @\(author)")
+            writeDebugLog("[\(logTag)] credited to community author @\(author)")
         }
 
         return LyricsDto(
@@ -156,7 +168,7 @@ enum AmllLyricsMapper {
     ///   · 副唱与主词时间重叠 → 两者**同时**点亮，而不是顺序点亮
     ///   · 副唱里那些零时长 token（括号等）不再混进主词序列
     ///     —— 那正是「带括号的行整行降级为逐行」的根因
-    private static func wordTokens(for line: AmllTtmlLine) -> [LyricsWordDto]? {
+    private static func wordTokens(for line: AmllTtmlLine, logTag: String) -> [LyricsWordDto]? {
         var tokens: [LyricsWordDto] = []
 
         for syllable in line.syllables where !syllable.text.isEmpty {
@@ -179,7 +191,7 @@ enum AmllLyricsMapper {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard joined == expected else {
             writeDebugLog(
-                "[AMLL] content mismatch — tokens=\"\(joined.prefix(60))\" expected=\"\(expected.prefix(60))\" — dropping words for this line"
+                "[\(logTag)] content mismatch — tokens=\"\(joined.prefix(60))\" expected=\"\(expected.prefix(60))\" — dropping words for this line"
             )
             return nil
         }
@@ -225,15 +237,16 @@ enum AmllLyricsMapper {
     private static func applyOfficialRomanization(
         to lines: [LyricsLineDto],
         parsed: AmllTtmlResult,
-        languageCode: String?
+        languageCode: String?,
+        logTag: String = "AMLL"
     ) -> [LyricsLineDto]? {
         guard UserDefaults.standard.bool(forKey: japaneseRomanizationKey) else {
-            writeDebugLog("[AMLL] official romanization present, but Japanese romanization is off — keeping original")
+            writeDebugLog("[\(logTag)] official romanization present, but Japanese romanization is off — keeping original")
             return nil
         }
 
         guard isJapanese(parsed: parsed, languageCode: languageCode) else {
-            writeDebugLog("[AMLL] official romanization present, but song is not Japanese — keeping original")
+            writeDebugLog("[\(logTag)] official romanization present, but song is not Japanese — keeping original")
             return nil
         }
 
@@ -246,7 +259,7 @@ enum AmllLyricsMapper {
 
         guard pairs.count == lines.count else {
             writeDebugLog(
-                "[AMLL] official romanization line count mismatch (\(pairs.count) vs \(lines.count)) — discarding"
+                "[\(logTag)] official romanization line count mismatch (\(pairs.count) vs \(lines.count)) — discarding"
             )
             return nil
         }
@@ -269,11 +282,11 @@ enum AmllLyricsMapper {
 
         // 有过半的行拿到官方罗马音才采用（个别行缺 x-roman 可以接受，整首对不上就放弃）。
         guard covered > 0, covered * 2 >= lines.count else {
-            writeDebugLog("[AMLL] official romanization covers only \(covered)/\(lines.count) line(s) — discarding")
+            writeDebugLog("[\(logTag)] official romanization covers only \(covered)/\(lines.count) line(s) — discarding")
             return nil
         }
 
-        writeDebugLog("[AMLL] applied official romanization to \(covered)/\(lines.count) line(s)")
+        writeDebugLog("[\(logTag)] applied official romanization to \(covered)/\(lines.count) line(s)")
 
         // 官方罗马音是行级的、没有词级时间轴，替换后词级文本已不对应，整体丢弃。
         return replaced

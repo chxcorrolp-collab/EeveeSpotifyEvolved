@@ -15,6 +15,14 @@ enum LyricsSource: Int, CaseIterable, CustomStringConvertible {
     /// AMLL：提供高质量逐词歌词与丰富的歌词结构（amll.dev）。
     /// 追加在末尾，避免改变既有 rawValue。
     case amllTtml
+    /// Apple Music **官方** TTML（实验）。追加在末尾，避免改变既有 rawValue。
+    ///
+    /// ★ 2026-10-17：**刻意不出现在 `allCases` 里** —— 它不是用户在来源选择器里挑的一项，
+    ///   而是由「设置 → 实验 → 启用Apple Music官方TTML歌词」这个总开关**强制**启用的
+    ///   （那个开关的语义就是"忽略当前所有有关于歌词的设置"）。
+    ///   所以它只会在 `CustomLyrics.loadCustomLyricsForCurrentTrack` 的覆盖分支里出现，
+    ///   rawValue 也永远不会被写进 `lyricsSource` 这个 UserDefault。
+    case appleMusicOfficialTtml
     
     static var allCases: [LyricsSource] {
         return [.genius, .lrclib, .amllTtml, .musixmatch, .petit, .spicy, .netease, .multiLevel]
@@ -45,6 +53,9 @@ enum LyricsSource: Int, CaseIterable, CustomStringConvertible {
         return "ngzhwm_multi_level_fallback".localized
     case .amllTtml:
         return "AMLL"
+    case .appleMusicOfficialTtml:
+        // 这是**提供者署名**（注入 payload 的 `providedBy` / 页脚那一行），不是源选择器的标签。
+        return "Apple Music"
     }
     }
 

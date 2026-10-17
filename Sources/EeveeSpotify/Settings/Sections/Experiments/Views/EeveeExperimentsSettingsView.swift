@@ -19,6 +19,14 @@ import UIKit
 struct EeveeExperimentsSettingsView: View {
     @State var experimentsOptions = UserDefaults.experimentsOptions
 
+    /// 「启用Apple Music官方TTML歌词」那一栏的令牌输入框（见 `appleMusicTokenField()`）。
+    ///
+    /// 用 `@State` 而不是直接绑 `UserDefaults.appleMusicMediaUserToken`：那个 getter 带
+    /// `trimmingCharacters`，绑定到 `TextField` 会**一边输入一边 trim**，光标位置跟着乱跳
+    /// （粘贴含前后空格时尤其明显）。这里让输入框只认本地副本，落盘与"清 storefront 缓存"
+    /// 都在 `onChange` 里做。
+    @State private var appleMusicMediaUserToken = UserDefaults.appleMusicMediaUserToken
+
     var body: some View {
         List {
             // （「分享到 LiveContainer」2026-10-17 搬到「杂项设定」。理由见文件头的准入三条：
@@ -79,6 +87,26 @@ struct EeveeExperimentsSettingsView: View {
                     isOn: $experimentsOptions.spicyLyricsCrossValidation
                 )
             }
+
+            // ★★ 2026-10-17：Apple Music **官方** TTML（不是 AMLL 那份社区库）。
+            //   这是本页唯一一个「**总覆盖**」型开关 —— 打开后忽略当前所有有关于歌词的设置
+            //   （来源选择 / AMLL 优先 / Genius 回退 / 多级回退），失败也不兜底。
+            //   实现见 `AppleMusicOfficialTtmlLyricsRepository` 与
+            //   `CustomLyrics.loadCustomLyricsForCurrentTrack` 顶部那一段。
+            //
+            //   ⚠️ 它**必须**配一个 `media-user-token`：苹果没有公开的歌词 API，
+            //   搜索只要网页令牌（我们自动抓），但取词要用户自己的 Apple Music 登录态。
+            //   所以开关打开时才展开输入框 —— 没开的时候不占版面。
+            Section(footer: Text(appleMusicOfficialTtmlFooter)) {
+                Toggle(
+                    "apple_music_official_ttml".localized,
+                    isOn: $experimentsOptions.appleMusicOfficialTtml
+                )
+
+                if experimentsOptions.appleMusicOfficialTtml {
+                    appleMusicTokenField()
+                }
+            }
         }
         .onChange(of: experimentsOptions) { options in
             UserDefaults.experimentsOptions = options
@@ -95,5 +123,59 @@ struct EeveeExperimentsSettingsView: View {
                 // ★ 2026-10-12：inset-grouped（胶囊卡片）—— 为什么、怎么做的见 `EeveeSettingsView` 顶部那段
         .listStyle(InsetGroupedListStyle())
         .animation(.default, value: experimentsOptions)
+        // 令牌落盘 + 缓存失效（见上面 `appleMusicMediaUserToken` 的说明）。
+        .onChange(of: appleMusicMediaUserToken) { token in
+            // ⚠️ 先把旧值抓出来再写盘 —— 写完再比就永远相等了。
+            let previous = UserDefaults.appleMusicMediaUserToken
+            UserDefaults.appleMusicMediaUserToken = token
+
+            // 令牌变了 ⇒ 账号可能也变了（storefront / 默认语言都会变）：
+            // 把 `accountContext` 那份缓存清掉，下一首重新问一次 `/v1/me/storefront`。
+            if token != previous {
+                writeDebugLog("[AMTTML] media-user-token changed — storefront cache dropped")
+                AppleMusicOfficialTtmlLyricsRepository.invalidateAccountCache()
+            }
+        }
+    }
+
+    /// 开关下方那段说明：开关关闭时只讲"这是什么"，打开后再追加"怎么拿令牌"。
+    private var appleMusicOfficialTtmlFooter: String {
+        var text = "apple_music_official_ttml_description".localized
+
+        if experimentsOptions.appleMusicOfficialTtml {
+            text.append("\n\n")
+            text.append("apple_music_official_ttml_token_hint".localized)
+        }
+
+        return text
+    }
+
+    /// `media-user-token` 输入框（开关打开时才出现）。
+    ///
+    /// ⚠️ 它是**账号级凭据**：不内置、不外传，只存在本机的 UserDefaults 里
+    /// （见 `AppleMusicTtml+UserDefaults.swift` 开头那段"为什么必须用户自己粘"）。
+    @ViewBuilder private func appleMusicTokenField() -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("apple_music_official_ttml_token".localized)
+
+            TextField(
+                "apple_music_official_ttml_token_placeholder".localized,
+                text: $appleMusicMediaUserToken
+            )
+            .foregroundColor(.gray)
+            .autocapitalization(.none)
+            .disableAutocorrection(true)
+            .lineLimit(1)
+
+            if !UserDefaults.hasAppleMusicMediaUserToken {
+                Label(
+                    "apple_music_official_ttml_token_missing_inline".localized,
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.footnote)
+                .foregroundColor(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

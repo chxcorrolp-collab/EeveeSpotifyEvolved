@@ -10,10 +10,13 @@ var hasShownRestrictedPopUp = false
 var hasShownUnauthorizedPopUp = false
 /// 「SpicyLyrics 的 key 被拒」弹窗只弹一次。见 `handleLyricsErrorPopUp`。
 var hasShownSpicyKeyPopUp = false
+/// 「Apple Music 官方 TTML 缺令牌 / 令牌失效」弹窗只弹一次。见 `handleLyricsErrorPopUp`。
+var hasShownAppleMusicTokenPopUp = false
 
 private let geniusLyricsRepository = GeniusLyricsRepository()
 private let petitLyricsRepository = PetitLyricsRepository()
 private let amllTtmlLyricsRepository = AmllTtmlLyricsRepository.shared
+private let appleMusicTtmlLyricsRepository = AppleMusicOfficialTtmlLyricsRepository.shared
 
 /// 「这一次我们向哪个源要的歌词」——**失败**时占位 payload 的署名要用它。
 ///
@@ -50,6 +53,8 @@ private func lyricsRepository(for source: LyricsSource) -> LyricsRepository {
         return NeteaseLyricsRepository.shared
     case .amllTtml:
         return amllTtmlLyricsRepository
+    case .appleMusicOfficialTtml:
+        return appleMusicTtmlLyricsRepository
     case .notReplaced, .multiLevel:
         // Never actually reached — callers filter these out beforehand.
         return geniusLyricsRepository
@@ -100,6 +105,21 @@ private func handleLyricsErrorPopUp(_ error: LyricsError?) {
             hasShownSpicyKeyPopUp = true
         } else {
             writeDebugLog("[Lyrics] popup: SpicyLyrics key rejected (already shown once — suppressed)")
+        }
+    case .missingAppleMusicToken, .invalidAppleMusicToken:
+        // 「实验 → 启用Apple Music官方TTML歌词」要靠用户自己粘的 `media-user-token`。
+        // 没填 / 过期都属于"配置问题"，与"这首歌没词"完全两回事 ——
+        // 只弹一次，否则每切一首歌都弹一遍。
+        if !hasShownAppleMusicTokenPopUp {
+            writeDebugLog("[Lyrics] popup: Apple Music media-user-token missing/invalid (first time — showing)")
+            PopUpHelper.showPopUp(
+                delayed: false,
+                message: "apple_music_token_popup".localized,
+                buttonText: "OK".uiKitLocalized
+            )
+            hasShownAppleMusicTokenPopUp = true
+        } else {
+            writeDebugLog("[Lyrics] popup: Apple Music token problem (already shown once — suppressed)")
         }
     default:
         break
@@ -162,6 +182,37 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
     // 两条分支都会在真正发请求之前写回它（单源在 `requestSingleSource` 入口，
     // 多级回退在下面那一行）。
     lastRequestedLyricsSourceDescription = ""
+
+    // ★★ 2026-10-17「设置 → 实验 → 启用Apple Music官方TTML歌词」（默认关）：
+    //
+    //   这是一个**总覆盖**开关 —— 打开后这一首**只**问 Apple Music 官方 TTML，
+    //   上面那些设置**一个都不看**：
+    //     · 歌词来源（`UserDefaults.lyricsSource`）；
+    //     · 「AMLL 优先」、「Genius 回退」；
+    //     · 「多级回退」那条链；
+    //     · 各来源自己的配置（Spicy key / Musixmatch 令牌 / LRCLIB 地址 …）；
+    //     · 本文件里那两个实验（PetitLyrics→NetEase、AMLL 模糊搜索）。
+    //   失败也**不兜底**：不切到用户选的源、不兜 Genius —— 这正是设置页那句
+    //   "选项开启后可能会忽略当前所有有关于歌词的设置"的字面语义。
+    //
+    //   ⚠️ 放在 `var source = ...` **之前**：一旦打开，连 `lyricsSource` 都不必读，
+    //   "禁用歌词替换"（`.notReplaced`）也被覆盖（用户明确要的是"忽略全部歌词设置"）。
+    if UserDefaults.experimentsOptions.appleMusicOfficialTtml {
+        writeDebugLog(
+            "[Lyrics] Experiment ON: Apple Music official TTML —"
+                + " every other lyrics setting is ignored for this track"
+        )
+
+        let result = try requestSingleSource(
+            .appleMusicOfficialTtml,
+            searchQuery: searchQuery,
+            options: options,
+            recordFallbackError: true,
+            allowGeniusFallback: false
+        )
+
+        return makeLyrics(from: result.dto, source: result.source)
+    }
 
     var source = UserDefaults.lyricsSource
 
@@ -646,9 +697,14 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
     ///   · 「隐藏 Spotify 官方歌词」开关关着；
     ///   · 歌词功能整体被禁用。
     private func unavailableLyricsPayload(original: Lyrics?) -> Lyrics? {
+        // ★ 2026-10-17：「Apple Music 官方 TTML」是**总覆盖**实验 —— 它连"要不要顶掉
+        //   官方歌词"这两个策略开关一起忽略（否则用户关着「隐藏 Spotify 官方歌词」时，
+        //   实验取词失败会掉回 Spotify 自己的词，看起来像"实验根本没生效"）。
+        let experimentForcesReplacement = UserDefaults.experimentsOptions.appleMusicOfficialTtml
+
         guard !NgzhwmSettingsViewModel.isLyricsFeatureDisabled,
-              UserDefaults.lyricsSource != .notReplaced,
-              NgzhwmSettingsViewModel.isOfficialLyricsHidden else {
+              experimentForcesReplacement || UserDefaults.lyricsSource != .notReplaced,
+              experimentForcesReplacement || NgzhwmSettingsViewModel.isOfficialLyricsHidden else {
             return nil
         }
 

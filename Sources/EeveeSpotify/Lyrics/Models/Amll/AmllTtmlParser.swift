@@ -193,8 +193,16 @@ enum AmllTtmlParser {
         return metadata
     }
 
-    /// 解析 <iTunesMetadata> 下的侧挂翻译/音译：<text for="L1">…</text>。
+    /// 解析 <iTunesMetadata> 下的侧挂翻译/音译：`<text for="L1">…</text>`。
     /// 同一 key 可能有多语言，全部收下，取值时按语言优先级挑。
+    ///
+    /// ★ 2026-10-17（Apple Music 官方 TTML 那条线）：苹果的写法有**两种**——
+    ///   ① `<translation xml:lang="zh-Hans"><text for="L1">你好</text></translation>`
+    ///      （AMLL 与大多数文件用的是这种，`for` 在 `<text>` 上）；
+    ///   ② `<translation xml:lang="zh-Hans" for="L1">你好</translation>`
+    ///      （`for` 在**容器自己**身上，没有 `<text>` 子节点）。
+    ///   以前只认 ① ⇒ ② 那种文件里译文整首丢失（"官方 TTML 有译文却看不到"）。
+    ///   现在：一个容器里**没收到任何 `<text for>`** 时，才退回读容器自己的 `for` + 正文。
     private static func parseSidecar(
         named containerName: String,
         in root: AmllTtmlNode
@@ -203,6 +211,8 @@ enum AmllTtmlParser {
 
         for container in root.descendants(where: { $0.localName == containerName }) {
             let inheritedLanguage = container.attribute("lang")
+            var collectedFromTextNodes = false
+
             for textNode in container.descendants(where: { $0.localName == "text" }) {
                 guard let key = textNode.attribute("for") else { continue }
                 let syllables = parseTimedSpans(in: textNode)
@@ -214,7 +224,15 @@ enum AmllTtmlParser {
                 result[key, default: []].append(
                     (textNode.attribute("lang") ?? inheritedLanguage, text)
                 )
+                collectedFromTextNodes = true
             }
+
+            // ② `for` 在容器上、正文直接是子文本节点。
+            guard !collectedFromTextNodes, let key = container.attribute("for") else { continue }
+            let raw = container.text(excludingRoles: ["x-bg"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty else { continue }
+            result[key, default: []].append((inheritedLanguage, raw))
         }
 
         return result
@@ -227,14 +245,32 @@ enum AmllTtmlParser {
         translations: [String: [(language: String?, text: String)]],
         transliterations: [String: [(language: String?, text: String)]]
     ) -> AmllTtmlLine? {
-        guard let startMs = parseTimeMs(node.attribute("begin")) else { return nil }
-        let endMs = parseTimeMs(node.attribute("end"))
+        let syllables = parseTimedSpans(in: node)
+
+        let paragraphBegin = parseTimeMs(node.attribute("begin"))
+        let paragraphEnd = parseTimeMs(node.attribute("end"))
+
+        // 行级时间：`<p begin>` 优先；缺失时退回**第一个计时 span** 的 begin。
+        //
+        // ★ 2026-10-17（Apple Music 官方 TTML 那条线）：Apple 的 `syllable-lyrics` 里
+        //   `<p>` **有时不带 begin/end**，时间只挂在 span 上（`dropcreations/Manzana...`
+        //   的转换器就是被迫从首个/末个 span 反推行时间的）。以前的硬判据是
+        //   `guard let startMs = parseTimeMs(node.attribute("begin"))` ⇒ 那种文件会被
+        //   **整首丢光**（"没有 <p> 能解析" → noSuchSong），表现为"实验打开了却永远没词"。
+        let startMs = paragraphBegin ?? syllables.first?.startMs
+        guard let startMs else { return nil }
+
+        // ⚠️ `end` 的回退**只在 `<p>` 完全没有行级时间时**才做：带 `<p begin>` 的文件
+        //   （AMLL 与绝大多数老文件）行为保持**逐字不变** —— 它们本来就没有 end 的那些行
+        //   仍然没有 end，不会因为这次改动突然多出一个"行尾"。
+        let endMs = paragraphEnd
+            ?? (paragraphBegin == nil ? syllables.last?.endMs : nil)
+
         if let endMs, endMs < startMs {
             writeDebugLog("[AMLL] dropped line with end < begin (\(startMs)ms > \(endMs)ms)")
             return nil
         }
 
-        let syllables = parseTimedSpans(in: node)
         let plainText = node
             .text(excludingRoles: ["x-translation", "x-roman", "x-bg"])
             .trimmingCharacters(in: .whitespacesAndNewlines)

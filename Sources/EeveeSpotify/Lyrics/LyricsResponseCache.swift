@@ -121,12 +121,18 @@ final class LyricsResponseCache {
     private var currentPath: String?
     private var currentPathCount = 0
 
-    /// 当前设置签名 —— 只包含**会改变 payload** 的项：来源 / Genius 兜底 / AMLL 优先。
+    /// 当前设置签名 —— 只包含**会改变 payload** 的项：来源 / Genius 兜底 / AMLL 优先 /
+    /// 「实验 → Apple Music 官方 TTML」。
+    ///
+    /// ★ 2026-10-17：那个实验必须进来。它是**总覆盖**的开关，却**不改** `lyricsSource` ——
+    /// 少了这一项，用户在 60 秒的备忘 TTL 内打开它、又重听同一首，交出去的还是刚才那个源
+    /// 产出的 payload（看起来就是"实验没生效，要重启"）。
     static var currentSignature: String {
         let source = String(describing: UserDefaults.lyricsSource)
         let genius = UserDefaults.lyricsOptions.geniusFallback ? "1" : "0"
         let amll = NgzhwmSettingsViewModel.isAmllPreferred ? "1" : "0"
-        return "\(source)|\(genius)|\(amll)"
+        let officialTtml = UserDefaults.experimentsOptions.appleMusicOfficialTtml ? "1" : "0"
+        return "\(source)|\(genius)|\(amll)|\(officialTtml)"
     }
 
     /// 这一次请求该怎么等：直接交备忘 / 短预算 / 长预算 + 第几次 + 预算秒数。

@@ -34,6 +34,17 @@ struct ExperimentsOptions: Codable, Equatable {
     /// ⇒ 实际上等于没接线。所以"改成默认关"对绝大多数用户**不是行为倒退**，
     /// 而是把一个本来就没生效的东西改成显式可选。
     var spicyLyricsCrossValidation: Bool
+    /// 「启用Apple Music官方TTML歌词」—— 2026-10-17（用户）：直接接 **Apple Music 官方**的
+    /// TTML（不是 AMLL 那份社区库）。
+    ///
+    /// 语义是**总覆盖**：打开后这一首只问 Apple Music，忽略「歌词来源」「AMLL 优先」
+    /// 「Genius 回退」「多级回退」以及各来源自己的设置，失败也**不兜底**
+    /// （见 `CustomLyrics.loadCustomLyricsForCurrentTrack` 顶部那一段）。
+    ///
+    /// ⚠️ 它需要用户在同一个设置页里粘一个 `media-user-token`（Apple 没有公开歌词 API，
+    /// 见 `AppleMusicTtml+UserDefaults.swift`）。没填令牌时这一源直接抛
+    /// `.missingAppleMusicToken`，界面上表现为"未找到歌词" + 一次提示弹窗。
+    var appleMusicOfficialTtml: Bool
 
     init(
         liveContainerSharing: Bool,
@@ -41,7 +52,8 @@ struct ExperimentsOptions: Codable, Equatable {
         petitLyricsNetEaseFallback: Bool = false,
         amllFuzzySearch: Bool = false,
         neteaseCrossValidation: Bool = ExperimentsOptions.defaultNeteaseCrossValidation,
-        spicyLyricsCrossValidation: Bool = false
+        spicyLyricsCrossValidation: Bool = false,
+        appleMusicOfficialTtml: Bool = false
     ) {
         self.liveContainerSharing = liveContainerSharing
         self.showInstagramDestination = showInstagramDestination
@@ -49,6 +61,7 @@ struct ExperimentsOptions: Codable, Equatable {
         self.amllFuzzySearch = amllFuzzySearch
         self.neteaseCrossValidation = neteaseCrossValidation
         self.spicyLyricsCrossValidation = spicyLyricsCrossValidation
+        self.appleMusicOfficialTtml = appleMusicOfficialTtml
     }
 
     /// 手写解码：`liveContainerSharing` 之外那些都是**后加的**字段，早期盘上根本没有它们。
@@ -64,6 +77,8 @@ struct ExperimentsOptions: Codable, Equatable {
         neteaseCrossValidation = try container.decodeIfPresent(Bool.self, forKey: .neteaseCrossValidation)
             ?? ExperimentsOptions.defaultNeteaseCrossValidation
         spicyLyricsCrossValidation = try container.decodeIfPresent(Bool.self, forKey: .spicyLyricsCrossValidation)
+            ?? false
+        appleMusicOfficialTtml = try container.decodeIfPresent(Bool.self, forKey: .appleMusicOfficialTtml)
             ?? false
     }
 

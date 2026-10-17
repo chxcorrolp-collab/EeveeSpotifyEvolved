@@ -279,6 +279,22 @@ jobs:
                  -o amll-ttml-ruby-tests
           ./amll-ttml-ruby-tests
 
+      # 2026-10-17：Apple Music **官方** TTML（「实验 → 启用Apple Music官方TTML歌词」）
+      # 的三处苹果特有写法 —— `<p>` 不带 begin/end（时间只在 span 上）、译文侧挂的
+      # `for` 在 `<translation>` 容器上、背景人声 `ttm:role="x-bg"`。
+      # 解析器与 AMLL 共用（不新增第二套），所以这里只是把"苹果那份文件长什么样"钉住。
+      - name: Apple Music official TTML compatibility
+        run: |
+          swiftc Sources/EeveeSpotify/Lyrics/Models/Amll/AmllTtmlDocument.swift \
+                 Sources/EeveeSpotify/Lyrics/Models/Amll/AmllTtmlParser.swift \
+                 Sources/EeveeSpotify/Lyrics/Models/LyricsError.swift \
+                 Sources/EeveeSpotify/Lyrics/Models/LyricsWordDto.swift \
+                 Sources/EeveeSpotify/Lyrics/Models/LyricsBackgroundVocalDto.swift \
+                 Sources/EeveeSpotify/Lyrics/Repositories/LyricsMarkers.swift \
+                 Tests/AmllTtmlApple/main.swift \
+                 -o amll-ttml-apple-tests
+          ./amll-ttml-apple-tests
+
       # 2026-10-16：打开后"没词可画时写哪一句"的判定（`LyricsNoticePolicy`）。四种"没词"必须
       # 分开说 —— 混档就是用户能看见的误报（"歌词明明有、我们却说未找到"）。纯 Foundation。
       - name: Lyrics notice policy (what we say when there is nothing to draw)

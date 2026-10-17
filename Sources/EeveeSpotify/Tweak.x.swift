@@ -613,6 +613,10 @@ struct EeveeSpotify: Tweak {
                 + "\(UserDefaults.lyricsOptions.geniusFallback ? "ON" : "OFF")"
                 + " | AMLL preferred: "
                 + "\(NgzhwmSettingsViewModel.isAmllPreferred ? "ON" : "OFF")"
+                // ★ 2026-10-17：实验开关的状态必须自证 —— 它会**整体覆盖**上面这些设置
+                //   （连"来源"都不看），所以读日志时第一眼就要知道它开没开。
+                + " | Apple Music official TTML: "
+                + "\(UserDefaults.experimentsOptions.appleMusicOfficialTtml ? "ON" : "OFF")"
         )
         writeDebugLog("[INIT] tweakInitTime: \(tweakInitTime)")
 
@@ -746,7 +750,12 @@ struct EeveeSpotify: Tweak {
                 activateV91ServerSidedReminderIfAvailable()
             }
 
+            // ★ 2026-10-17：「实验 → 启用Apple Music官方TTML歌词」也是一个**替换歌词**的源。
+            //   它必须在这里就成立，否则用户在来源里选着「禁用歌词替换」（`.notReplaced`）
+            //   时，整个歌词模块根本不会激活 ⇒ 实验打开也什么都不发生。
+            //   覆盖点见 `CustomLyrics.loadCustomLyricsForCurrentTrack` 顶部那一段。
             let lyricsEnabled = UserDefaults.lyricsSource.isReplacingLyrics
+                || UserDefaults.experimentsOptions.appleMusicOfficialTtml
 
             // Lyrics hooks (guarded)
             if lyricsEnabled {
@@ -815,7 +824,9 @@ struct EeveeSpotify: Tweak {
             activatePremiumPatchingGroup()
         }
         
-        if UserDefaults.lyricsSource.isReplacingLyrics {
+        // ★ 2026-10-17：同上 —— 那个实验在"来源 = 禁用歌词替换"时也要让模块活着。
+        if UserDefaults.lyricsSource.isReplacingLyrics
+            || UserDefaults.experimentsOptions.appleMusicOfficialTtml {
             BaseLyricsGroup().activate()
             
             if EeveeSpotify.hookTarget == .latest {

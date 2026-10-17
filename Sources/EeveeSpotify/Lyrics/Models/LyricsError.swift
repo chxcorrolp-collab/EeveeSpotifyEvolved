@@ -15,6 +15,11 @@ enum LyricsError: Error, CustomStringConvertible {
     /// 用户中途把 key 清空、或将来有人直接从仓库层调用时，必须得到一句能读懂的原因，
     /// 而不是一个 401。
     case missingSpicyKey
+    /// 「实验 → 启用Apple Music官方TTML歌词」开着，但**没填** Apple Music 的
+    /// `media-user-token`。与 `noSuchSong` 分开：这是配置问题，用户需要被告知一次。
+    case missingAppleMusicToken
+    /// 填了 `media-user-token`，但苹果不认（401/403）。通常是令牌过期 / 换了账号 / 没有订阅。
+    case invalidAppleMusicToken
     case decodingError
     case noSuchSong
     case unknownError
@@ -33,6 +38,10 @@ enum LyricsError: Error, CustomStringConvertible {
             return "spicylyrics_key_invalid".localized
         case .missingSpicyKey:
             return "spicylyrics_key_missing".localized
+        case .missingAppleMusicToken:
+            return "apple_music_token_missing".localized
+        case .invalidAppleMusicToken:
+            return "apple_music_token_invalid".localized
         case .decodingError:
             return "decoding_error".localized
         case .unknownError:

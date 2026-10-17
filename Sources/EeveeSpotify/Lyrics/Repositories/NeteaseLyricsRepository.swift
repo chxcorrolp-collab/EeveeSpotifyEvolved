@@ -1099,6 +1099,13 @@ class NeteaseLyricsRepository: LyricsRepository {
         //      —— 排序按地区变，而"哪一条和 Spotify 的时长最接近"跟地区无关。
         var strictlyMatchedIndices: [Int] = []
         var durationOnlyCandidates: [(index: Int, delta: Int)] = []
+        /// ★★ 2026-10-18（回退）：**相关度顺序**里"标题 + 时长都对得上"的全部候选。
+        ///
+        /// 这就是上周唯一的那张表（`Chosen[0]` 那个时代）。2026-10-16 的歌手闸门生效之后，
+        /// 这张表被拆成了"严格匹配 / 只对时长"两段，于是 `ただ声一つ` 从 index 0（完整 yrc）
+        /// 漂到 index 1（残 yrc）—— 用户看到的"少字 / 一行只剩几个字"就是那次漂移。
+        /// 现在歌手只用于交叉验证的判错换条，**不再决定顺序**。
+        var titleAndDurationOK: [Int] = []
         /// ★★ 2026-10-18（日志 222 的现场：MIMI 那首**还是**找不到词）：
         ///
         /// ```
@@ -1168,6 +1175,7 @@ class NeteaseLyricsRepository: LyricsRepository {
 
             if artistOK == .some(true) {
                 strictlyMatchedIndices.append(index)
+                titleAndDurationOK.append(index)
                 if baseOK {
                     writeDebugLog(
                         "[NetEase] candidate[\(index)] matched by base title"
@@ -1177,26 +1185,35 @@ class NeteaseLyricsRepository: LyricsRepository {
                 continue
             }
 
-            // 标题对、时长对，但**歌手对不上**（翻唱 / 同曲异名）或**网易没给歌手名** ——
-            // 记下来当"最差可用"，优先继续找歌手也对得上的。
+            // 标题对、时长对，但**歌手对不上**（翻唱 / 同曲异名）或**网易没给歌手名**。
             //
-            // ★★ 2026-10-16：**按时长差取最近的那一个**，不再取"相关度排序里的第一个"。
-            //    排序是**按地区**变的（同一首歌 180s，日志 102 一次 Chosen[6]、一次 Chosen[0]），
-            //    而"哪一条和 Spotify 的时长最接近"跟地区无关 —— 同一个母带的时长是一样的。
-            //    这条兜底只在"歌手闸门也过不去"时才走（例如 Spotify 写 `Natsunose`、
-            //    网易写 `ナツノセ`，跨书写系统认不出来），所以它越确定越好。
-            if titleOK {
-                if let deltaMs {
-                    durationOnlyCandidates.append((index, deltaMs))
-                } else if firstDurationOnlyWithoutDelta == nil {
-                    firstDurationOnlyWithoutDelta = index
-                }
+            // ★★ 2026-10-18（用户：「能不能回退有关于网易云的有关设置」）：**排序回退**。
+            //
+            //    上周的选法是"**相关度顺序里的第一条**（时长对得上就算）"，而 2026-10-16 起
+            //    `artistMatches` 真的开始生效，于是"署名对得上的那一条"被抬到最前 ——
+            //    对「ただ声一つ」就是把我们从 index 0（yrc 377/381 字，完整）推到
+            //    index 1（yrc 116/381 字，假名全丢）= 用户看到的"少字 / 一行只剩几个字"。
+            //    ⇒ 这一类**照相关度顺序**排进同一张表（不再挂到队尾），标量只是记录。
+            titleAndDurationOK.append(index)
+            if titleOK, let deltaMs {
+                durationOnlyCandidates.append((index, deltaMs))
+            } else if titleOK, firstDurationOnlyWithoutDelta == nil {
+                firstDurationOnlyWithoutDelta = index
             }
             continue
         }
 
-        // 把两条排序拼成一条有序候选表（见上面「候选排序」段的 ①②）。
-        var orderedCandidateIndices: [Int] = strictlyMatchedIndices
+        // ★★ 2026-10-18（回退排序）：**上周的顺序 = 相关度顺序**。
+        //
+        // 表里放的是"标题 + 时长都对得上"的**全部**候选（不管歌手对不对），按网易返回的顺序。
+        // 歌手只用在下游的交叉验证判错换条（`isStrictlyMatched`），**不再决定谁排第一**。
+        // 这样 `ただ声一つ` 回到 index 0（完整 yrc），而"另一首歌"仍被标题闸门挡住
+        // （日志 108 的 `Thank You — Royal 44` 是标题闸门救的，不是歌手闸门）。
+        var orderedCandidateIndices: [Int] = titleAndDurationOK
+        writeDebugLog(
+            "[NetEase] candidate order — \(titleAndDurationOK.count) title + duration match(es)"
+                + " in relevance order (rolled back to last week's rule)"
+        )
         // ★★ 2026-10-18：第三档（歌手 + 时长，跨书写系统）排在"只有标题+时长对上"之前，
         //    理由见 `closeDurationCandidates` 的说明。
         if !closeDurationCandidates.isEmpty {
@@ -1223,10 +1240,7 @@ class NeteaseLyricsRepository: LyricsRepository {
                 )
             }
         }
-        for candidate in durationOnlyCandidates.sorted(by: { $0.delta < $1.delta }) {
-            orderedCandidateIndices.append(candidate.index)
-        }
-        if let extra = firstDurationOnlyWithoutDelta {
+        if let extra = firstDurationOnlyWithoutDelta, !orderedCandidateIndices.contains(extra) {
             orderedCandidateIndices.append(extra)
         }
 
@@ -1263,6 +1277,10 @@ class NeteaseLyricsRepository: LyricsRepository {
 
         // 走到"最低一档"（歌手全对不上）时照旧报一句 —— 文案与旧版**逐字一致**，
         // `Tools/log_triage.py` 与历史交接文档都认这一行。
+        //
+        // ★★ 2026-10-18（回退排序之后补充）：这句话现在**只说明"没有歌手精确对上的候选"**，
+        //    不再意味着"取 Δ 最短的那条"—— 顺序已经回到相关度（见上面 `titleAndDurationOK`）。
+        //    单独再打一行把这件事写清楚，免得下一轮读日志的人又被旧文案误导。
         if strictlyMatchedIndices.isEmpty, let firstIndex = orderedCandidateIndices.first {
             let delta = durationOnlyCandidates
                 .first(where: { $0.index == firstIndex })?
@@ -1271,6 +1289,10 @@ class NeteaseLyricsRepository: LyricsRepository {
                 "[NetEase] title matched but artist did not — closest duration wins"
                     + " (index \(firstIndex), Δ\(delta.map { "\($0)" } ?? "-1")ms,"
                     + " \(songs.count) results)"
+            )
+            writeDebugLog(
+                "[NetEase] note — the pick above follows the rolled-back relevance order,"
+                    + " not the closest duration"
             )
         }
 

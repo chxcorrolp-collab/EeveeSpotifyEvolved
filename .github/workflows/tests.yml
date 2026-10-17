@@ -223,11 +223,18 @@ jobs:
       # 更糟：`primaryText` 含读音、与词条拼接结果不一致 ⇒ mapper 的不变量失败 ⇒ **整行降级为逐行**
       # （逐词高亮消失）。这一步把"注音被剔除"与"没有注音的行不受影响"一起钉住。
       # 解析层是纯 Foundation（`XMLParser`），所以能进这里；mapper 那层要 `LyricsDto` 的依赖链，进不来。
-      - name: AMLL TTML ruby annotations are not lyrics
+      #
+      # 2026-10-17 第二轮：AMLL 真正的 ruby 写法是 **`tts:ruby` 属性**（时间只挂在
+      # `tts:ruby="text"` 上），不是 HTML 的 `<ruby>/<rt>` —— 两种都在测。
+      # 顺带把 `LyricsBackgroundVocalDto`（副唱 DTO）也编进来，锁住 §A·24 新加的
+      # `translation` 字段形状（它只依赖 `LyricsWordDto`，纯 Foundation）。
+      - name: AMLL TTML ruby annotations + background-vocal DTO
         run: |
           swiftc Sources/EeveeSpotify/Lyrics/Models/Amll/AmllTtmlDocument.swift \
                  Sources/EeveeSpotify/Lyrics/Models/Amll/AmllTtmlParser.swift \
                  Sources/EeveeSpotify/Lyrics/Models/LyricsError.swift \
+                 Sources/EeveeSpotify/Lyrics/Models/LyricsWordDto.swift \
+                 Sources/EeveeSpotify/Lyrics/Models/LyricsBackgroundVocalDto.swift \
                  Sources/EeveeSpotify/Lyrics/Repositories/LyricsMarkers.swift \
                  Tests/AmllTtmlRuby/main.swift \
                  -o amll-ttml-ruby-tests

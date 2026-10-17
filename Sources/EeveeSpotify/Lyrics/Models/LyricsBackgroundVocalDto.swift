@@ -12,6 +12,15 @@ struct LyricsBackgroundVocalDto {
     var syllables: [LyricsWordDto]
     /// 是否出现在主词之前（决定它渲染在主歌上方还是下方）。
     var isBeforePrimary: Bool
+    /// 副唱**自己的**译文。
+    ///
+    /// AMLL 的写法是「`<span ttm:role="x-bg">` 里再套一个
+    /// `<span ttm:role="x-translation">`」（行内），或 `<iTunesMetadata>` 旁挂里同样嵌一层 ——
+    /// parser 早就把它收进 `AmllTtmlBackgroundVocal.translation`，但这条链在这里断了：
+    /// DTO 没字段 / mapper 没接 / `LyricLinesAdapter` 硬编码 `translation: nil`。
+    /// 渲染层其实**一直**支持（`SynchronizedLyricText.backgroundVocalRow` 会把它画成副唱下面
+    /// 那一小行，字号用 `translationBackgroundVocalsFontCoefficient`）。
+    var translation: String? = nil
 
     var text: String {
         syllables.map(\.text).joined()

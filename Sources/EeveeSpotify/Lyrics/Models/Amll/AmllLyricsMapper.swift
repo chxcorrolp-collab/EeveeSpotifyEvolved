@@ -191,6 +191,10 @@ enum AmllLyricsMapper {
     ///
     /// 原始音节直接顺序拼接（不额外插空格、不加括号）：解析层给出的音节文本里
     /// 已经包含词间空白，与主词序列的口径一致。
+    ///
+    /// ★★ 2026-10-17（§A·24「副唱自己的译文」）：`translation` 一路带到渲染层 ——
+    /// 解析层早就从 `x-bg` 内部的 `x-translation` 收下了（`AmllTtmlBackgroundVocal.translation`），
+    /// 以前在这里丢掉 ⇒ 渲染层那行"副唱下面的小字译文"永远是空的。
     private static func backgroundVocalDto(
         for line: AmllTtmlLine
     ) -> LyricsBackgroundVocalDto? {
@@ -209,7 +213,8 @@ enum AmllLyricsMapper {
 
         let dto = LyricsBackgroundVocalDto(
             syllables: tokens,
-            isBeforePrimary: background.isBeforePrimary
+            isBeforePrimary: background.isBeforePrimary,
+            translation: background.translation
         )
         return dto.isEmpty ? nil : dto
     }

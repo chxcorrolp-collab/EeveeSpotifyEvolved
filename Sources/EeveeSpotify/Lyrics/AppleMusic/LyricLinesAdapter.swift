@@ -276,7 +276,10 @@ extension LyricsDto {
             ),
             text: text,
             syllables: syllables,
-            translation: nil,
+            // ★★ 2026-10-17（§A·24）：副唱**自己的**译文一路带上去 ——
+            //    渲染层（`SynchronizedLyricText.backgroundVocalRow`）会把它画成
+            //    副唱下面那一小行；以前这里硬编码 `nil`，那条链断在最后一步。
+            translation: background.translation,
             position: background.isBeforePrimary
                 ? .beforePrimary
                 : .afterPrimary

@@ -6,6 +6,8 @@ import Foundation
 //   swiftc Sources/EeveeSpotify/Lyrics/Models/Amll/AmllTtmlDocument.swift \
 //          Sources/EeveeSpotify/Lyrics/Models/Amll/AmllTtmlParser.swift \
 //          Sources/EeveeSpotify/Lyrics/Models/LyricsError.swift \
+//          Sources/EeveeSpotify/Lyrics/Models/LyricsWordDto.swift \
+//          Sources/EeveeSpotify/Lyrics/Models/LyricsBackgroundVocalDto.swift \
 //          Sources/EeveeSpotify/Lyrics/Repositories/LyricsMarkers.swift \
 //          Tests/AmllTtmlRuby/main.swift -o amll-ttml-ruby-tests
 //
@@ -165,6 +167,31 @@ do {
     failures += 1
     print("  FAIL html ruby parsing threw \(error)")
 }
+
+// MARK: - ③ 副唱 DTO 的 `translation`（§A·24）
+
+let background = LyricsBackgroundVocalDto(
+    syllables: [
+        LyricsWordDto(text: "秘密", startMs: 30_500, endMs: 31_500),
+        LyricsWordDto(text: "だよ", startMs: 31_600, endMs: 32_500),
+    ],
+    isBeforePrimary: false,
+    translation: "是秘密哦"
+)
+requireEqual(background.text, "秘密だよ", "bg dto — the text is the syllables joined")
+requireEqual(
+    background.translation ?? "",
+    "是秘密哦",
+    "bg dto — the background vocal's own translation survives the DTO"
+)
+requireEqual(
+    LyricsBackgroundVocalDto(
+        syllables: [LyricsWordDto(text: "x", startMs: 0)],
+        isBeforePrimary: true
+    ).translation ?? "",
+    "",
+    "bg dto — translation defaults to nil when absent"
+)
 
 if failures == 0 {
     print("AmllTtmlRuby: all assertions passed")

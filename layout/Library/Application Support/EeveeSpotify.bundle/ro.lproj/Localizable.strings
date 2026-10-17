@@ -46,8 +46,6 @@ petitlyrics_description = "PetitLyrics: Oferă o mulțime de versuri japoneze si
 musixmatch_user_token = "Token utilizator Musixmatch";
 user_token_placeholder = "Introduceți jetonul de utilizator sau lipiți informațiile de depanare";
 
-enter_user_token = "Introduceți Token-ul utilizatorului";
-enter_user_token_message = "Pentru a utiliza Musixmatch, trebuie să vă recuperați tokenul de utilizator din aplicația oficială. Descărcați Musixmatch din App Store, înregistrați-vă, apoi mergeți la Setări > Obțineți ajutor > Copiați informațiile de depanare și lipiți-le aici. De asemenea, puteți extrage tokenul utilizând MITM.";
 
 genius_fallback_description = "Încărcați versurile din Genius dacă există o problemă cu %@.";
 
@@ -109,5 +107,4 @@ contributors = "Contributori";
    English rather than a raw key name. Translate one, then move it into the matching
    section above and delete it from this block. */
 
-mini_bar_glass_description = "Gives the mini player the same Liquid Glass capsule as the tab bar: **same width (360 pt on this device), same 60 pt height, same corner radius, same material**, keeping the small gap between the two. The mini player's own content (artwork, title, buttons, progress line) is scaled down uniformly to fit inside (~86%). While it is on, the solid cover-coloured background is cleared (Spotify writes it back, so it is cleared again on every layout); switching it off restores everything — glass removed, content back to its original size, background and clipping restored.";
 

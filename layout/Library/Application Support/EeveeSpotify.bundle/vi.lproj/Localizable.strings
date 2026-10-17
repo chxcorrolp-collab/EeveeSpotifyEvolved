@@ -51,8 +51,6 @@ petitlyrics_description = "PetitLyrics: Cung cấp nhiều lời bài hát tiế
 musixmatch_user_token = "Mã token người dùng Musixmatch";
 user_token_placeholder = "Nhập mã token người dùng hoặc dán thông tin gỡ lỗi";
 
-enter_user_token = "Nhập mã token người dùng";
-enter_user_token_message = "Để sử dụng Musixmatch, bạn cần lấy mã token người dùng từ ứng dụng chính thức. Vui lòng tải ứng dụng Musixmatch từ App Store, đăng ký, sau đó vào Cài đặt > Nhận trợ giúp > Sao chép thông tin gỡ lỗi, và dán vào đây. Bạn cũng có thể trích xuất mã token bằng cách sử dụng MITM.";
 
 genius_fallback = "Dự phòng bằng Genius";
 genius_fallback_description = "Sử dụng lời bài hát từ Genius nếu có sự cố với %@.";
@@ -274,5 +272,4 @@ categoriesSectionDeps1 = "Tắt = bỏ qua. Hiển thị = chỉ vẽ trên than
    English rather than a raw key name. Translate one, then move it into the matching
    section above and delete it from this block. */
 
-mini_bar_glass_description = "Gives the mini player the same Liquid Glass capsule as the tab bar: **same width (360 pt on this device), same 60 pt height, same corner radius, same material**, keeping the small gap between the two. The mini player's own content (artwork, title, buttons, progress line) is scaled down uniformly to fit inside (~86%). While it is on, the solid cover-coloured background is cleared (Spotify writes it back, so it is cleared again on every layout); switching it off restores everything — glass removed, content back to its original size, background and clipping restored.";
 

@@ -10,21 +10,24 @@ import UIKit
 ///   · `tab_bar_glass_section` —— 藏文字 / 藏「创建」/ 改用系统玻璃；
 ///   · `mini_bar_glass_section` —— 迷你条玻璃（与上面那条同高同材质）。
 ///
-/// ── 「迷你播放条那一族」五颗开关的分布（2026-10-14 登记族属，**不搬家**）──────────────
+/// ── 「迷你播放条那一族」五颗开关的分布（★ 2026-10-17 更新）─────────────────────────────
 ///
-/// 这一族管的是同一条迷你播放条（以及它和播放器共用的那几颗控件），但五颗**分散在三页**：
+/// 这一族管的是同一条迷你播放条（以及它和播放器共用的那几颗控件），到今天仍**分散在两页**：
 ///   · `hide_mini_player_bar`   —— **听歌页** `declutter_description` 那一节（藏整条）；
+///   · `hide_connect_button`    —— **同一节**（藏设备/输出切换按钮 —— 它**迷你条与播放器共用**，
+///     所以是"所有传输条上都不显示"）；★ 2026-10-17 从「首页与音乐库」搬来；
+///   · `hide_add_to_button`     —— 同一节（藏加号，与设备按钮同级）；同一天一起搬来；
 ///   · `mini_bar_glass`         —— **本页**第二节（那条胶囊换玻璃）；
-///   · `mini_bar_round_artwork` —— **本页**第二节（左边封面改圆形，**独立于**玻璃那颗）；
-///   · `hide_connect_button`    —— **首页与音乐库页**第一节（藏设备/输出切换按钮 ——
-///     它**迷你条与播放器共用**，所以是"所有传输条上都不显示"）；
-///   · `hide_add_to_button`     —— 同一节（藏加号，与设备按钮同级）。
+///   · `mini_bar_round_artwork` —— **本页**第二节（左边封面改圆形，**独立于**玻璃那颗）。
 ///
-/// 分散**不是**因为功能分家，而是因为 l10n 里能用的分节标题只有那三个
-/// （`mini_bar_glass_section` / `declutter_description` / `declutter_home_player_section`）。
-/// 要真正归到一处，要么**跨页搬 Toggle**、要么**新造/合并分节标题**：前者会改掉用户找开关的
-/// 路径、后者要动键，两样都不在这一批里（2026-10-14 用户批的是"说明 / 分区 / 注释"）。
-/// ⇒ 本批**不动 Toggle 的位置**，只把族属与各自的落点写清楚。
+/// 2026-10-14 那轮登记族属时以"跨页搬 Toggle 会改掉用户找开关的路径"为由**不搬**；
+/// 2026-10-17 用户点名（"前三个有关于外观的设置"）之后只搬了**确实错位**的那两颗：
+/// 设备按钮/加号管的是传输条上的两颗按钮，与"首页与音乐库"无关，而它们和
+/// `hide_mini_player_bar` / `hide_singalong_line` / `hide_npv_pills` 走的是**同一套**
+/// `DeclutterChrome.reconcileNow()`、共用同一句 `declutter_description` 说明
+/// ⇒ 搬到那一节之后，"一类开关一处说明"成立了。
+/// 剩下两页的分布（藏整条在听歌页、玻璃与圆封面在本页）**保持不动**：它们改的是
+/// 迷你条的**材质与形状**，与"藏 chrome"不是一回事，搬过去反而会让本页只剩两行。
 struct TabBarAndMiniBarSettingsView: View {
 
     @State private var shadow = Shadow()
@@ -46,10 +49,12 @@ struct TabBarAndMiniBarSettingsView: View {
             //   （iOS 26 自己画的玻璃有折射/镜片/明暗自适应，我们自绘的只是 UIVisualEffectView）。
             //   自绘那套代码同时从 `TabBarGlass.x.swift` 删掉；那个文件现在只剩
             //   **共用的几何判据 + 标签内容的取舍**（藏文字 / 藏「创建」）。
-            Section(
-                header: Text("tab_bar_glass_section".localized),
-                footer: Text("tab_bar_glass_description".localized)
-            ) {
+            // ★ 2026-10-17（用户：「很多介绍其实也没有必要写上去了」）：本节原来的 footer 是
+            //   「关于标签栏的一些设置。」—— 同义反复（标题就叫「标签栏」）。同一批清掉的还有
+            //   「关于迷你播放条的一些设置。」「效果可能不明显。」×3、「功能测试中。」
+            //   「这些功能未测试。」与「选项生效需要重启Spotify(功能未测试)。」。
+            //   键已从全部 27 个语系的词典里删掉（`Tools/l10n_lint.py` 现在只报 0 unused）。
+            Section(header: Text("tab_bar_glass_section".localized)) {
                 // 照片 21/23/25 里那条栏是**没有文字**的。
                 // 来自 spoti.pw 的「Hide labels」（来源、许可与改动见「开源许可」页）。
                 Toggle(
@@ -110,10 +115,8 @@ struct TabBarAndMiniBarSettingsView: View {
             //   · **两颗默认都开**（默认值在 `UserDefaults+Extension.swift` 的
             //     `miniBarGlass` / `miniBarRoundArtwork`，都是 `nil ⇒ true`）；
             //     想"回到 Spotify 原样"得各自关一次（或走下面那颗「重置本页」）。
-            Section(
-                header: Text("mini_bar_glass_section".localized),
-                footer: Text("mini_bar_glass_description".localized)
-            ) {
+            // 本节 footer 原为「关于迷你播放条的一些设置。」（同义反复），已随同一批删掉。
+            Section(header: Text("mini_bar_glass_section".localized)) {
                 Toggle(
                     "mini_bar_glass".localized,
                     isOn: settingsShadowBinding($shadow.miniBarGlass) { value in

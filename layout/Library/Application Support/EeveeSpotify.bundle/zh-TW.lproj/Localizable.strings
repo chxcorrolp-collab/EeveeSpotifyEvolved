@@ -52,8 +52,6 @@ petitlyrics_description = "PetitLyrics: 日本區 Spotify 預設歌詞來源，�
 musixmatch_user_token = "Musixmatch 使用者權杖";
 user_token_placeholder = "在此輸入 Musixmatch 使用者權杖或貼上除錯資訊";
 
-enter_user_token = "輸入使用者權杖";
-enter_user_token_message = "欲使用 Musixmatch 作為歌詞來源，您可以於 EeveeSpotify 內直接取得（建議方案）、從 Musixmatch 應用程式中複製除錯資訊（較繁瑣）亦或是對 Musixmatch 進行 MITM（中間人攻擊）來提取使用者權杖（較困難）。";
 
 genius_fallback = "回退至 Genius";
 genius_fallback_description = "若 %@ 發生問題則回退至 Genius。";
@@ -295,7 +293,6 @@ tab_bar_hide_labels = "隱藏標籤文字";
 
 mini_bar_glass_section = "迷你播放條";
 mini_bar_glass = "迷你播放條用液態玻璃";
-mini_bar_glass_description = "給迷你播放條鋪一層和標籤欄同一套的液態玻璃膠囊：**與標籤欄那條等寬（真機 360pt）、同高（60pt）、同圓角、同材質**，兩條之間保留原來的小間隙。迷你條自己的內容（封面 + 歌名 + 按鈕 + 進度線）會**等比縮到膠囊裡**（約 86%）。開著的時候那條實心封面色底會被清掉（Spotify 會把它寫回來 —— 剛出現 / 剛切歌時尤其如此；我們每次佈局都再清一次）；關掉開關完全還原：玻璃撤掉、內容回原始大小、底色與裁剪都還回去。";
 
 flag_override_mode_number = "寫入數字";
 flag_override_number_placeholder = "數字（例如 30）";

@@ -52,8 +52,6 @@ petitlyrics_description = "PetitLyrics: يقدم الكثير من الكلما�
 musixmatch_user_token = "رمز مستخدم Musixmatch المميز";
 user_token_placeholder = "أدخل رمز المستخدم المميز أو الصق معلومات التصحيح";
 
-enter_user_token = "أدخل رمز المستخدم";
-enter_user_token_message = "لاستخدام Musixmatch، تحتاج إلى استرداد رمز المستخدم الخاص بك من التطبيق الرسمي. قم بتنزيل Musixmatch من متجر التطبيقات، وقم بالتسجيل، ثم انتقل إلى الإعدادات > الحصول على المساعدة > نسخ معلومات التصحيح، والصقها هنا. يمكنك أيضًا استخراج الرمز المميز باستخدام MITM.";
 
 genius_fallback = "الاحتياطي العبقري";
 genius_fallback_description = "تحميل كلمات الأغاني من Genius إذا كانت هناك مشكلة في %@.";
@@ -278,5 +276,4 @@ categoriesSectionDeps1 = "قفل = تجاهل، إظهار = هيظهر المق
    English rather than a raw key name. Translate one, then move it into the matching
    section above and delete it from this block. */
 
-mini_bar_glass_description = "Gives the mini player the same Liquid Glass capsule as the tab bar: **same width (360 pt on this device), same 60 pt height, same corner radius, same material**, keeping the small gap between the two. The mini player's own content (artwork, title, buttons, progress line) is scaled down uniformly to fit inside (~86%). While it is on, the solid cover-coloured background is cleared (Spotify writes it back, so it is cleared again on every layout); switching it off restores everything — glass removed, content back to its original size, background and clipping restored.";
 

@@ -10,10 +10,11 @@ import UIKit
 /// 一页里滚很久。现在按**页面**拆开：听歌页 / 标签栏与迷你条 / 首页与音乐库 /
 /// 歌单与专辑页，四个都在根页上一步可达。
 ///
-/// 本页四节：
+/// 本页三节：
 ///   · `now_playing_section` —— 听歌页自己的九个开关（取色底 / 一屏 / 音量条 /
 ///     歌词进播放器 / 单行歌词 / 罗马化 / 译文 / 未播放行模糊 / 控制键字形）；
-///   · `declutter_description` —— 按类名藏 Spotify 自己的 chrome（迷你条/跟唱行/胶囊）；
+///   · `declutter_description` —— 按类名藏 Spotify 自己的 chrome（迷你条/跟唱行/胶囊，
+///     以及 ★ 2026-10-17 从「首页与音乐库」搬来的**传输条两颗按钮**：设备/输出切换、加号）；
 ///   · `player_cards_section` —— 听歌页**卡片类**清爽（一张卡一个键 + 一颗总开关）。
 ///
 /// ⚠️ 罗马化与译文那两颗读的是**歌词页那批键**（`NgzhwmSettingsViewModel` 的
@@ -38,6 +39,9 @@ struct NowPlayingSettingsView: View {
         var hideMiniPlayerBar = UserDefaults.hideMiniPlayerBar
         var hideSingalongLine = UserDefaults.hideSingalongLine
         var hideNowPlayingPills = UserDefaults.hideNowPlayingPills
+        /// ★ 2026-10-17 从「首页与音乐库」搬来（传输条上那两颗按钮，见 declutter 那一节）。
+        var hideConnectButton = UserDefaults.hideConnectButton
+        var hideAddToButton = UserDefaults.hideAddToButton
         /// 听歌页卡片那批（总开关 + 一张卡一个键）。用一个字典装：加卡片不用改这里。
         var hidePlayerCards = PlayerCardsDeclutter.masterHidden
         var playerCards: [PlayerCard: Bool] = PlayerCardsDeclutter.snapshot()
@@ -192,12 +196,13 @@ struct NowPlayingSettingsView: View {
             }
 
             Section(footer: Text("declutter_description".localized)) {
-                // ⚠️ 这一颗属于「迷你播放条那一族」（五颗，分布清单见
-                //    `Settings/Sections/TabBar/Views/TabBarAndMiniBarSettingsView.swift` 文件头）：
-                //    本页只放**藏整条**这一颗 —— 玻璃与圆封面在「标签栏与迷你条」页，
-                //    设备按钮与加号在「首页与音乐库」页。
-                //    2026-10-14 拍板**不搬家**（移动 Toggle 会改掉用户找开关的路径，属结构批）
-                //    ⇒ 只在这里交叉说明，好让"为什么它不在迷你条那一页"有个答案。
+                // ⚠️ 这一颗属于「迷你播放条那一族」（五颗）：
+                //    藏整条 = 本页；玻璃 + 圆封面 = 「标签栏与迷你条」页；
+                //    设备按钮 + 加号 = **本页**（★ 2026-10-17 从「首页与音乐库」搬来，
+                //    见下面那两颗的说明）。2026-10-14 那轮以"移动 Toggle 会改掉用户找开关的路径"
+                //    为由拒绝搬家，2026-10-17 用户点名后**只搬了错位的那两颗**：
+                //    它们管的是 `Components.ConnectButtonOutputSwitcher` / `Components.UI.AddToButton`
+                //    —— 迷你条与播放器传输条共用的按钮，跟"首页与音乐库"没有任何关系。
                 Toggle(
                     "hide_mini_player_bar".localized,
                     isOn: settingsShadowBinding($shadow.hideMiniPlayerBar) { value in
@@ -225,6 +230,29 @@ struct NowPlayingSettingsView: View {
                         DeclutterChrome.reconcileNow()
                     }
                 )
+
+                // ★ 2026-10-17（用户：「有些功能是不是有些该搬家了，比如前三个有关于外观的设置」）：
+                //   这两颗原来摆在「首页与音乐库」页里，但它们藏的是**传输条上的两颗按钮**
+                //   （设备/输出切换、加号）—— 迷你播放条和播放器共用同一套控件，跟首页无关。
+                //   现在与上面三颗同处一节：同一套 `DeclutterChrome` 判据、同一句 footer 说明。
+                //   ⚠️ 中文名「隐藏喜欢按钮」而代码认的是**加号**（`Components.UI.AddToButton`）——
+                //   那是 l10n 的值问题（与 `entity_page_am_header_section` 的「（歌单）」同类），
+                //   本次不动文案，只把开关搬到它真正管的那一屏对应的设置页。
+                Toggle(
+                    "hide_connect_button".localized,
+                    isOn: settingsShadowBinding($shadow.hideConnectButton) { value in
+                        UserDefaults.hideConnectButton = value
+                        DeclutterChrome.reconcileNow()
+                    }
+                )
+
+                Toggle(
+                    "hide_add_to_button".localized,
+                    isOn: settingsShadowBinding($shadow.hideAddToButton) { value in
+                        UserDefaults.hideAddToButton = value
+                        DeclutterChrome.reconcileNow()
+                    }
+                )
             }
 
             // ★ 2026-10-13（用户拍板）：听歌页**卡片类**清爽。
@@ -234,8 +262,7 @@ struct NowPlayingSettingsView: View {
             // 2026-10-11 亲手点名在用。判据、marker 表、缓存与"折成 0 高"的做法全写在
             // `Appearance/PlayerDeclutter.x.swift`，这里只摆开关。
             Section(
-                header: Text("player_cards_section".localized),
-                footer: Text("player_cards_description".localized)
+                header: Text("player_cards_section".localized)
             ) {
                 Toggle(
                     "hide_player_cards".localized,
@@ -326,6 +353,10 @@ struct NowPlayingSettingsView: View {
         "hideMiniPlayerBar",
         "hideSingalongLine",
         "hideNowPlayingPills",
+        // ★ 2026-10-17：从「首页与音乐库」搬来的两颗（传输条按钮）—— 它们的"当场落地"
+        // 也是 `DeclutterChrome.reconcileNow()`，与上面三颗同一个 afterReset 分支。
+        "hideConnectButton",
+        "hideAddToButton",
     ]
     // 听歌页卡片那批（11 个键）由 `PlayerCard` / `PlayerCardsDeclutter` 自己拥有：
     // 加一张卡片只改那一处，这里跟着走 —— 本页的「重置本页」因此不会漏键。

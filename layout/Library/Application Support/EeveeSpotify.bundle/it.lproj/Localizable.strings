@@ -48,8 +48,6 @@ petitlyrics_description = "PetitLyrics: Offre numerosi testi sincronizzati in gi
 musixmatch_user_token = "Token Utente Musixmatch";
 user_token_placeholder = "Inserisci il Token Utente o incolla le informazioni di Debug";
 
-enter_user_token = "Inserisci il Token Utente";
-enter_user_token_message = "Per utilizzare Musixmatch devi recuperare il tuo token dall'app ufficiale. Scarica Musixmatch dall'App Store, registrati, poi vai su Impostazioni > Assistenza > Copia info di debug e incollale qui. Puoi anche estrarre il token utilizzando MITM.";
 
 genius_fallback_description = "Carica i testi da Genius se c'è un problema con %@.";
 
@@ -265,5 +263,4 @@ categoriesSectionDeps1 = "Off = ignora. Mostra = evidenzia solo sulla barra. Man
    English rather than a raw key name. Translate one, then move it into the matching
    section above and delete it from this block. */
 
-mini_bar_glass_description = "Gives the mini player the same Liquid Glass capsule as the tab bar: **same width (360 pt on this device), same 60 pt height, same corner radius, same material**, keeping the small gap between the two. The mini player's own content (artwork, title, buttons, progress line) is scaled down uniformly to fit inside (~86%). While it is on, the solid cover-coloured background is cleared (Spotify writes it back, so it is cleared again on every layout); switching it off restores everything — glass removed, content back to its original size, background and clipping restored.";
 

@@ -64,10 +64,7 @@ struct EntityPageSettingsView: View {
             //   ③ 另：打开它之后，"清掉 #121212 底色"（`EntityPageRepaint.x.swift:175`）与
             //      "状态栏字色翻转"（`EntityPageStatusBar.x.swift:183`）是**启动时**按开关决定装不装的
             //      ⇒ **要重启 Spotify 才完全生效**，而本页没有 RestartSection。
-            Section(
-                header: Text("entity_page_section".localized),
-                footer: Text("entity_page_description".localized)
-            ) {
+            Section(header: Text("entity_page_section".localized)) {
                 // ★ 2026-10-13（用户：「有些选项可以改改或者删掉了」）：这里原来还有一颗
                 //   「封面取色底」—— 已经**并进下面这一颗**（两者本来就是同一件事的两半：
                 //   都拿封面的颜色铺底），页面那一栏因此从**三颗减到两颗**。
@@ -84,8 +81,11 @@ struct EntityPageSettingsView: View {
                 //   分支，主体在 `ensureHero` / `ensureSharpHero` / `ensureScrim` 三处），
                 //   将来若要拆，只拆这一件。
                 //   而 zh 的标题说"替换Spotify的官方歌曲底色"、en 说的是"full-bleed cover
-                //   dissolving into the page colour" —— 两种语言在说两件事，且都不全
-                //   （footer 文案在 l10n 里，用户要求本地化文件先别动，故此处只记录）。
+                //   dissolving into the page colour" —— 两种语言在说两件事，且都不全。
+                //   ★ 2026-10-17：这一节原来的 footer（`entity_page_description` =
+                //   「功能测试中。」）已删 —— 它只记过程、不告诉用户这颗能干什么，同一批
+                //   「效果可能不明显。」×3 也一起删了（见 `TabBarAndMiniBarSettingsView` 里的清单）。
+                //   ⇒ 换名这件事现在**没有 UI 上的落点**了，只能靠将来改 l10n 的标题值。
                 Toggle(
                     "entity_page_dissolve".localized,
                     isOn: settingsShadowBinding($shadow.entityPageDissolve) { value in
@@ -115,14 +115,16 @@ struct EntityPageSettingsView: View {
             //   三颗按钮**镜像**它的字形并**转发**点击 ⇒ 动作/状态/语言都留在 Spotify 那边。
             //   **默认开**；★ 2026-10-14 更正：它管的是**三个页面**，不只是歌单页 ——
             //   专辑挂点与艺人挂点都真的装着（`Appearance/EntityPageHeader.x.swift:1181-1189`（专辑）、
-            //   `:1193-1201`（艺人））。原先"v1 只作用于歌单页"的说法与 l10n 里的「(歌单)」都已过时。
+            //   `:1193-1201`（艺人））。原先"v1 只作用于歌单页"的说法已过时；分节标题
+            //   （`entity_page_am_header_section`，zh 仍写着「（歌单）」）也因此名不副实 ——
+            //   那颗是 l10n 的值问题，不在本次改动范围内，记在这里。
             //   ⚠️ **关掉不可逆**：全仓没有 `eeveeReveal`、也没有把 `EntityPageHeaderView`
             //   `removeFromSuperview` 的路径 ⇒ 关掉之后 Spotify 原页头**不会**回来，
             //   要离开这一页再进（或重启 App）。这颗是本次审计里唯一"关掉回不去"的开关。
-            Section(
-                header: Text("entity_page_am_header_section".localized),
-                footer: Text("entity_page_am_header_description".localized)
-            ) {
+            //   ★ 2026-10-17：本节 footer（`entity_page_am_header_description` =
+            //   「效果可能不明显。」）已删 —— 上面这几条才是用户真正需要知道的，
+            //   而它们本来只能写在代码注释里。
+            Section(header: Text("entity_page_am_header_section".localized)) {
                 Toggle(
                     "entity_page_am_header".localized,
                     isOn: settingsShadowBinding($shadow.entityPageAMHeader) { value in

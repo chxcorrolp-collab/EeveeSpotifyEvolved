@@ -46,8 +46,6 @@ petitlyrics_description = "PetitLyrics: Rengeteg időszinkronizált japán és n
 musixmatch_user_token = "Musixmatch felhasználói token";
 user_token_placeholder = "Felhasználói azonosító megadása vagy hibakeresési információ beillesztése";
 
-enter_user_token = "Felhasználói azonosító megadása";
-enter_user_token_message = "A Musixmatch használatához le kell kérnie a felhasználói tokenjét a hivatalos alkalmazásból. Töltse le a Musixmatch-et az App Store-ból, regisztráljon, majd menjen a Beállítások > Segítség lekérése > Hibakereső információ másolása menüpontra, és illessze be ide. A tokent a MITM segítségével is kinyerheted.";
 
 genius_fallback = "Genius probléma";
 genius_fallback_description = "Szövegek betöltése a Geniusból, ha probléma van a %@-val.";
@@ -110,5 +108,4 @@ contributors = "Hozzájárulók";
    English rather than a raw key name. Translate one, then move it into the matching
    section above and delete it from this block. */
 
-mini_bar_glass_description = "Gives the mini player the same Liquid Glass capsule as the tab bar: **same width (360 pt on this device), same 60 pt height, same corner radius, same material**, keeping the small gap between the two. The mini player's own content (artwork, title, buttons, progress line) is scaled down uniformly to fit inside (~86%). While it is on, the solid cover-coloured background is cleared (Spotify writes it back, so it is cleared again on every layout); switching it off restores everything — glass removed, content back to its original size, background and clipping restored.";
 

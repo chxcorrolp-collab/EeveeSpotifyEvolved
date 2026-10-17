@@ -13,9 +13,13 @@ struct EeveeUISettingsView: View {
         List {
             // 主题：整页换色（Spotify 的 #121212 → 纯黑、品牌绿 → 你选的强调色）。
             // 机制在 `Sources/EeveeSpotifyC/ColorSwap.m`（颜色出生点换），说明见 `Theme`。
+            // ★ 2026-10-17：footer 从 `theme_description`（「选项生效需要重启Spotify(功能未测试)。」）
+            //   换成既有的 `restart_is_required_description`（「更改后需要重启应用程序。」）——
+            //   留下"要重启"这条真信息，去掉"功能未测试"那句过程记录（过程话不该出现在设置页，
+            //   真正验过之后它只会变成假话）。旧键已从词典删除。
             Section(
                 header: Text("theme_section".localized),
-                footer: Text("theme_description".localized)
+                footer: Text("restart_is_required_description".localized)
             ) {
                 Toggle(
                     "amoled".localized,

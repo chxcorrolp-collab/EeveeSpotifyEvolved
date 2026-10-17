@@ -186,8 +186,6 @@ no_log_to_clear = "无任何日志需要清除。";
 no_log_to_clear_ok = "确定";
 
 /* MARK: Keys required by Reincarnated features kept in this fork */
-enter_user_token = "输入用户令牌";
-enter_user_token_message = "为了使用 Musixmatch，需要从官方应用程序中检索你的用户令牌。从 AppStore 下载 Musixmatch，注册后转到 “设置” > “获取帮助” > “复制调试信息”，并将其粘贴在此处。你也可以使用 MitM 提取令牌。";
 // ★ 2026-10-13：匿名令牌接回来之后，选中 Musixmatch 时那颗弹窗改成**可选**的
 // （旧键 `enter_user_token` / `enter_user_token_message` 留着不动，其它语言仍在用）。
 musixmatch_token_optional_title = "Musixmatch 令牌（可选）";
@@ -314,8 +312,6 @@ categoriesSectionDeps1 = "关闭 = 忽略。显示 = 仅在进度条上标记。
 /* MARK: Referenced by code but absent upstream */
 OK = "确定";
 Cancel = "取消";
-Done = "完成";
-Loading = "加载中";
 episode_header = "单集 %@";
 
 /* MARK: 隐私 / 触感 / Flag 覆盖 */
@@ -375,12 +371,9 @@ dump_class_action = "转储这个类";
 
 /* MARK: 外观 */
 theme_section = "主题";
-theme_description = "选项生效需要重启Spotify(功能未测试)。";
 amoled = "纯黑（AMOLED）";
 accent_color = "强调色";
 
-extras_title = "扩展功能";
-extras_description = "功能思路来自 spoti.pw。";
 
 // ── 设置根页重排（2026-10-13）：四组的分组标题 + 每一行的副标题 ──
 // 原来的「扩展功能」页是个杂物袋（一行背后 24 个开关 + 8 个子页），已按页面拆开；
@@ -420,7 +413,6 @@ hide_mini_player_bar = "隐藏迷你播放条";
 hide_singalong_line = "隐藏Spotify官方的单行歌词";
 hide_npv_pills = "隐藏播放器里的切换至视频 / 显示歌词胶囊";
 player_cards_section = "听歌页卡片";
-player_cards_description = "这些功能未测试。";
 hide_player_cards = "隐藏全部卡片";
 player_card_lyricsCard = "歌词卡片";
 player_card_aboutArtist = "了解艺人";
@@ -432,8 +424,6 @@ player_card_releaseCountdown = "发行倒计时";
 player_card_credits = "制作名单";
 player_card_merch = "周边商品";
 player_card_recommendations = "推荐内容";
-declutter_home_player_section = "首页与播放器";
-declutter_home_player_description = "类名/标识都来自视图树转储。";
 hide_home_header = "隐藏首页顶部条";
 hide_connect_button = "隐藏设备按钮";
 hide_add_to_button = "隐藏喜欢按钮";
@@ -453,12 +443,9 @@ blocked_artists_clear_all = "清空名单";
 library_section = "音乐库";
 tab_bar_glass_section = "标签栏";
 tab_bar_system_glass = "液态玻璃版标签栏";
-tab_bar_glass_description = "关于标签栏的一些设置。";
 library_large_title = "Apple Music 式音乐库";
-library_large_title_description = "效果可能不明显。";
 home_section = "主页";
 home_large_title = "Apple Music 式主页";
-home_large_title_description = "效果可能不明显。";
 home_header_title = "主页";
 
 flag_catalog_search_placeholder = "按名称或 scope 过滤";
@@ -468,7 +455,6 @@ tab_bar_hide_create = "隐藏「创建」标签";
 
 mini_bar_glass_section = "迷你播放条";
 mini_bar_glass = "液态玻璃版的迷你播放条";
-mini_bar_glass_description = "关于迷你播放条的一些设置。";
 
 playlist_cover_section = "歌单封面";
 playlist_single_cover = "替换Spotify官方的四合一封面";
@@ -477,10 +463,8 @@ playlist_single_cover_description = "选项开启后会替换Spotify四合一的
 entity_page_section = "专辑 / 歌单页";
 entity_page_dissolve = "替换Spotify的官方歌曲底色";
 entity_page_hide_chrome = "隐藏Spotify的若干按键";
-entity_page_description = "功能测试中。";
 entity_page_am_header_section = "Apple Music 式页头（歌单）";
 entity_page_am_header = "标题 / 创建者 / Play 胶囊居中";
-entity_page_am_header_description = "效果可能不明显。";
 am_header_play = "播放";
 artist_bio_empty = "这一位艺人暂时没有可读的介绍。";
 artist_bio_from_genius = "简介来自 Genius";

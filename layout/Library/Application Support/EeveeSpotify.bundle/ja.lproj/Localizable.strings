@@ -47,8 +47,6 @@ petitlyrics_description = "PetitLyrics：日本語の歌詞が豊富で、一部
 musixmatch_user_token = "Musixmatchのユーザートークン";
 user_token_placeholder = "ユーザートークン・デバッグ情報を入力";
 
-enter_user_token = "ユーザートークンを入力";
-enter_user_token_message = "Musixmatchを使用するには、公式アプリからユーザートークンを取得する必要があります。App StoreからMusixmatchをインストールして、サインインしてから、「設定」 > 「ヘルプを見る」 > 「デバッグ情報のコピー」を選択してペーストします。";
 
 genius_fallback = "Geniusを代わりに使用";
 genius_fallback_description = "%@に問題がある場合は、Geniusから歌詞を取得します。";
@@ -136,5 +134,4 @@ payment_notice = "EeveeSpotifyは、無料で一部のプレミアムの機能�
    section above and delete it from this block. */
 dump_customize_body_description = "Diagnostic only. Writes the raw configuration response into the debug log so the bundled snapshot can be replaced with your own.";
 
-mini_bar_glass_description = "Gives the mini player the same Liquid Glass capsule as the tab bar: **same width (360 pt on this device), same 60 pt height, same corner radius, same material**, keeping the small gap between the two. The mini player's own content (artwork, title, buttons, progress line) is scaled down uniformly to fit inside (~86%). While it is on, the solid cover-coloured background is cleared (Spotify writes it back, so it is cleared again on every layout); switching it off restores everything — glass removed, content back to its original size, background and clipping restored.";
 

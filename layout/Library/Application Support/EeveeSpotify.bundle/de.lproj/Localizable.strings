@@ -44,8 +44,6 @@ petitlyrics_description = "PetitLyrics: Bietet viele zeitsynchronisierte japanis
 musixmatch_user_token = "Musixmatch-Benutzertoken";
 user_token_placeholder = "Benutzertoken eingeben oder Debug-Infos einfügen";
 
-enter_user_token = "Benutzertoken eingeben";
-enter_user_token_message = "Um Musixmatch zu verwenden, musst du deinen Benutzertoken aus der offiziellen App abrufen. Lade Musixmatch aus dem App Store herunter, melde dich an, gehe zu Einstellungen > Hilfe > Debug-Infos kopieren und füge sie hier ein. Alternativ kannst du den Token mit MITM extrahieren.";
 
 genius_fallback_description = "Lade Lyrics von Genius, falls ein Problem mit %@ auftritt.";
 
@@ -128,5 +126,4 @@ payment_notice = "EeveeSpotify wendet Patches an, um bestimmte Premium-Funktione
    English rather than a raw key name. Translate one, then move it into the matching
    section above and delete it from this block. */
 
-mini_bar_glass_description = "Gives the mini player the same Liquid Glass capsule as the tab bar: **same width (360 pt on this device), same 60 pt height, same corner radius, same material**, keeping the small gap between the two. The mini player's own content (artwork, title, buttons, progress line) is scaled down uniformly to fit inside (~86%). While it is on, the solid cover-coloured background is cleared (Spotify writes it back, so it is cleared again on every layout); switching it off restores everything — glass removed, content back to its original size, background and clipping restored.";
 

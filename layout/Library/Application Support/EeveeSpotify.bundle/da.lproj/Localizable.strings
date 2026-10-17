@@ -46,8 +46,6 @@ petitlyrics_description = "PetitLyrics: Tilbyder mange tidssynkroniserede tekste
 
 user_token_placeholder = "Indtast User Token eller indsæt Debug Info";
 
-enter_user_token = "Indtast User Token";
-enter_user_token_message = "For at kunne bruge Musixmatch, skal du kopiere dit User Token fra den officielle app. Download Musixmatch-appen fra App Store, opret en konto, gå herefter til Settings > Get help > Copy debug info, og indsæt det her. Du kan også finde dit User Token ved brug af MITM.";
 
 genius_fallback = "Genius fallback";
 genius_fallback_description = "Indlæs tekster fra Genius hvis der er et problem med %@.";
@@ -134,5 +132,4 @@ payment_notice = "EeveeSpotify tilføjer patches for at låse op for visse Premi
    English rather than a raw key name. Translate one, then move it into the matching
    section above and delete it from this block. */
 
-mini_bar_glass_description = "Gives the mini player the same Liquid Glass capsule as the tab bar: **same width (360 pt on this device), same 60 pt height, same corner radius, same material**, keeping the small gap between the two. The mini player's own content (artwork, title, buttons, progress line) is scaled down uniformly to fit inside (~86%). While it is on, the solid cover-coloured background is cleared (Spotify writes it back, so it is cleared again on every layout); switching it off restores everything — glass removed, content back to its original size, background and clipping restored.";
 

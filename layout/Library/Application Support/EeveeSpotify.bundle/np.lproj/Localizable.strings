@@ -41,8 +41,6 @@ petitlyrics_description = "PetitLyrics: Dherai Japanese ra kehi international ge
 musixmatch_user_token = "Musixmatch ko User Token";
 user_token_placeholder = "User Token halnus ya Debug Info paste garnuhos";
 
-enter_user_token = "User Token Halnus";
-enter_user_token_message = "Musixmatch prayog garnu ko lagi, tapai le official app bata user token lina parcha. App Store bata Musixmatch download garera, sign up garnuhos, tespachi Settings > Get help > Copy debug info ma januhos ra yaha paste garnuhos. Yo token tapai le MITM bata ni nikalna saknuhunchha.";
 
 genius_fallback_description = "Yadi %@ ma samasya aayo bhane Genius bata lyrics load garney.";
 
@@ -120,5 +118,4 @@ payment_notice = "EeveeSpotify le patches apply garchha certain Premium subidha 
    English rather than a raw key name. Translate one, then move it into the matching
    section above and delete it from this block. */
 
-mini_bar_glass_description = "Gives the mini player the same Liquid Glass capsule as the tab bar: **same width (360 pt on this device), same 60 pt height, same corner radius, same material**, keeping the small gap between the two. The mini player's own content (artwork, title, buttons, progress line) is scaled down uniformly to fit inside (~86%). While it is on, the solid cover-coloured background is cleared (Spotify writes it back, so it is cleared again on every layout); switching it off restores everything — glass removed, content back to its original size, background and clipping restored.";
 

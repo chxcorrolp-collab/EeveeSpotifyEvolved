@@ -965,14 +965,17 @@ class NeteaseLyricsRepository: LyricsRepository {
         // 旧版这里还有一道"第一位时长不符就 noSuchSong"的闸门 —— 现在选歌本身已经要求
         // 时长对得上（或退回的那一位就是时长匹配的），所以那道闸门是重复的，删掉。
 
-        guard let songId = songId(from: chosen) else {
+        // ⚠️ 这个局部量**不能**叫 `songId`：它会遮蔽方法 `songId(from:)`，之后任何
+        //    `songId(from: …)` 都会被解析成这个 Int —— 2026-10-18 真机编译错误
+        //    `cannot call value of non-function type 'Int'` 就是这么来的。
+        guard let chosenSongId = songId(from: chosen) else {
             writeDebugLog("[NetEase] Chosen result has no song id")
             throw LyricsError.noSuchSong
         }
 
         let raw: (lrc: String?, tlyric: String?, romalrc: String?)
         do {
-            raw = try fetchLyricsRaw(songId: songId)
+            raw = try fetchLyricsRaw(songId: chosenSongId)
         } catch {
             writeDebugLog("[NetEase] Fetch lyrics error: \(error)")
             throw error
@@ -1014,13 +1017,55 @@ class NeteaseLyricsRepository: LyricsRepository {
             var yrcText: String? = nil
             var ytlrcText: String? = nil
             if preferWordByWord {
+                var yrcRaw: (yrc: String?, ytlrc: String?)? = nil
                 do {
-                    let yrcRaw = try fetchYrcRaw(songId: songId)
-                    yrcText = yrcRaw.yrc
-                    ytlrcText = yrcRaw.ytlrc
+                    yrcRaw = try fetchYrcRaw(songId: chosenSongId)
                 } catch {
                     writeDebugLog("[NetEase] yrc (eapi) fetch failed: \(error)")
                 }
+
+                // ★★ 2026-10-18（用户）：「逐词歌词开启的情况下，如果多个歌曲符合，
+                //    优先采用有逐词的；如果又有多个逐词，取满足条件的第一个。」
+                //
+                // 为什么必须有：同一首歌在网易常有**多个条目**（同名同歌手、专辑不同），
+                // 而 yrc 并不是每一条都有。真实现场「独白 — DUSTCELL」：
+                //   自白(196680ms) 无 yrc ／ 独白(195428ms) 有 51 行 yrc，
+                // 旧规则"相关度里第一条时长相符的"恰好选中了没 yrc 的那条。
+                //
+                // 代价：只有「有多条同时长候选、且选中的这条没有 yrc」时才会多发请求，
+                // 最多探 2 条；单候选的歌一次也不多打（循环体进不去）。
+                if parseYrc(yrcRaw?.yrc ?? "").isEmpty {
+                    var probed = 0
+                    for song in songs {
+                        guard probed < 2 else { break }
+                        guard let altId = songId(from: song), altId != chosenSongId else { continue }
+                        if let spotify = spotifyDurationMs, let ms = candidateDuration(song),
+                           abs(ms - spotify) > durationToleranceMs {
+                            continue
+                        }
+                        // 歌手**明确不符**（翻唱）的不探 —— 它们不属于"同样符合条件"的那一类。
+                        if case .some(false) = artistMatches(song) { continue }
+                        probed += 1
+                        guard let alt = try? fetchYrcRaw(songId: altId) else {
+                            writeDebugLog("[NetEase] sibling id=\(altId) — yrc fetch failed")
+                            continue
+                        }
+                        let altParsed = parseYrc(alt.yrc ?? "")
+                        guard !altParsed.isEmpty else {
+                            writeDebugLog("[NetEase] sibling id=\(altId) — no yrc either")
+                            continue
+                        }
+                        yrcRaw = alt
+                        writeDebugLog(
+                            "[NetEase] adopted a sibling's yrc — id=\(altId),"
+                                + " \(altParsed.count) line(s); the chosen entry had none"
+                        )
+                        break
+                    }
+                }
+
+                yrcText = yrcRaw?.yrc
+                ytlrcText = yrcRaw?.ytlrc
             }
             let yrcParsed: [(offsetMs: Int, content: String, words: [LyricsWordDto])] =
                 yrcText.map { parseYrc($0) } ?? []

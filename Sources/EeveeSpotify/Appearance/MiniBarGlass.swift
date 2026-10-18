@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import ObjectiveC.runtime
+import EeveeSpotifyC
 
 /// 迷你播放条的**液态玻璃胶囊** —— 与标签栏那条**等宽（312）、等高（60）、同圆角、同材质**。
 /// 用户 2026-10-02 拍的板：A 方案「两条要等宽」，代价是迷你条内容等比缩到 ~75%。
@@ -27,18 +28,18 @@ import ObjectiveC.runtime
 /// ── 三件必须一起做的事（少一件就翻车）────────────────────────────────────────
 ///   ① **底色**：内容视图自己是"封面色"实心块（真机 `#64204C` / `#3F3F3F`，随封面变）。
 ///      ⚠️ Spotify 会在我们清完之后**再写回来**（日志 27：16:50:19 我们清掉，16:50:20
-///      树上又是 `bg=#64204C` → 照片 34 那块紫的盖不住）。所以这里是**每次布局都清**、
-///      幂等、并计数（值没变不写；写回了就再清）；记下"最后一次看见的原色"用于还原。
+///      树上又是 `bg=#64204C` → 照片 34 那块紫的盖不住）。
+///      ★★ 2026-10-19（用户拍板 A，照上游）：**改成在层上断根** —— `EeveeInterceptBackground`
+///      （`Sources/EeveeSpotifyC/Tweak.m`，从上游 `EncoreBridge.m` 移植）给这一层的 CALayer
+///      换一个"只有它用"的实例子类，`setBackgroundColor:` 只回报颜色、**永远不落盘**
+///      ⇒ 之后 Spotify 再写也画不出来，**没有空窗期**。装不上时才退回老路（见 ④）。
 ///   ② **不裁剪**：60pt 的胶囊比 56pt 的内容高，会被 bounds 切掉上下各 2pt。
 ///      v4.7.1 起玻璃住**宿主**里（不再住内容里），所以连宿主也要不裁剪。
 ///   ③ **玻璃不进内容视图**：因为内容要被缩放 —— 玻璃要是它的子视图就会跟着缩。
 ///      所以玻璃插在 `host.subviews[0]`（整条内容之下、宿主背景之上），自己不受缩放影响。
-///   ④ ★ v4.8 **底色守卫**：Spotify 的写回**不一定**伴随宿主的布局回合，只靠"每次布局都清"
-///      会留下照片 36 那块封面色（日志 28 的 `SPTNowPlayingBar bg=#041454`），一直到用户
-///      碰巧触发了下一次布局才消失（照片 37 是点完「创建」/进过一次听歌页之后）。
-///      现在多两个驱动：写回后 **50ms 级的短促重试**（`armColorGuard`，带节流、不叠加）
-///      + `DeclutterChrome` **既有的 0.5s 复查节拍**（`reconcileCoverColor`）。
-///      ⚠️ 两个都是"看一眼 + 幂等清"，**不是常驻轮询**（与本仓库的纪律一致）。
+///   ④ ★ v4.8 的**底色守卫**（清 / 补清 / 0.5s 复查）现在只是**兜底**：
+///      拦截装上了 ⇒ `reconcileCoverColor()` 第一句就返回；装不上才真的跑那三件套。
+///      ⚠️ 两个驱动都是"看一眼 + 幂等清"，**不是常驻轮询**（与本仓库的纪律一致）。
 ///
 /// ── v4.8（2026-10-02）：用户「液态玻璃的宽度有点少」+ 照片 36/37 ────────────────
 ///   · 宽度**不写死**：跟着标签栏那条的比例走（v4.8 起标签栏那条真机是 **360pt**，
@@ -72,6 +73,9 @@ enum MiniBarGlassPlate {
     private static var hostClipKey: UInt8 = 0
     private static var originalColorKey: UInt8 = 0
     private static var originalClipKey: UInt8 = 0
+    /// ★★ 2026-10-19：这一层已经装了**底色拦截**（`EeveeInterceptBackground`）。
+    /// 装了之后就不再有"清 / 补清 / 复查"三件套 —— 写回在层上就被吃掉了。
+    private static var colorInterceptKey: UInt8 = 0
 
     /// 最近一次布局见过的 host / 内容 —— 开关被切换时当场落地用
     /// （与 `DeclutterChrome.reconcileNow()` 同一招：不用等下一次布局、更不用重启）。
@@ -145,12 +149,19 @@ enum MiniBarGlassPlate {
         let wanted = CGAffineTransform(scaleX: scale, y: scale)
         if content.transform != wanted { content.transform = wanted }
 
-        // ── ③ 底色：**每次布局都清**（Spotify 会写回来 —— 见文件头 ① / ④）────────────
-        clearCoverColor(of: content)
-        // ★ v4.8：把这次见过的那一个记下来，并排一轮"短促重试" —— 写回往往就发生在
-        //   我们这次清完之后的一两帧内，而那一帧**不一定**还有宿主的布局回合。
-        colorGuardTarget = content
-        armColorGuard()
+        // ── ③ 底色：**从源头吃掉**（2026-10-19 用户拍板 A，照上游）──────────────────
+        //
+        // 以前是"每拍清一次 + 50ms 补清 + 0.5s 复查"三件套去追 Spotify 的写回，
+        // 而**追的过程本身**就是闪烁（照片 34/36/37）。现在给这一层的 CALayer 换一个
+        // 实例子类，`setBackgroundColor:` 永远不落盘（见 `Sources/EeveeSpotifyC/Tweak.m`）。
+        // 装不上（层类是 Swift 类 / KVO 子类）才退回老的三件套。
+        if armColorIntercept(for: content) {
+            colorGuardTarget = nil
+        } else {
+            clearCoverColor(of: content)
+            colorGuardTarget = content
+            armColorGuard()
+        }
 
         // ── ④ 不裁剪：胶囊比内容高 4pt，内容与宿主都不能裁 ──────────────────────
         releaseClipping(of: content, rememberIn: &originalClipKey)
@@ -184,7 +195,24 @@ enum MiniBarGlassPlate {
             content.transform = .identity
             writeDebugLog("[MiniBarGlass] content had been scaled — restored to its original size")
         }
-        if let stored = objc_getAssociatedObject(content, &originalColorKey) {
+        // ★★ 2026-10-19：先把"底色拦截"撤掉（把 CALayer 的真实类写回去），
+        //    下面那句 `backgroundColor = stored` 才会真的落盘。
+        var interceptedColour: UIColor?
+        if let sink = objc_getAssociatedObject(content, &colourSinkKey) as? ColourSink {
+            interceptedColour = sink.last
+        }
+        if objc_getAssociatedObject(content, &colorInterceptKey) != nil {
+            EeveeRestoreBackground(content)
+            objc_setAssociatedObject(
+                content, &colorInterceptKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+            )
+            writeDebugLog("[MiniBarGlass] background intercept removed — the layer paints again")
+        }
+        if let interceptedColour {
+            // 拦截期间那一层的底色一直是空的 ⇒ 把最后见过的封面色还回去。
+            content.backgroundColor = interceptedColour
+            writeDebugLog("[MiniBarGlass] artwork-colour background restored from the intercept sink")
+        } else if let stored = objc_getAssociatedObject(content, &originalColorKey) {
             content.backgroundColor = (stored as? UIColor)
             objc_setAssociatedObject(content, &originalColorKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
             writeDebugLog("[MiniBarGlass] artwork-colour background restored")
@@ -248,6 +276,57 @@ enum MiniBarGlassPlate {
 
     // MARK: - 底色 / 裁剪
 
+    /// 接住"被吃掉的那份颜色"的小盒子。
+    ///
+    /// 为什么不用静态变量：层会**强持有**那个闭包，而闭包在非隔离上下文里被调用 ——
+    /// 直接写 `@MainActor` 的静态量会在 Swift 6 并发检查下判错。用一个 `@unchecked Sendable`
+    /// 的小对象承接，读写都只是一次属性赋值，跨线程也安全。
+    private final class ColourSink: @unchecked Sendable {
+        var last: UIColor?
+    }
+    private static var colourSinkKey: UInt8 = 0
+
+    /// ★★ 2026-10-19（用户拍板 A，照上游）：**从源头吃掉** Spotify 写给这一层的底色。
+    ///
+    /// 做的是：给 `content.layer` 换一个"只有这个实例用"的 CALayer 子类，它的
+    /// `setBackgroundColor:` 只把颜色回报给我们、永远不落盘 ⇒ 之后谁再写都画不出来。
+    /// 玻璃是系统 `UIGlassEffect`（`GlassCapsule.makeGlassView`），与上游同源。
+    ///
+    /// 代价：装过之后这一层就**没有底色**了（那正是我们要的）；关开关时用
+    /// `EeveeRestoreBackground` 把类写回去，再把最后见过的原色还给它。
+    ///
+    /// - Returns: 装上了返回 true；装不上（Swift 层类 / KVO 子类 / 分配失败）返回 false
+    ///   ⇒ 调用方退回"每拍清一次"的老路。
+    @MainActor
+    private static func armColorIntercept(for content: UIView) -> Bool {
+        if objc_getAssociatedObject(content, &colorInterceptKey) != nil { return true }
+        let sink = ColourSink()
+        objc_setAssociatedObject(content, &colourSinkKey, sink, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        let ok = EeveeInterceptBackground(content) { colour in
+            sink.last = colour
+        }
+        guard ok else {
+            if !didReportInterceptFailure {
+                didReportInterceptFailure = true
+                writeDebugLog(
+                    "[MiniBarGlass] background intercept NOT installed (layer class is not hookable)"
+                        + " — falling back to clearing the colour every layout"
+                )
+            }
+            return false
+        }
+        objc_setAssociatedObject(
+            content, &colorInterceptKey, NSNumber(value: true), .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+        writeDebugLog(
+            "[MiniBarGlass] background intercepted at the layer — Spotify can no longer paint"
+                + " over the glass (no clearing pass, no flash window)"
+        )
+        return true
+    }
+
+    private static var didReportInterceptFailure = false
+
     /// 清掉内容视图的"封面色底"。**每次布局都跑**，幂等。
     ///
     /// 真机证据（日志 27）：
@@ -307,6 +386,8 @@ enum MiniBarGlassPlate {
         guard isEnabled else { return }
         guard let content = colorGuardTarget ?? lastContent else { return }
         guard content.window != nil else { return }
+        // ★★ 2026-10-19：装上了拦截就**没有事情可做**了（写回在层上被吃掉）。
+        if objc_getAssociatedObject(content, &colorInterceptKey) != nil { return }
         if clearCoverColor(of: content) { armColorGuard() }
     }
 

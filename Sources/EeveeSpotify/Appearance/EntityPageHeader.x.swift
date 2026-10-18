@@ -638,8 +638,11 @@ enum EntityPageHeaderManager {
     /// 真命中时的下一步二选一：把封面在文字带内**遮掉**（mask），或者把我们的内容整体挪出封面区。
     private static func probeCoverOverlap(cover: UIView?, headerView: EntityPageHeaderView, role: String) {
         guard let cover, headerView.bounds.height > 1, headerView.window != nil else { return }
-        let textTop = headerView.textTop
-        guard textTop > 0 else { return }
+        // ★★ 2026-10-19（日志 555 的现场：歌单页 `text top -1pt`）：`textTop` 用 -1 表示"没有标题"，
+        //    但**标题上沿正好压在本视图顶边**时也是 -1 ⇒ 原来那句 `guard textTop > 0` 会把这种页
+        //    整段跳过（"把字挪出封面"从来没跑过）。现在先问 `hasTitle`，再把 -1 夹成 0 继续量。
+        guard headerView.hasTitle else { return }
+        let textTop = max(0, headerView.textTop)
         let frame = cover.convert(cover.bounds, to: headerView)
         guard frame.maxY > textTop + 1, frame.minY < headerView.bounds.height else { return }
         let coverBottom = Int(frame.maxY.rounded())

@@ -866,8 +866,10 @@ final class EntityPageHeaderView: UIView {
             previous = label
         }
         if previous != nil { height += EntityPageHeaderMetrics.rowAbove }
-        // ★ 2026-10-13（照 AM）：按钮行的高度取三颗里**最高**的那颗（中间那颗比两侧大一档）。
-        height += max(EntityPageHeaderMetrics.rowHeight, EntityPageHeaderMetrics.playSide)
+        // ★ 2026-10-13（照 AM）：按钮行的高度取三颗里**最高**的那颗。
+        // ★★ 2026-10-19：中间那颗改回**胶囊**（`playMinWidth` × `rowHeight`），不再比两侧高一档
+        //   ⇒ 整行高度就是两侧小圆的直径（见下面 `layoutSubviews` 里那段说明）。
+        height += EntityPageHeaderMetrics.rowHeight
         // ★★ 2026-10-17：「最新发布」卡片占的高度（见 `updateRelease`）。
         if showsReleaseCard {
             height += EntityPageHeaderReleaseCard.spacing + EntityPageHeaderReleaseCard.height
@@ -907,6 +909,10 @@ final class EntityPageHeaderView: UIView {
     ///    ⇒ 首帧可能还是 0，那一拍 `ensureSharpHero` 会退回默认收口，下一拍就对上了（0.6s 的拍子）。
     var textTop: CGFloat { titleLabel.isHidden ? -1 : titleLabel.frame.minY }
 
+    /// 这一拍有没有标题 —— `textTop` 用 `-1` 表示"没有名字"，读它的地方要先问这一句，
+    /// 否则"标题上沿正好压在本视图顶边（`textTop == -1`）"会被当成"没有标题"。
+    var hasTitle: Bool { !titleLabel.isHidden }
+
     override func layoutSubviews() {
         super.layoutSubviews()
 
@@ -945,15 +951,21 @@ final class EntityPageHeaderView: UIView {
 
         // Play 始终在页面正中，另两颗挂在它两侧 —— 少一颗也不动位置。
         //
-        // ★ 2026-10-13（照 AM）：中间那颗**大一档**（84 vs 两侧 56），三颗要**圆心同高**
-        //   ⇒ 中间那颗往上抬 `(big - side) / 2`，两侧才与它的圆心齐平。
+        // ★ 2026-10-13（照 AM）：中间那颗原来大一档（84 vs 两侧 56），三颗要**圆心同高**
+        //   ⇒ 中间那颗往上抬 `(big - side) / 2`。
+        //
+        // ★★ 2026-10-19（用户：「那个播放按键做成 **melox/am 一样的槽形状**吧」）：
+        //   中间那颗从「84pt 的大圆」改成 **148×56 的胶囊**（`playMinWidth` × `rowHeight`）——
+        //   与两侧小圆**一样高、同一行、同一圆心**，所以那条"往上抬半档"的偏移一并去掉。
+        //   胶囊里是 `[▶][6pt][播放]`，由 `EntityPageHeaderPlay.layoutSubviews` 里那条
+        //   "非正方形 ⇒ 显示文字"的分支负责（它本来就支持两种形态，不用再加开关）。
         let side = EntityPageHeaderMetrics.rowHeight
-        let big = EntityPageHeaderMetrics.playSide
+        let pill = EntityPageHeaderMetrics.playMinWidth
         let play = CGRect(
-            x: round((width - big) / 2),
-            y: y - (big - side) / 2,
-            width: big,
-            height: big
+            x: round((width - pill) / 2),
+            y: y,
+            width: pill,
+            height: side
         )
         playButton.frame = play
         shuffleButton.frame = CGRect(
@@ -962,7 +974,7 @@ final class EntityPageHeaderView: UIView {
         trailingButton.frame = CGRect(
             x: play.maxX + EntityPageHeaderMetrics.rowSpacing, y: y, width: side, height: side
         )
-        y += max(side, big)
+        y += side
 
         // ★★ 2026-10-17：卡片贴在按钮行下面（AM 的 136 就是这个名字 / 三颗 / 卡片 / 列表的顺序）。
         if showsReleaseCard {

@@ -151,40 +151,17 @@ final class EntityPageHeaderButton: UIControl {
         //    艺人页这颗 `i` 现在**弹我们自己的"艺人介绍"**，不再往 Spotify 那一块转发。
         if presentsOwnBio {
             let name = EntityPageHeaderManager.currentArtistName
-            // ★★ 2026-10-11（日志 100）：**读到过一次就不再扫列表** —— 扫列表会滚一遍、
-            //    把沿途 cell 全建出来；用户连点四次就是四次整页扫描（日志 100 的 03:51:41-44）。
-            //
-            // ★★ 2026-10-16（用户：「如果是 Nana 这种正常的，需要往下划到原本的 艺人介绍 才有，
-            //    并且有很明显的卡顿」）：这里原来退到 `eeveeArtistBio(from: self)`，而它内部是
-            //    `eeveeMaterialiseBio` —— **会把列表一路滚到底再滚回来**（最多 12 步），
-            //    那一下卡顿就是这个。现在**零滚动**：先看缓存，再试"页面上已经建出来的那张卡"
-            //    （`eeveeArtistBioCard` 只做有界搜索），读到就存进 `bioTexts`
-            //    （`artistBiographyAppeared` 内部读走 + 作废一次布局 ⇒ 折叠闸门这才打开），
-            //    仍然读不到就照实弹"没有可读的介绍" —— 那张卡片自己还会盯 6 秒补看
-            //    （`ArtistBioSheet.watchForNativeText`），不再拿"滚一趟列表"去换它。
+            // 2026-10-18 晚（用户拍板）：**"不滚动就读简介"那一整套已删掉** —— 后台延后 1.5s 读 +
+            // 每 1.5s 补读、点击时静默把列表翻一整趟 + 0.6s/1.6s 补扫，试过几轮都不成立
+            // （那一段是懒加载的，不滚到就不建），而且每次都整页卡一下。
+            // 现在只剩两件**零滚动**的事：
+            //   · 读缓存（用户滑到底之后被 `captureBioTextOnSight` 存下来的那份）；
+            //   · 认页面上**已经建出来**的那张卡（`eeveeArtistBioCard` 只做有界搜索）。
+            // 都没有就照实弹占位符 —— 占位符里已经告诉用户"先滑到页面底部、再回来点"。
             var text = EntityPageHeaderManager.cachedBioText(for: name)
             if text == nil, let card = eeveeArtistBioCard(in: self) {
                 EntityPageHeaderManager.artistBiographyAppeared(card)
                 text = EntityPageHeaderManager.cachedBioText(for: name)
-            }
-            // ★★ 2026-10-18（用户：「还是只能往下划到原本的艺人模块再划回去，点击 i 才有用」）：
-            //    卡片是懒加载的 ⇒ 零滚动找不到时，**在这一次点击里**静默扫一趟列表把它建出来，
-            //    再回到原位（`eeveeMaterialiseBio` 已经这么做）。每页只做一次，避免连点连扫。
-            if text == nil {
-                let page = eeveeAncestor(withIdentifier: "creator-page", of: self)
-                if EntityPageHeaderManager.beginTapMaterialise(for: page) {
-                    if let card = eeveeMaterialiseBio(from: self) {
-                        EntityPageHeaderManager.artistBiographyAppeared(card)
-                    }
-                    text = EntityPageHeaderManager.cachedBioText(for: name)
-                }
-                // ★★ 2026-10-17（用户：「艺人页还是**不手动往下滑过**，`i` 的就不会展示艺人简介」）：
-                //    这一趟扫描在"列表还在长"的那一两秒里经常白跑 ⇒ **补扫两次**（0.6s / 1.6s）。
-                //    补扫成功时正文会进 `bioTexts`，已经开着的这张卡片由 `watchForNativeText`
-                //    那 6 秒的盯梢写上去 —— 用户不需要先手动滑到那一块。
-                if text == nil {
-                    EntityPageHeaderManager.retryMaterialiseBio(from: page ?? self)
-                }
             }
             ArtistBioSheet.present(
                 name: name,

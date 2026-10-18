@@ -117,11 +117,6 @@ enum EntityPageHeaderManager {
     /// ★★ 2026-10-18 第三轮（用户：「要不点击 i 之后不要 spotify 自己的了 … 我们自己搞」）：
     /// **读到过的艺人简介**按艺人名缓存（那一块是懒加载的，读一次就够；cell 一被回收文字就没了）。
     private static var bioTexts: [String: String] = [:]
-    /// 这一页已经安排过"扫列表读简介"了（每页一次，延后 1.5s）。
-    private static weak var bioSweepPage: UIView?
-    private static var didReportBioSweep = false
-    /// ★★ 2026-10-18 第四轮：那份"Spotify 原生数据线在哪"的诊断**只打一次**（见 `scheduleBioSweepIfNeeded`）。
-    private static var didReportArtistAboutFetcher = false
     /// 现在这一页的艺人名（`applyToArtistPage` 每拍写）—— "我们自己的艺人介绍"拿它当标题。
     private static var artistNameStorage = ""
 
@@ -155,7 +150,7 @@ enum EntityPageHeaderManager {
     /// 把模型落库（`bioTexts` / `bioLinks` 的其它读点都在主线程 ⇒ 这里必须主线程调）。
     ///
     /// ⚠️ **落库的 key 必须与所有读点一致**：`cachedBioText` / `cachedBioLinks` /
-    /// `hasCapturedBio` / `readBioWithoutScrolling` 用的都是**页面上的艺人名**
+    /// `hasCapturedBio` 等读点用的都是**页面上的艺人名**
     /// （`artistNameStorage`）。模型的 `artistName` 多数时候与它逐字相同，但**不保证**
     /// （本地化 / 版本差异 / 空白与大小写）⇒ 只按模型名存就会出现
     /// "hook 装上了、日志也打了 `[ArtistBio] loader — …`、卡片里却什么都没有"。
@@ -304,97 +299,6 @@ enum EntityPageHeaderManager {
         !artistNameStorage.isEmpty && bioTexts[artistNameStorage] != nil
     }
 
-    /// **安排一次"扫列表读简介"**（每页一次，延后 1.5s）。
-    ///
-    /// 为什么不同步做：那一下会把列表里到"关于艺人"为止的 cell 全建出来，进页面那几帧本来就忙
-    /// （页头在逐帧布局）。延后一拍半、而且 `eeveeMaterialiseBio` **一找到就停 + 回到原位**，代价小。
-    /// 读到之后：① 存起来给 `i` 那张卡片用；② **读到之后**列表里那一段才会被折成 0 高
-    /// （`EntityPageSectionDrop` 的闸门 = `hasCapturedBio`，所以这里还要主动作废一次布局）。
-    private static func scheduleBioSweepIfNeeded(in page: UIView, name: String) {
-        guard !name.isEmpty, bioTexts[name] == nil, bioTexts.count < 32 else { return }
-        guard bioSweepPage !== page else { return }
-        bioSweepPage = page
-        // ★★ 2026-10-18 第四轮：顺手把"Spotify 原生那条数据线"的宿主类打进日志（一次性诊断，
-        //    见 `ArtistBioSource.reportArtistAboutFetcher`）—— 下一份日志就能定下一轮怎么取**完整正文**。
-        if !didReportArtistAboutFetcher {
-            didReportArtistAboutFetcher = true
-            ArtistBioSource.reportArtistAboutFetcher()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak page] in
-            guard let page, page.window != nil else { return }
-            // ★★ 2026-10-18：这一拍顺手也把**社交链接**扫一遍（见 `captureBioLinks`）——
-            //    链接按钮与正文各出现各的，两边都从**页面根**起扫（有界 800 节点）。
-            captureBioLinks(from: eeveeArtistBioSearchRoot(from: page), name: name)
-            let text = readBioWithoutScrolling(in: page, name: name)
-            guard !didReportBioSweep else { return }
-            didReportBioSweep = true
-            let count = text?.count ?? 0
-            writeDebugLog(
-                "[EntityPageHeader] about-artist read — \(name), biography "
-                    + (text == nil ? "NOT READ" : "\(count) char")
-                    // ★★ 2026-10-11：这句原来是"the section itself is folded to 0 height"（无条件断言）。
-                    //    现在折叠有了闸门（读不到就**不折**），那句话不再恒真 ⇒ 照实写。
-                    + (text == nil
-                        ? "; nothing to fold this time (the section stays on the page)"
-                        : "; the section gets folded now that we have the text")
-            )
-        }
-
-        // ★★ 2026-10-16（**日志 103 的 AKIR 现场**）：上面那一次**不够**。
-        //
-        //    那一格是懒加载的，正文可能好几秒之后才到 —— AKIR 那次 1.5s 去读的时候，
-        //    "关于"那一段还是 `Components.UI.RetrievalRowLoadingElementUI` 占位行
-        //    （日志 103 的 cell dump 逐字：0-10 / 0-11 / 0-13 全是 h=92 的 Loading），
-        //    于是 `biography NOT READ; nothing to fold this time` **一锤定音**：
-        //    ⇒ ① 那一节**永远折不掉**（用户报的"关于艺人遮不住"）；
-        //    ⇒ ② 点 `i` 也永远说"没有可读的介绍"。
-        //
-        //    现在**每 1.5s 补读一次、最多 10 次（≈15s）**，一读到就停。全程**零滚动**
-        //    （滚动那一版会把列表滚一整趟再滚回来，用户看得见；见 `readBioWithoutScrolling`）。
-        for attempt in 2...11 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5 * Double(attempt)) { [weak page] in
-                guard let page, page.window != nil else { return }
-                // ★★ 2026-10-18：**正文与社交链接各走各的** —— 以前读到正文就不再进这一拍，
-                //    而链接按钮常常比那张卡晚出现 ⇒ 一条都收不到。现在：
-                //    · 每一拍都先扫一遍链接（有界；正文读到之后也继续扫）；
-                //    · 正文只读到为止；两样都齐了 ⇒ 直接收工（不再白跑剩下的拍）。
-                if bioTexts[name] != nil, !(bioLinks[name] ?? []).isEmpty { return }
-                // ★★ 2026-10-18：**零风险的那条备用路** —— 数据线 hook 万一没装上/没响，
-                //    就问一遍页面里有没有活着的 `SPTArtistAbout`（它的 `biographyText` 是权威正文、
-                //    `socialLinks` 是真链接）。找不到就是找不到，不猜、不崩。
-                if let model = eeveeArtistAboutModel(in: page) {
-                    storeArtistAbout(model)
-                }
-                // 每一拍**先扫链接**（有界；收满 6 条就自己返回），再决定要不要读正文 ——
-                // 两边都不重复扫。
-                captureBioLinks(from: eeveeArtistBioSearchRoot(from: page), name: name)
-                guard bioTexts[name] == nil else { return }
-                guard let text = readBioWithoutScrolling(in: page, name: name) else { return }
-                writeDebugLog(
-                    "[EntityPageHeader] about-artist captured late — \(name), \(text.count) char"
-                )
-            }
-        }
-    }
-
-    /// **零滚动**地读一次「关于艺人」的正文（读到就存起来 + 作废一次布局）。
-    ///
-    /// 为什么不用 `eeveeArtistBio`（→ `eeveeMaterialiseBio`）那一版：
-    ///   · 它会**把列表一路滚到底再滚回来**（最多 12 步）—— 用户看得见（日志 100：连点四次 = 四次整页扫描）；
-    ///   · 而且日志 102/103 里它**一次都没真的滚过**：那两页从页面根找不到 scroll view，
-    ///     在 `guard let scroll …` 那句就静默 `return nil`（所以那两份日志里连
-    ///     `about-artist sweep` 这一行都没有）⇒ 那条路已经是死的，留着只会让人以为正文是它读到的。
-    ///
-    /// 判据仍然只是"页面上**已经建出来**的那张卡"（`eeveeArtistBioCard`：零滚动 + 有界搜索）。
-    @discardableResult
-    private static func readBioWithoutScrolling(in page: UIView, name: String) -> String? {
-        guard !name.isEmpty, page.window != nil else { return nil }
-        if let cached = bioTexts[name] { return cached }
-        guard let card = eeveeArtistBioCard(in: page) else { return nil }
-        // 这个入口内部会把正文读走 → 存进 `bioTexts` → 作废一次布局（折叠闸门这才打得开）。
-        artistBiographyAppeared(card)
-        return bioTexts[name]
-    }
     /// 读到简介之后**主动让列表重排一次** —— 折叠的闸门是"读到了吗"（`EntityPageSectionDrop`），
     /// 而"这一格多高"只在布局时被问，所以读到那一刻不作废布局的话，折叠要等用户滚一下才生效。
     ///
@@ -1000,10 +904,12 @@ enum EntityPageHeaderManager {
             return
         }
 
-        // ★★ 2026-10-18 第三轮：① 记下艺人名（`i` 那张"我们自己的艺人介绍"拿它当标题）；
-        //    ② 安排一次"扫列表读简介"（见 `scheduleBioSweepIfNeeded`）。
+        // ★★ 2026-10-18 第三轮：记下艺人名（`i` 那张"我们自己的艺人介绍"拿它当标题）。
+        //
+        // 2026-10-18 晚：**不再安排"扫列表读简介"** —— 那一套（延后 1.5s 读一次 + 每 1.5s 补读、
+        // 最多 10 次）试过几轮都不成立：那一段是懒加载的，不滚到就不建，零滚动读到的永远是空。
+        // 已整体删除；用户侧改成"先滑到页面底部、再回来点 i"（占位符里就这么写）。
         artistNameStorage = name
-        scheduleBioSweepIfNeeded(in: page, name: name)
 
         // 副标题：`Components.Header.UI.Metadata` —— 树里是 "58,4M monthly listeners"。
         var meta = ""
@@ -1026,7 +932,6 @@ enum EntityPageHeaderManager {
         }
         if headerView.frame != header.bounds { headerView.frame = header.bounds }
         // ★★ 2026-10-18：Follow 状态复查要能找回"这一页 / 这个页头"（见 `refreshArtistFollow`）。
-        if lastArtistPage !== page { tapMaterialisedPages.removeAll() }
         lastArtistPage = page
         lastArtistHeaderView = headerView
         if headerView.onTrailingTapped == nil {
@@ -1325,46 +1230,6 @@ enum EntityPageHeaderManager {
             "followRefresh-\(followed)",
             "follow state after tap — followed=\(followed); \(eeveeOnSignals(follow))"
         )
-    }
-
-    /// ★ 2026-10-18（用户：「还是只能往下划到原本的艺人模块再划回去，点击 i 才有用」）：
-    /// **一次点击最多扫一趟列表**。`eeveeMaterialiseBio` 会把列表逐屏翻一遍再回到原位，
-    /// 每点一次都扫一遍会很卡；按页面记，第一次点击才允许扫。
-    private static var tapMaterialisedPages = Set<ObjectIdentifier>()
-
-    static func beginTapMaterialise(for page: UIView?) -> Bool {
-        guard let page else { return false }
-        return tapMaterialisedPages.insert(ObjectIdentifier(page)).inserted
-    }
-
-    /// ★★ 2026-10-17（用户：「艺人页还是**不手动往下滑过**，`i` 的就不会展示艺人简介」）：
-    /// 点 `i` 时那一趟扫描**可能白跑** —— 卡片是懒加载的（不滚到它就不会被建出来），
-    /// 而列表在刚进页面的一两秒里还在长（`contentSize` 边滚边变）⇒ 一次扫空就永远空着。
-    ///
-    /// 现在：扫空之后**再补扫两次**（0.6s / 1.6s）。每次只看两种情况 —— 已经拿到正文就停；
-    /// 页面已经离开就停。`eeveeMaterialiseBio` 自己会回到原位，所以补扫不会把页面留在下面。
-    static func retryMaterialiseBio(from view: UIView, remaining: Int = 2) {
-        guard remaining > 0 else { return }
-        let name = currentArtistName
-        let delay: TimeInterval = remaining == 2 ? 0.6 : 1.6
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak view] in
-            guard let view, view.window != nil else { return }
-            if !name.isEmpty, cachedBioText(for: name) != nil { return }
-
-            if let card = eeveeMaterialiseBio(from: view) {
-                artistBiographyAppeared(card)
-                writeDebugLog(
-                    "[EntityPageHeader] about-artist retry found the card (\(remaining) retry/retries left)"
-                )
-                return
-            }
-
-            writeDebugLog(
-                "[EntityPageHeader] about-artist retry still empty (\(remaining) retry/retries left)"
-            )
-            retryMaterialiseBio(from: view, remaining: remaining - 1)
-        }
     }
 
     // MARK: - 「艺人之选」/「最新发布」卡片（艺人页三颗按钮下面那张）

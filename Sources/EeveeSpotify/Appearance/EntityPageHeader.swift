@@ -385,37 +385,6 @@ func eeveeMaterialiseBio(from view: UIView) -> UIView? {
     return found
 }
 
-/// 扫一遍列表、把"关于艺人"那一段逼出来，**顺手把正文读出来**。
-///
-/// ⚠️ 读文字必须和"逼出来"在**同一个主线程回合**里做：那一段是懒加载的 section，滚走之后 cell 会被
-/// 回收、文字就没了（所以我们不缓存 view，缓存的是文字，见 `EntityPageHeaderManager`）。
-@discardableResult
-func eeveeArtistBio(from view: UIView) -> (view: UIView, text: String?)? {
-    guard let bio = eeveeMaterialiseBio(from: view) else { return nil }
-    // ★★ 2026-10-11（日志 100）：**先按名字精确读** —— 那一格就是
-    //    `Components.UI.CreatorBiographyCard.BiographyLabel`（真机树逐字）。以前一上来就"取最长的一段"，
-    //    在卡片里挑到过别的长文本，而且它压根没走到这一步（卡都没认出来）。
-    if let text = eeveeArtistBioText(in: bio) { return (bio, text) }
-    // ★★ 2026-10-18 第五轮：40 字那道闸是给"排除短标签"用的（"收听""已关注"那种），
-    //    但日文 / 中文简介本来就短，正文可能只有二十几个字 ⇒ 40 字找不到时**再按 20 字找一次**。
-    //    （卡片上那行日志会写出真正读到几个字，下一份日志就能判断这个下限合不合适。）
-    // ★★ 2026-10-16（用户：「我见过的最短艺人简介是**四个字母**，不知道有没有更短的，怎么办」+
-    //    「有些行中间是有空行的，**现在似乎没有**」）：**别再靠字数猜**。
-    //
-    //    上面那三道 40 / 20 / 6 字是"拿长度当判据"，两个真实场景都会栽：
-    //      · 四个字母的简介永远过不了那道门（他说见过，还可能更短）；
-    //      · "最长的那一段"在卡片里会挑错东西 —— 社交链接标签、图 139 那张 "This Is …" 卡片的
-    //        标题，都可能比一句简介长。
-    //
-    //    而**精确那条路（`eeveeArtistBioText`）本来就没有字数门槛**（读到几个字都收）——
-    //    它读的是 `Components.UI.CreatorBiographyCard.BiographyLabel`。所以字数门槛只该是
-    //    "连那张 label 都认不出来"时的垫脚石，而垫脚石的正确形状不是"放宽到 6 字"，
-    //    是**在已知的卡片里按位置把文字拼起来**（见 `eeveeArtistBioBlockText`）：
-    //    段之间的空行也就跟着回来了（Spotify 常常一段一个 label）。
-    if let text = eeveeArtistBioText(in: bio) { return (bio, text) }
-    return (bio, eeveeArtistBioBlockText(in: bio))
-}
-
 /// 卡片里那些**界面文字**（不是正文）—— 拼正文时跳过。
 /// ⚠️ 只放"Spotify 自己给这一块画的按钮 / 小标题"，**别放可能是简介的词**（宁可多留）。
 let eeveeArtistBioUILabels: Set<String> = [

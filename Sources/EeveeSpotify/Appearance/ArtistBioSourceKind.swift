@@ -39,8 +39,8 @@ enum ArtistBioSourceKind: Int, CaseIterable, CustomStringConvertible {
 
     /// 这个选项要不要**读 Spotify 原生那一块**（`automatic` / `spotify` 要）。
     ///
-    /// ⚠️ 这**不是**"要不要扫列表"：扫列表是另一件事 —— 把懒加载的「关于艺人」逼出来才能把它**折掉**
-    /// （见 `EntityPageHeaderManager.scheduleBioSweepIfNeeded`），**与来源选择无关**，任何选项下都要做 ✓。
+    /// ⚠️ 这**不是**"要不要滚到「关于艺人」那一块"：那一块是懒加载的，只有用户自己滑到它才建得出来
+    /// （2026-10-18 晚起我们**不再**去扫列表/逼它出来），**与来源选择无关**。
     var readsSpotifyNative: Bool { self == .automatic || self == .spotify }
 }
 

@@ -401,33 +401,28 @@ final class EntityPageHeaderPlay: UIControl {
             glass.layer.cornerRadius = bounds.height / 2
         }
 
-        // ★ 2026-10-13（照 AM）：**形状决定形态**。布局那边给的是正方形（`playSide`，84pt）时，
-        //   它就是 AM 那颗"大圆 ▶"——**没有"播放"两个字**；给的是扁的（旧的 148×48）时，
-        //   还是 pw 那颗"▶ 播放"胶囊。两种形态共用这一份代码，不用开关、也不会两处漂。
+        // ★ 2026-10-13（照 AM）：**形状决定形态**。正方形时是"大圆 ▶"，扁的时是"▶ 播放"胶囊。
+        //
+        // ★★ 2026-10-19（用户：「**那个槽里面就不需要文字了**」）：胶囊现在**只画字形**，
+        //    文字永远隐藏 —— 所以那颗 `wordLabel` 只留作无障碍文案，不再参与排版。
+        //    形状仍然由布局决定（`EntityPageHeaderMetrics.playMinWidth` × `rowHeight`）。
         let isCircle = abs(bounds.width - bounds.height) < 8
-        if wordLabel.isHidden != isCircle { wordLabel.isHidden = isCircle }
+        if !wordLabel.isHidden { wordLabel.isHidden = true }
 
         // ★★ 2026-10-18：**不再有白底**。两种形态都只留玻璃圆 + 线条字形，
         //    与左右两颗完全同材质（见类型说明）——所以这里连"圆形纯白 / 胶囊白 90%"那条分支一起删了。
         if backgroundColor != .clear { backgroundColor = .clear }
         glass?.alpha = 1
 
-        // [字形][6pt][Play] 整体居中（圆形态里只剩字形，自然就是居中的）
-        // ★★ 2026-10-06（用户：「播放按钮里面的按键**不够大**」）：圆形态 44 → **52**
-        //   （AM 那颗 ▶ 占到圆的一半以上），胶囊形态仍是 24。
-        let glyphSide: CGFloat = isCircle ? 52 : 24
+        // 字形**居中**（槽里没有文字要避让）。
+        // ★★ 2026-10-06（用户：「播放按钮里面的按键**不够大**」）：圆形态 52；
+        //    胶囊形态从 24 抬到 **28** —— 槽变宽之后 24 显得偏小（2026-10-19）。
+        let glyphSide: CGFloat = isCircle ? 52 : 28
         let glyphWidth = glyphView.image == nil ? 0 : glyphSide
-        let spacing: CGFloat = (!isCircle && glyphWidth > 0) ? 6 : 0
-        let wordWidth = isCircle ? 0 : ceil(wordLabel.sizeThatFits(
-            CGSize(width: bounds.width, height: .greatestFiniteMagnitude)
-        ).width)
-        let total = glyphWidth + spacing + wordWidth
-        let startX = round((bounds.width - total) / 2)
-
+        let startX = round((bounds.width - glyphWidth) / 2)
         glyphView.frame = CGRect(x: startX, y: round((bounds.height - glyphSide) / 2),
                                  width: glyphWidth, height: glyphSide)
-        wordLabel.frame = CGRect(x: startX + glyphWidth + spacing, y: 0,
-                                 width: wordWidth, height: bounds.height)
+        wordLabel.frame = .zero
     }
 }
 

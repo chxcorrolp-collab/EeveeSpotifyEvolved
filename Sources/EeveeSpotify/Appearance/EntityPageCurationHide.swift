@@ -1,48 +1,49 @@
 import UIKit
 
-/// **歌单页那排 setting pill** 与 **「喜欢的歌曲」顶上那排 tags chips** —— 藏掉它们。
+/// **歌单页那排 setting pill** —— 藏掉它。
 ///
-/// 用户 2026-10-17（图片 148 / 149）原话：
+/// 用户 2026-10-17（图片 149）原话：
 ///
-/// > 喜欢的歌曲 里面的那些**根据标签挑选歌曲** / 歌单页的**那四个设置**可以隐藏了。
+/// > 歌单页的**那四个设置**可以隐藏了。
 ///
-/// 两排都是 Spotify 自己的东西，AM 里没有：
+/// 那排是 Spotify 自己的东西，AM 里没有：
 ///
 /// ```
 /// 歌单页    ┌ + 添加 ┐ ┌ ≡ 编辑 ┐ ┌ ↕ 排序 ┐ ┌ ✎ 姓名和详情 ┐      ← 149
-/// 喜欢的歌曲 ┌ 放克 ┐ ┌ 节拍 ┐ ┌ 电子 ┐ ┌ 游戏 ┐ …              ← 148（按标签挑歌）
 /// ```
 ///
-/// ## 判据（每一族各三条，命中一条就够）
+/// ## 判据（命中一条就够）
 ///
-/// | 目标 | ① id 子串 | ② 类名子串 | ③ 文字 | 出处 |
-/// |---|---|---|---|---|
-/// | 那排 pill | `PlaylistCuration` | — | 四颗逐个整串相等 | 本仓库 `EntityPageSectionDrop.curationFragment`：真机日志里 `PlaylistCuration.Row.CurationActionsToolbar` 出现过 107 次、`PlaylistCuration.AddButton` 72 次 |
-/// | 那排 chips | — | `ToolbarChipCollectionView` / `ToolbarChipCell` | — | 9.1.88 的类名 dump：`_TtC12Toolbar_Core25ToolbarChipCollectionView` / `…15ToolbarChipCell` |
+/// | 判据 | 值 | 出处 |
+/// |---|---|---|
+/// | ① id 子串 | `PlaylistCuration` | 本仓库 `EntityPageSectionDrop.curationFragment`：真机日志里 `PlaylistCuration.Row.CurationActionsToolbar` 出现过 107 次、`PlaylistCuration.AddButton` 72 次 |
+/// | ② 文字 | 四颗逐个整串相等 | 兜底 |
 ///
-/// ③ 那条**必须整串相等**：`添加歌曲`（148 里那行）含"添加"，子串匹配会把它一起藏掉。
+/// ② 那条**必须整串相等**：`添加歌曲`（148 里那行）含"添加"，子串匹配会把它一起藏掉。
 ///
 /// ## 纪律
 ///
 /// * **记原值**（`wasHidden`），关开关 / 换页时 `restore()` 原样写回 —— 与 `EntityPageAppearance`
 ///   其余十处同一个形状。
-/// * 每拍有界（≤ 900 节点 / 命中 4 个就停），页面上没有这两排时**什么都不做**（只是多走一趟 BFS）。
+/// * 每拍有界（≤ 900 节点 / 命中 4 个就停），页面上没有这排时**什么都不做**。
 /// * ⚠️ 藏的是**视图**，不是列表里的行高 ⇒ 若 Spotify 把这一排算进页头高度，藏完会留一条空档。
-///   第一次命中时把类名 / 帧 / id 打进日志，下一份日志就能判断要不要再补一次"页头收高"。
+///
+/// ## ★★ 2026-10-19：「喜欢的歌曲」那排 tags chips **不再动**
+///
+/// 用户：「已点赞的歌曲 那几个根据标签来选歌的功能**先让它留在那吧**，那些让它消失的代码先删掉。」
+///
+/// 那排从来就没认对过：旧判据 `Toolbar_Core.ToolbarChip*` 属于**搜索 / 资料库的工具条**，
+/// 不是它；后来加的形状兜底（「≥4 颗自己那段文字 ≤6 字的 UIControl」）在真机上也没命中过
+/// （日志 555 里只藏掉了歌单页那排 pill，chips 0 命中）。与其继续猜类名，先把这半边判据删干净。
+/// ⇒ 本文件现在**只管歌单页那排 pill**。
 enum EntityPageCurationHide {
 
-    /// ① 那排 pill 的模块前缀。
+    /// 那排 pill 的模块前缀。
     private static let identifierMarkers = [
         "PlaylistCuration",
     ]
 
-    /// ② 那排 chips 的类名（dump 里的 Swift 名字含这两段）。
-    private static let classMarkers = [
-        "ToolbarChipCollectionView",
-        "ToolbarChipCell",
-    ]
-
-    /// ③ 文字兜底：那一排四颗的字面（**整串相等**，见文件头）。
+    /// 文字兜底：那一排四颗的字面（**整串相等**，见文件头）。
     private static let textMarkers: Set<String> = [
         "添加", "编辑", "排序", "姓名和详情",
         "add", "edit", "sort", "name & details", "name and details",
@@ -74,11 +75,6 @@ enum EntityPageCurationHide {
 
         var marked: [UIView] = []
         var labelled: [UIView] = []
-        /// ★★ 2026-10-18（图片 148 的现场：那一排「放克 / 节拍 / 电子 / 游戏 …」**还在**）：
-        /// ② 那条类名判据（`ToolbarChip*`）在这个 Spotify 版本上**一次都没命中**
-        /// （日志 333 里 `[PageRepaint] hid … chrome row(s)` **0 行**）⇒ 只能按**形状**认。
-        /// 这里只收集"自己那段文字很短（≤6 字）的 UIControl"，凑够 4 颗再取它们共同的那一行。
-        var shortLabelled: [UIControl] = []
 
         var queue: [UIView] = [page]
         var visited = 0
@@ -90,34 +86,18 @@ enum EntityPageCurationHide {
                 marked.append(view)
                 continue
             }
-            if let control = view as? UIControl, let text = ownText(of: control) {
-                if textMarkers.contains(text) {
-                    labelled.append(control)
-                    continue
-                }
-                if text.count <= 6, shortLabelled.count < 16 {
-                    shortLabelled.append(control)
-                }
+            if let control = view as? UIControl, let text = ownText(of: control),
+               textMarkers.contains(text) {
+                labelled.append(control)
+                continue
             }
             queue.append(contentsOf: view.subviews)
-        }
-
-        // ★★ 2026-10-18：**一排短标签**（≥ 4 颗、文字都 ≤ 6 字、共同祖先不超过 200pt 高）——
-        //    148 那排 chips 的兜底。卡片横条（艺人之选 / 热门新歌）的文字是歌名、更长，
-        //    而且它们不是 UIControl ⇒ 不会被这条吃掉。
-        var chipRow: UIView?
-        if marked.isEmpty, labelled.isEmpty, shortLabelled.count >= 4,
-           let row = commonAncestor(of: shortLabelled), row.bounds.height >= 20 {
-            chipRow = row
         }
 
         // 文字那条：四颗按钮要收**它们共同的那一行**（一颗颗藏会在原处留四个洞）。
         var targets = marked
         if labelled.count >= 2, let row = commonAncestor(of: labelled) {
             targets.append(row)
-        }
-        if let chipRow, !targets.contains(where: { $0 === chipRow }) {
-            targets.append(chipRow)
         }
         guard !targets.isEmpty else { return }
 
@@ -140,7 +120,7 @@ enum EntityPageCurationHide {
         let joined = described.joined(separator: " | ")
         writeDebugLog(
             "[PageRepaint] hid \(targets.count) chrome row(s) the AM look does not have"
-                + " (playlist pills / liked-songs chips): \(joined)"
+                + " (playlist pills): \(joined)"
         )
     }
 
@@ -156,15 +136,9 @@ enum EntityPageCurationHide {
 
     private static func isMarked(_ view: UIView) -> Bool {
         let identifier = view.accessibilityIdentifier ?? ""
-        if identifierMarkers.contains(where: { identifier.contains($0) }) {
-            // 只收"一排"那么高的东西：真机里那排是 44~64pt；id 若落在页头容器上就别动。
-            return view.bounds.height > 1 && view.bounds.height <= 200
-        }
-        let name = NSStringFromClass(type(of: view))
-        if classMarkers.contains(where: { name.contains($0) }) {
-            return view.bounds.height > 1 && view.bounds.height <= 200
-        }
-        return false
+        guard identifierMarkers.contains(where: { identifier.contains($0) }) else { return false }
+        // 只收"一排"那么高的东西：真机里那排是 44~64pt；id 若落在页头容器上就别动。
+        return view.bounds.height > 1 && view.bounds.height <= 200
     }
 
     /// 只取**控件自己**那一段文字（不进子树）—— 进子树会把整行/整页的文字都带回来。

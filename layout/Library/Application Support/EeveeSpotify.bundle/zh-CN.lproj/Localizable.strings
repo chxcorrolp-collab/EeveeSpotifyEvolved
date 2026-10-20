@@ -1,4 +1,4 @@
-/* MARK: Settings */
+#/* MARK: Settings */
 
 patching = "补丁";
 lyrics = "歌词";
@@ -344,7 +344,7 @@ flags_auto = "自动";
 flags_on = "开";
 flags_off = "关";
 flags_count = "共 %d 条 · Spotify %@";
-flags_empty = "还没扫到 flag。重启 Spotify，几秒后再进来。";
+flags_empty = "未扫到Flag。重启Spotify重试。";
 flags_restart = "重启以生效";
 flags_reset = "清空全部改动";
 flags_rescan = "重新扫描 flag";
@@ -453,7 +453,7 @@ blocked_artists_clear_all = "清空名单";
 /* MARK: 听歌页外观（样品） */
 library_section = "音乐库";
 tab_bar_glass_section = "标签栏";
-tab_bar_system_glass = "液态玻璃版标签栏";
+tab_bar_system_glass = "标签栏用液态玻璃";
 library_large_title = "Apple Music 式音乐库";
 home_section = "主页";
 home_large_title = "Apple Music 式主页";
@@ -465,7 +465,7 @@ tab_bar_hide_labels = "隐藏标签文字";
 tab_bar_hide_create = "隐藏「创建」标签";
 
 mini_bar_glass_section = "迷你播放条";
-mini_bar_glass = "液态玻璃版的迷你播放条";
+mini_bar_glass = "迷你播放条用液态玻璃";
 
 playlist_cover_section = "歌单封面";
 playlist_single_cover = "替换Spotify官方的四合一封面";
@@ -485,19 +485,19 @@ artist_bio_empty = "暂时无法直接展示艺人简介。请先滑动到页面
 artist_bio_from_genius = "简介来自 Genius";
 artist_bio_section = "艺人介绍";
 artist_bio_source = "简介来源";
-artist_bio_source_automatic = "自动（推荐）";
-artist_bio_description = "点艺人页那颗 i 弹出来的简介从哪来。自动 = 先用 Spotify 自带那份（中文、跟着 App 语言），读不到才用 Genius（英文）；也可以只用其中一个：Spotify、Genius，或者维基百科首段（CC BY-SA，会署名）。列表里 Spotify 原来那段「关于艺人」只有在我们读到它之后才会收起来；读不到就留着，不会两边都没有。";
+artist_bio_source_automatic = "自动";
+artist_bio_description = "若来源选择自动，会优先选择Spotify官方艺人简介进行展示，若Spotify未返回艺人简介，回退到Genius进行展示。若来源选择Wikipedia，则只展示Wikipedia返回的内容（该来源测试中，不推荐使用）。若来源选择Genius同理，只展示Genius返回的结果。";
 artist_bio_from_wikipedia = "来自维基百科 · CC BY-SA";
 artist_bio_from_spotify = "来自 Spotify";
 artist_bio_loading = "正在获取…";
 artist_bio_open_wikipedia = "在维基百科中打开";
-artist_bio_spotify_failed = "Spotify 自带的那段读不到（日志里写了原因）";
+artist_bio_spotify_failed = "无法读取Spotify自带的简介。";
 artist_bio_genius_failed = "Genius 上没有这位艺人的简介";
 artist_bio_wikipedia_failed = "维基百科没有响应（本机网络可能屏蔽了它）";
 mini_bar_round_artwork = "专辑样式改圆形";
 home_tile_tint_section = "首页小卡片";
 home_tile_tint = "更好的首页小卡片";
-home_tile_tint_description = "选项开启后会给原灰色底替换为与封面展示相近的颜色。。";
+home_tile_tint_description = "选项开启后会给原灰色底替换为与封面展示相近的颜色。";
 
 flag_override_mode_number = "写入数字";
 flag_override_number_placeholder = "数字（例如 30）";
@@ -530,7 +530,7 @@ backup_import_not_a_backup = "这段 JSON 里没有 values 对象 —— 不是�
 backup_import_unreadable = "这不是能读的 JSON。";
 backup_reset = "重置本仓库的设置";
 backup_reset_footer = "只删本仓库自己的键。";
-backup_reset_confirm_title = "要重置吗？";
+backup_reset_confirm_title = "是否重置？";
 backup_reset_confirm_message = "会把本仓库存下来的设置全部删掉；Spotify 自己的偏好不受影响。";
 backup_reset_done = "已重置 %ld 条。";
 updates_title = "更新日志";
@@ -630,7 +630,7 @@ apple_music_official_ttml_description = "实验性功能。选项开启后可能
 apple_music_official_ttml_token = "Apple Music 登录令牌（media-user-token）";
 apple_music_official_ttml_token_placeholder = "粘贴 media-user-token";
 apple_music_official_ttml_token_hint = "苹果没有公开的歌词接口：搜索只需要网页令牌（本功能会自动抓取），但取歌词必须有你自己的 Apple Music 登录态。获取方法：浏览器登录 music.apple.com → 开发者工具 → 应用 → Cookie → https://music.apple.com → 复制 media-user-token 的值。需要有效的 Apple Music 账号，没有账号时这一源拿不到任何歌词。";
-apple_music_official_ttml_token_missing_inline = "还没填令牌 —— 这个源拿不到歌词。";
+apple_music_official_ttml_token_missing_inline = "未填写令牌 —— 这个源拿不到歌词。";
 apple_music_token_missing = "未填写 Apple Music 登录令牌";
 apple_music_token_invalid = "Apple Music 登录令牌无效或已过期";
 apple_music_token_popup = "Apple Music 官方歌词需要你自己的登录令牌：请在「设置 → 实验 → 启用Apple Music官方TTML歌词」里填入 media-user-token（浏览器：music.apple.com → 开发者工具 → 应用 → Cookie）。";

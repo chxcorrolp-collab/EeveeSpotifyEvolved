@@ -562,7 +562,14 @@ licenses_bundled = "内置的第三方源码";
 licenses_bundled_detail = "仓库内置了第三方源码（SwiftProtobuf、XMLCoder、fishhook 等）；仓库里没有随附它们各自的许可文件，需要时请看它们自己的项目。";
 licenses_inspiration = "spoti.pw";
 licenses_inspiration_detail = "本仓库复用并修改了 spoti.pw v0.21.1（GPL-3.0，版权归 Vojtěch Škopek）的代码与设计。只使用了 v0.21.1 及更早的版本；v0.22.0 起为 PolyForm Strict 1.0.0，未取其任何源码。";
-licenses_kumone_detail = "「整页取色底」的配方来自 kumone—— LGPL-3.0（库）/ GPL-3.0（应用）";
+licenses_kumone = "kumone";
+licenses_kumone_detail = "「整页取色底」的配方来自 kumone（独立网易云客户端）—— LGPL-3.0（库）/ GPL-3.0（应用），与本仓库的 GPL-3.0 兼容；只取了数值、曲线与图层配方，视图代码是本仓库自己写的 UIKit。";
+licenses_netease_api = "NeteaseCloudMusicApi";
+licenses_netease_api_detail = "网易云 weapi 的请求方案（双层 AES-CBC 与 RSA encSecKey）参照 Binaryify/NeteaseCloudMusicApi。该仓库现在只剩 README、没有许可文件，所以这里照实不写许可名；本仓库里的 Swift 实现是自己写的。";
+licenses_lyricify = "Lyricify Lyrics Helper";
+licenses_lyricify_detail = "网易云搜索策略（先旧接口、失败退 eapi cloudsearch；标题/歌手/专辑的查询阶梯与加权匹配）参照 WXRIW/Lyricify-Lyrics-Helper，Apache-2.0；未拷贝源码。";
+licenses_163musiclyrics = "163MusicLyrics";
+licenses_163musiclyrics_detail = "网易云 abroad 响应的形态与 cloudsearch 端点参考 jitwxs/163MusicLyrics，Apache-2.0；未拷贝源码。";
 
 // ── 减少打扰（2026-10-03）──────────────────────────────────────────────────────
 // 这些开关写的是 Spotify 的 **flag 覆盖**（`ios-messaging-reduceinterventions-impl` 那批），

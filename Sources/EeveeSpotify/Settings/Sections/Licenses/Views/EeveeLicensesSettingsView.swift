@@ -52,6 +52,27 @@ struct EeveeLicensesSettingsView: View {
                 symbol: "music.note.house",
                 color: Color(hex: "#FF375F")
             ),
+            // 2026-10-20：网易云歌词源的搜索/匹配思路参考了下面三个项目。
+            // NeteaseCloudMusicApi 的仓库现在只剩 README、没有许可文件，所以这里**照实写没有**，
+            // 不猜 SPDX；Lyricify 与 163MusicLyrics 的许可来自各自仓库的 LICENSE / README。
+            Entry(
+                title: "licenses_netease_api".localized,
+                detailKey: "licenses_netease_api_detail",
+                symbol: "cloud",
+                color: Color(hex: "#FF453A")
+            ),
+            Entry(
+                title: "licenses_lyricify".localized,
+                detailKey: "licenses_lyricify_detail",
+                symbol: "text.magnifyingglass",
+                color: Color(hex: "#64D2FF")
+            ),
+            Entry(
+                title: "licenses_163musiclyrics".localized,
+                detailKey: "licenses_163musiclyrics_detail",
+                symbol: "music.note.list",
+                color: Color(hex: "#FFD60A")
+            ),
         ]
     }
 

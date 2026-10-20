@@ -573,6 +573,12 @@ licenses_inspiration = "spoti.pw";
 licenses_inspiration_detail = "Code and design from spoti.pw v0.21.1 (GPL-3.0, © Vojtěch Škopek) are reused in this repository and modified by it. Only v0.21.1 and earlier were used — v0.22.0 and later are PolyForm Strict 1.0.0, and none of their source was taken.";
 licenses_kumone = "kumone";
 licenses_kumone_detail = "The now-playing page's full-page colour backdrop (gradient tint built from the cover colour) follows the recipe in kumone, an independent NetEase Cloud Music client — LGPL-3.0 (library) / GPL-3.0 (app), compatible with this repository's GPL-3.0. Only values, curves and the layer recipe were taken; the view code here is my own UIKit.";
+licenses_netease_api = "NeteaseCloudMusicApi";
+licenses_netease_api_detail = "The NetEase weapi request scheme (double AES-CBC and the RSA encSecKey) follows Binaryify/NeteaseCloudMusicApi. That repository now only carries a README and no license file, so no license name is claimed here; the Swift implementation in this repository is our own.";
+licenses_lyricify = "Lyricify Lyrics Helper";
+licenses_lyricify_detail = "The NetEase search strategy (old search first, eapi cloudsearch fallback, the title/artist/album query ladder, and weighted title/artist/album/duration matching) is modelled on WXRIW/Lyricify-Lyrics-Helper, Apache-2.0. No source code was copied.";
+licenses_163musiclyrics = "163MusicLyrics";
+licenses_163musiclyrics_detail = "The NetEase abroad response shape and the cloudsearch endpoint were identified with reference to jitwxs/163MusicLyrics, Apache-2.0. No source code was copied.";
 
 // ── Reduce interventions (2026-10-03) ─────────────────────────────────────────
 // These switches write Spotify **flag overrides** (the ios-messaging-reduceinterventions-impl

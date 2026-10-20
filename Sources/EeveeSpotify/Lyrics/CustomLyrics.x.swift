@@ -153,14 +153,30 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
         throw LyricsError.noCurrentTrack
     }
 
+    let metadata = track.metadata()
+    let title = track.trackTitle()
+    let metadataTitle = metadata["title"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let metadataAlbum = metadata["album_title"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    // 2026-10-20：NetEase 的搜索对文字敏感（日文名能搜到，罗马字名常常只搜到翻唱）。
+    // Spotify 侧同一首歌可能有多份标题：player track 的 `trackTitle()` 与 metadata
+    // 里的本地化 `title`。把不一样的都带上，让 NetEase 那边逐个试（见
+    // `NeteaseLyricsRepository.getLyrics` 的「标题变体」段）。
+    var titleVariants: [String] = []
+    if let metadataTitle, !metadataTitle.isEmpty, metadataTitle != title {
+        titleVariants.append(metadataTitle)
+    }
+
     let searchQuery = LyricsSearchQuery(
-        title: track.trackTitle(),
+        title: title,
         primaryArtist: EeveeSpotify.hookTarget == .lastAvailableiOS14 ? track.artistTitle() : track.artistName(),
         spotifyTrackId: track.trackIdentifier,
         durationMs: track.trackDurationMilliseconds,
         // 全部艺人（`artist_name` / `artist_name:1` / …）—— 选歌判定要比对歌手，
         // 只靠 `primaryArtist` 会被同曲异名 / 翻唱骗过去（日志 45 的现场）。
-        artistNames: allArtistNames(from: track)
+        artistNames: allArtistNames(from: track),
+        titleVariants: titleVariants,
+        albumTitle: (metadataAlbum?.isEmpty == false) ? metadataAlbum : nil
     )
 
     let options = UserDefaults.lyricsOptions

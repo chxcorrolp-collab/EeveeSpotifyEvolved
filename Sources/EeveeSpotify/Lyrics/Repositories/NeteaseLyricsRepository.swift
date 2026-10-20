@@ -441,21 +441,46 @@ class NeteaseLyricsRepository: LyricsRepository {
 
     // MARK: - 接口
 
-    /// 搜索走老接口 /weapi/search/get：cloudsearch/get/web 已被网易风控
-    /// （固定返回 code 50000005），实测老接口带 os=pc cookie 即可匿名使用。
+    /// 搜索走 **cloudsearch/pc**（2026-10-20 换）。
+    ///
+    /// 旧 `/weapi/search/get` 在「被标记的出口」（机房 IP、共享住宅 IP）会返回**诱饵结果**：
+    /// 歌名里带一个随机数字、和查询毫无关系（实测 `告白气球 周杰伦` → `48`、`Himitsu MIMI`
+    /// → `29`），而 cloudsearch 在同样的出口上给的是真结果。成熟项目也都走 cloudsearch：
+    /// Lyricify 用 `interface.music.163.com/eapi/cloudsearch/pc`（注释写明「可以在外网使用」），
+    /// 163MusicLyrics 用 `weapi/cloudsearch/get/web`，并在 `abroad: true` 时解码被加密的 result。
+    ///
+    /// 字段差异：cloudsearch 用 `ar`（歌手）、`dt`（毫秒时长）、`al`（专辑）、`alia`/`tns`
+    /// （别名/译名）；旧的 search/get 用 `artists`/`duration`/`album`。选歌那边两种都读。
     private func searchSongs(keyword: String) throws -> [[String: Any]] {
-        let data = try performWeapi("/weapi/search/get", params: [
+        let data = try performWeapi("/weapi/cloudsearch/pc", params: [
             "s": keyword,
             "type": 1,
             "limit": 30,
             "offset": 0,
         ])
 
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let result = json["result"] as? [String: Any],
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            let body = String(data: data, encoding: .utf8) ?? "<non-utf8 \(data.count) bytes>"
+            writeDebugLog("[NetEase] search response is not JSON (\(data.count) bytes): \(body.prefix(120))")
+            throw LyricsError.decodingError
+        }
+
+        if let code = json["code"] as? Int, code != 200 {
+            writeDebugLog("[NetEase] search returned code \(code)")
+            throw LyricsError.noSuchSong
+        }
+
+        // 海外出口下 NetEase 可能把 `result` 加密成字符串（163MusicLyrics 会解码）。
+        // 我们还没搬那套解码器 ⇒ 显式失败，让上层回退到别的源，而不是把密文当歌词。
+        if let result = json["result"], !(result is [String: Any]) {
+            writeDebugLog("[NetEase] search result is not an object (abroad-encoded?) — unsupported")
+            throw LyricsError.noSuchSong
+        }
+
+        guard let result = json["result"] as? [String: Any],
               let songs = result["songs"] as? [[String: Any]] else {
             let body = String(data: data, encoding: .utf8) ?? "<non-utf8 \(data.count) bytes>"
-            writeDebugLog("[NetEase] Search response malformed for \"\(keyword)\": \(body.prefix(300))")
+            writeDebugLog("[NetEase] search response malformed (\(data.count) bytes): \(body.prefix(120))")
             throw LyricsError.decodingError
         }
 
@@ -841,129 +866,260 @@ class NeteaseLyricsRepository: LyricsRepository {
             return cached.dto
         }
 
-        // 歌名用完整标题（保留 feat./slowed 等后缀），它们本身是重要的区分信息；
-        // 网易模糊搜索能靠这些后缀直接命中同曲目的日文名。
-        let keyword = "\(query.title) \(query.primaryArtist)"
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        let songs: [[String: Any]]
-        do {
-            songs = try searchSongs(keyword: keyword)
-        } catch {
-            writeDebugLog("[NetEase] Search error: \(error)")
-            throw error
-        }
-
-        guard !songs.isEmpty else {
-            writeDebugLog("[NetEase] No search results")
-            throw LyricsError.noSuchSong
-        }
-        writeDebugLog("[NetEase] Search returned \(songs.count) result(s)")
-
-        // 选歌：**歌手 + 时长都要对得上**，按相关度顺序取第一个满足的。
+        // ── 搜索（2026-10-20 重做）────────────────────────────────────────────
         //
-        // 历史（两版）：
-        //   · 第一版只看第一位：第一位时长差 > 5s 就 noSuchSong（哪怕后面有对得上的）；
-        //   · 第二版改成"按相关度找第一个时长对得上的"，但**完全不比对歌手**。
-        //
-        // 2026-10-04 真机日志 45 暴露了第二版的漏洞：同一时长里躺着翻唱 / 伴奏 / 同曲异名版本，
-        // 于是"能展示的歌词也全是错的"（用户原话）。现场是一串
-        // `[NetEase] Chosen[11] → yrc absent → No usable lyrics` 与
-        // `Chosen[0] → Duration mismatch` 交替出现。
-        //
-        // 现在：**时长必须对得上**（±5s），并且**歌手必须对得上**（候选的 `ar[].name`
-        // 里任意一个与我们的任一艺人名互相包含，忽略大小写）。找不到这样的候选时：
-        //   · 还有"时长对得上但歌手对不上"的 → **不用它**（那正是翻唱），交给兜底源；
-        //   · 一个时长都对不上 → noSuchSong。
-        // 拿不到时长（本地文件）时退回"只看歌手"，仍比盲取第一位安全。
+        // ① 查询串按「标题变体」逐个试：NetEase 的搜索对文字敏感，日文名能搜到，
+        //    罗马字名常常只搜到翻唱/同曲异名（实测 `Himitsu MIMI` 前 30 条里没有
+        //    MIMI 的《ヒミツ》，`MIMI ヒミツ` 第 2 条就是）。标题变体来自
+        //    `trackTitle()` + metadata 的本地化 `title`（见 `CustomLyrics`）。
+        // ② 候选收齐后按 标题/艺人/时长/专辑 打分，`alia`/`tns`（别名/译名）参与匹配。
         let durationToleranceMs = 5000
         let spotifyDurationMs = query.durationMs
-        let wantedArtists = query.allArtistNames.map { $0.lowercased() }
 
-        func candidateDuration(_ song: [String: Any]) -> Int? {
-            (song["duration"] as? NSNumber)?.intValue
+        /// 标题变体（去重、去空白）。
+        var titleVariants: [String] = []
+        var seenTitles = Set<String>()
+        for raw in ([query.title] + query.titleVariants) {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let key = trimmed.lowercased()
+            guard seenTitles.insert(key).inserted else { continue }
+            titleVariants.append(trimmed)
         }
+        let artistVariants = query.allArtistNames
 
-        /// 候选的歌手名（网易是 `ar: [{id, name}, …]`）。
-        func candidateArtists(_ song: [String: Any]) -> [String] {
-            guard let list = song["ar"] as? [[String: Any]] else { return [] }
-            return list.compactMap { $0["name"] as? String }
+        // 查询串：每个标题各配一次主艺人；再退到「只有标题」。最多 4 条。
+        var searchQueries: [String] = []
+        var seenQueries = Set<String>()
+        func addQuery(_ raw: String) {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            let key = trimmed.lowercased()
+            guard seenQueries.insert(key).inserted else { return }
+            searchQueries.append(trimmed)
         }
+        for title in titleVariants {
+            addQuery("\(title) \(query.primaryArtist)")
+        }
+        for title in titleVariants {
+            addQuery(title)
+        }
+        searchQueries = Array(searchQueries.prefix(4))
 
-        func artistMatches(_ song: [String: Any]) -> Bool? {
-            guard !wantedArtists.isEmpty else { return nil }
-            let names = candidateArtists(song).map { $0.lowercased() }
-            guard !names.isEmpty else { return nil }
-            for name in names {
-                for wanted in wantedArtists where name.contains(wanted) || wanted.contains(name) {
-                    return true
-                }
+        // 提前收手：这条查询已经给出「标题（含别名/译名）+ 艺人 + 时长 ±2s」的候选，
+        // 就不必再发下一条（每次搜索都是一次网络请求）。最终选哪条仍走下面的打分。
+        func looksLikeExactMatch(_ song: [String: Any]) -> Bool {
+            let wantedTitles = titleVariants.map { $0.lowercased() }
+            let fragments = ([song["name"] as? String ?? ""]
+                + (song["alia"] as? [String] ?? [])
+                + (song["alias"] as? [String] ?? [])
+                + (song["tns"] as? [String] ?? [])).map { $0.lowercased() }
+            let titleHit = wantedTitles.contains { title in
+                !title.isEmpty && fragments.contains { $0 == title || $0.contains(title) }
+            }
+            guard titleHit else { return false }
+
+            let wantedArtists = artistVariants.map { $0.lowercased() }
+            let names = ((song["ar"] as? [[String: Any]]) ?? (song["artists"] as? [[String: Any]]) ?? [])
+                .compactMap { $0["name"] as? String }
+                .map { $0.lowercased() }
+            let artistHit = names.contains { name in
+                wantedArtists.contains { !$0.isEmpty && (name == $0 || name.contains($0)) }
+            }
+            guard artistHit else { return false }
+
+            if let spotify = spotifyDurationMs,
+               let ms = (song["dt"] as? NSNumber)?.intValue ?? (song["duration"] as? NSNumber)?.intValue {
+                return abs(ms - spotify) <= 2000
             }
             return false
         }
 
-        var chosen: [String: Any]?
-        var chosenIndex = -1
-        var fallbackByDurationOnly: Int?
-
-        for (index, song) in songs.enumerated() {
-            let durationOK: Bool
-            if let spotifyDurationMs, let ms = candidateDuration(song) {
-                durationOK = abs(ms - spotifyDurationMs) <= durationToleranceMs
-            } else {
-                // 拿不到 Spotify 时长（本地文件）⇒ 这一关不参与判定。
-                durationOK = true
-            }
-            guard durationOK else { continue }
-
-            switch artistMatches(song) {
-            case .some(true):
-                chosen = song
-                chosenIndex = index
-            case .some(false):
-                // 时长对、歌手不对 —— 记下来当"最差可用"，但**优先继续找歌手也对得上的**。
-                if fallbackByDurationOnly == nil { fallbackByDurationOnly = index }
-                continue
-            case .none:
-                // 网易没给歌手名（或我们没有艺人名可比）⇒ 只能按时长认。
-                if fallbackByDurationOnly == nil { fallbackByDurationOnly = index }
+        // 从所有查询里收候选，按 NetEase song id 去重。
+        var candidates: [[String: Any]] = []
+        var seenSongIDs = Set<Int>()
+        for (index, keyword) in searchQueries.enumerated() {
+            let songs: [[String: Any]]
+            do {
+                songs = try searchSongs(keyword: keyword)
+            } catch {
+                writeDebugLog("[NetEase] search #\(index + 1) failed: \(error)")
                 continue
             }
-            if chosen != nil { break }
+            writeDebugLog(
+                "[NetEase] search #\(index + 1)/\(searchQueries.count) — \(songs.count) result(s)"
+            )
+            for song in songs {
+                guard let id = songId(from: song) else { continue }
+                guard seenSongIDs.insert(id).inserted else { continue }
+                candidates.append(song)
+            }
+            if songs.contains(where: looksLikeExactMatch) { break }
         }
 
-        if chosen == nil, let index = fallbackByDurationOnly {
-            chosen = songs[index]
-            chosenIndex = index
-            writeDebugLog(
-                "[NetEase] no candidate matched both artist and duration, falling back to index \(index) (duration-only match)"
-                    + " (\(songs.count) results)"
-            )
+        guard !candidates.isEmpty else {
+            writeDebugLog("[NetEase] No search results")
+            throw LyricsError.noSuchSong
+        }
+
+        // ── 选歌：标题 / 艺人 / 时长 / 专辑 打分 ──────────────────────────────
+        //
+        // 历史：第一版只看第一位；第二版"时长对得上就取"（完全不看歌手），真机日志 45
+        // 里的翻唱/伴奏全被选中；中间那版要求歌手 + 时长，但 artist 字段读错了（读 `ar`，
+        // 旧 search/get 返回的是 `artists`）⇒ 闸门从未生效，只剩"第一个时长相符的"。
+        //
+        // 现在：字段按**两种端点都能认**的形状读（`ar`/`artists`、`dt`/`duration`），
+        // 再按分数挑最高的一条；`alia`/`tns`（别名/译名）参与标题匹配 —— 罗马字标题
+        // 能靠译名对上日文条目（实测 `Zankoku na Tenshi no Thesis` 的 `alia` 里就有英文名）。
+        func normalized(_ raw: String) -> String {
+            raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+                .replacingOccurrences(of: "（", with: "(")
+                .replacingOccurrences(of: "）", with: ")")
+                .replacingOccurrences(of: "’", with: "'")
+                .replacingOccurrences(of: "，", with: ",")
+        }
+
+        /// 去空白与常见标点：`Himitsu (feat. X)` 与 `Himitsu(feat.X)` 视为同一串。
+        func loose(_ raw: String) -> String {
+            normalized(raw).filter { character in
+                !character.isWhitespace
+                    && character != "-"
+                    && character != "'"
+                    && character != "("
+                    && character != ")"
+                    && character != ","
+                    && character != "."
+                    && character != "!"
+                    && character != "?"
+                    && character != "&"
+            }
+        }
+
+        func candidateDuration(_ song: [String: Any]) -> Int? {
+            if let value = song["dt"] as? NSNumber { return value.intValue }
+            if let value = song["duration"] as? NSNumber { return value.intValue }
+            return nil
+        }
+
+        /// 候选的歌手（cloudsearch 是 `ar`，旧 search/get 是 `artists`），
+        /// 连同各自的别名/译名（`alias` / `tns`）。
+        func candidateArtistEntries(_ song: [String: Any]) -> [(name: String, aliases: [String])] {
+            let list = (song["ar"] as? [[String: Any]])
+                ?? (song["artists"] as? [[String: Any]])
+                ?? []
+            return list.map { entry in
+                let name = entry["name"] as? String ?? ""
+                let aliases = (entry["alias"] as? [String] ?? [])
+                    + (entry["tns"] as? [String] ?? [])
+                return (name, aliases)
+            }
+        }
+
+        func candidateTitleFragments(_ song: [String: Any]) -> [String] {
+            var out: [String] = []
+            if let name = song["name"] as? String { out.append(name) }
+            out += song["alia"] as? [String] ?? []
+            out += song["alias"] as? [String] ?? []
+            out += song["tns"] as? [String] ?? []
+            return out
+        }
+
+        func titleMatchScore(_ song: [String: Any]) -> Int {
+            let variants = titleVariants.map { loose($0) }.filter { !$0.isEmpty }
+            guard !variants.isEmpty else { return 0 }
+            let fragments = candidateTitleFragments(song).map { loose($0) }.filter { !$0.isEmpty }
+            guard !fragments.isEmpty else { return 0 }
+            var best = 0
+            for variant in variants {
+                for fragment in fragments {
+                    if fragment == variant {
+                        best = max(best, 4)
+                    } else if fragment.contains(variant) || variant.contains(fragment) {
+                        best = max(best, 2)
+                    }
+                }
+            }
+            return best
+        }
+
+        func artistMatchScore(_ song: [String: Any]) -> Int {
+            let wanted = artistVariants.map { $0.lowercased() }.filter { !$0.isEmpty }
+            guard !wanted.isEmpty else { return 0 }
+            var best = 0
+            for entry in candidateArtistEntries(song) {
+                for raw in ([entry.name] + entry.aliases) {
+                    let name = raw.lowercased()
+                    guard !name.isEmpty else { continue }
+                    for other in wanted {
+                        if name == other {
+                            best = max(best, 3)
+                        } else if name.contains(other) || other.contains(name) {
+                            best = max(best, 2)
+                        }
+                    }
+                }
+            }
+            return best
+        }
+
+        func durationMatchScore(_ song: [String: Any]) -> Int {
+            guard let spotify = spotifyDurationMs, let ms = candidateDuration(song) else { return 0 }
+            let delta = abs(ms - spotify)
+            if delta <= 2000 { return 2 }
+            if delta <= durationToleranceMs { return 1 }
+            return 0
+        }
+
+        func albumMatchScore(_ song: [String: Any]) -> Int {
+            guard let wanted = query.albumTitle.map({ loose($0) }), !wanted.isEmpty else { return 0 }
+            let album = (song["al"] as? [String: Any]) ?? (song["album"] as? [String: Any])
+            guard let name = album?["name"] as? String else { return 0 }
+            let candidate = loose(name)
+            guard !candidate.isEmpty else { return 0 }
+            if candidate == wanted { return 2 }
+            if candidate.contains(wanted) || wanted.contains(candidate) { return 1 }
+            return 0
+        }
+
+        func passesDurationGate(_ song: [String: Any]) -> Bool {
+            guard let spotify = spotifyDurationMs, let ms = candidateDuration(song) else { return true }
+            return abs(ms - spotify) <= durationToleranceMs
+        }
+
+        var chosen: [String: Any]?
+        var chosenIndex = -1
+        var chosenScore = Int.min
+        var chosenTitleScore = 0
+        var chosenArtistScore = 0
+        var chosenDurationScore = 0
+
+        for (index, song) in candidates.enumerated() where passesDurationGate(song) {
+            let title = titleMatchScore(song)
+            let artist = artistMatchScore(song)
+            let duration = durationMatchScore(song)
+            let score = title * 10 + artist * 5 + duration + albumMatchScore(song) * 2
+            if score > chosenScore {
+                chosen = song
+                chosenIndex = index
+                chosenScore = score
+                chosenTitleScore = title
+                chosenArtistScore = artist
+                chosenDurationScore = duration
+            }
         }
 
         guard let chosen else {
             if let spotifyDurationMs {
                 writeDebugLog(
-                    "[NetEase] no candidate duration matches Spotify"
-                        + " (spotify=\(spotifyDurationMs)ms, \(songs.count) results) — noSuchSong"
+                    "[NetEase] no candidate within ±\(durationToleranceMs / 1000)s of \(spotifyDurationMs)ms"
+                        + " (\(candidates.count) candidate(s)) — noSuchSong"
                 )
             } else {
-                writeDebugLog("[NetEase] no usable candidate (\(songs.count) results) — noSuchSong")
+                writeDebugLog("[NetEase] no usable candidate (\(candidates.count) candidate(s)) — noSuchSong")
             }
             throw LyricsError.noSuchSong
         }
-
-        let chosenArtists = candidateArtists(chosen).joined(separator: " / ")
-        let chosenDuration = candidateDuration(chosen).map { "\($0)ms" } ?? "?"
-        writeDebugLog(
-            "[NetEase] Chosen[\(chosenIndex)]: \(chosen["name"] as? String ?? "?")"
-                + " — \(chosenArtists.isEmpty ? "?" : chosenArtists)"
-                + " \(chosenDuration)"
-                + " (ours: \(query.primaryArtist) \(spotifyDurationMs.map { "\($0)ms" } ?? "?"))"
-        )
-
-        // 旧版这里还有一道"第一位时长不符就 noSuchSong"的闸门 —— 现在选歌本身已经要求
-        // 时长对得上（或退回的那一位就是时长匹配的），所以那道闸门是重复的，删掉。
 
         // ⚠️ 这个局部量**不能**叫 `songId`：它会遮蔽方法 `songId(from:)`，之后任何
         //    `songId(from: …)` 都会被解析成这个 Int —— 2026-10-18 真机编译错误
@@ -972,6 +1128,23 @@ class NeteaseLyricsRepository: LyricsRepository {
             writeDebugLog("[NetEase] Chosen result has no song id")
             throw LyricsError.noSuchSong
         }
+
+        let chosenArtists = candidateArtistEntries(chosen).map { $0.name }.joined(separator: " / ")
+        let chosenDuration = candidateDuration(chosen).map { "\($0)ms" } ?? "?"
+        // 末尾的 `(id …)` 留给导出层的脱敏规则（`DebugLogSanitizer.redactForSharing`
+        // 第 4 条会把 “Chosen[i]: … (id N)” 整段换成 `<title> (id <redacted>)`）。
+        writeDebugLog(
+            "[NetEase] Chosen[\(chosenIndex)]: \(chosen["name"] as? String ?? "?")"
+                + " — \(chosenArtists.isEmpty ? "?" : chosenArtists)"
+                + " \(chosenDuration)"
+                + " (ours: \(query.primaryArtist) \(spotifyDurationMs.map { "\($0)ms" } ?? "?"))"
+                + " (id \(chosenSongId))"
+        )
+        writeDebugLog(
+            "[NetEase] pick score — title \(chosenTitleScore), artist \(chosenArtistScore),"
+                + " duration \(chosenDurationScore), total \(chosenScore)"
+                + " (\(candidates.count) candidate(s), \(searchQueries.count) query/queries)"
+        )
 
         let raw: (lrc: String?, tlyric: String?, romalrc: String?)
         do {

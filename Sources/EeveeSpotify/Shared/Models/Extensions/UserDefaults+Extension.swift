@@ -134,6 +134,11 @@ extension UserDefaults {
         // · 「Flag 覆盖」表（`FlagOverrideStore` 用 `flagOverrides` 存 JSON Data）。
         "artistBioSource",
         "flagOverrides",
+
+        // 网易云歌词时间轴偏移（默认 + 单曲覆盖）：键由功能自己拥有，
+        // 见 `Lyrics/NeteaseTimingOffset.swift`。
+        NeteaseTimingOffset.sourceOffsetKey,
+        NeteaseTimingOffset.trackOffsetsKey,
     ]
     // 听歌页「卡片」那批（总开关 + 每张卡一个键）：键表由 `PlayerCard` / `PlayerCardsDeclutter`
     // 自己拥有 —— 加一张卡片只改那一处，这里跟着走，不会漏。

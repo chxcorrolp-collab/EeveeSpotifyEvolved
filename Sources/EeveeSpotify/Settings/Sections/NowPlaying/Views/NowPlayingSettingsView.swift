@@ -51,10 +51,7 @@ struct NowPlayingSettingsView: View {
         List {
             // 听歌页：仿 Apple Music 的**整页取色渐变底**。
             // 借鉴来源与"为什么不模糊"写在 `NowPlayingBackdrop` 的文件头。
-            Section(
-                header: Text("now_playing_section".localized),
-                footer: Text("now_playing_section_description".localized)
-            ) {
+            Section(header: Text("now_playing_section".localized)) {
                 Toggle(
                     "now_playing_backdrop".localized,
                     isOn: settingsShadowBinding($shadow.nowPlayingBackdrop) { value in

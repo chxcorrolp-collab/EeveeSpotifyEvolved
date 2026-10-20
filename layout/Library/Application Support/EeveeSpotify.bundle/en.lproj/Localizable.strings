@@ -354,7 +354,7 @@ flags_auto = "Auto";
 flags_on = "On";
 flags_off = "Off";
 flags_count = "%d flags · Spotify %@";
-flags_empty = "No flags scanned yet. Restart Spotify and reopen in a few seconds.";
+flags_empty = "No flags found. Restart Spotify and try again.";
 flags_restart = "Restart to apply";
 flags_reset = "Reset all changes";
 flags_rescan = "Rescan flags";
@@ -494,13 +494,13 @@ artist_bio_empty = "The biography cannot be shown right away. Scroll to the bott
 artist_bio_from_genius = "Biography from Genius";
 artist_bio_section = "About the artist";
 artist_bio_source = "Biography source";
-artist_bio_source_automatic = "Automatic (recommended)";
-artist_bio_description = "Where the biography behind the artist page's i button comes from. Automatic tries Spotify's own text first (it follows the app's language) and falls back to Genius (English); or pick one source only - Spotify, Genius, or Wikipedia's opening section (CC BY-SA, credited). Spotify's own About section is folded away only once we have read its text; if the text cannot be read, that section stays in place instead of disappearing.";
+artist_bio_source_automatic = "Automatic";
+artist_bio_description = "With Automatic, the biography Spotify provides is shown first; if Spotify returns none, Genius is used instead. Choosing Wikipedia shows only what Wikipedia returns (that source is still being tested and is not recommended). Choosing Genius likewise shows only what Genius returns.";
 artist_bio_from_wikipedia = "From Wikipedia · CC BY-SA";
 artist_bio_from_spotify = "From Spotify";
 artist_bio_loading = "Fetching...";
 artist_bio_open_wikipedia = "Open in Wikipedia";
-artist_bio_spotify_failed = "Spotify's own text could not be read (see the log)";
+artist_bio_spotify_failed = "Spotify's own biography could not be read.";
 artist_bio_genius_failed = "Genius has no biography for this artist";
 artist_bio_wikipedia_failed = "Wikipedia did not answer (your network may block it)";
 mini_bar_round_artwork = "Round artwork";
@@ -625,7 +625,6 @@ reduce_interventions_scope_yourlibaryx_footer = "Tips, banners and cards shown i
 // see Sources/EeveeSpotify/Appearance/NowPlayingBackdrop.swift.
 now_playing_section = "Now-playing page";
 now_playing_backdrop = "Cover-coloured background";
-now_playing_section_description = "Choose which parts of the now-playing page are shown.";
 // One screen: every card under the player is folded away and the list is pinned to its top,
 // so the player cannot be scrolled. Borrowed from spoti.pw v0.21.1 (GPL-3.0);
 // see Sources/EeveeSpotify/Appearance/NowPlayingOneScreen.swift.
@@ -643,7 +642,7 @@ apple_music_official_ttml_description = "Experimental. Turning this on may ignor
 apple_music_official_ttml_token = "Apple Music sign-in token (media-user-token)";
 apple_music_official_ttml_token_placeholder = "Paste your media-user-token";
 apple_music_official_ttml_token_hint = "Apple exposes no public lyrics API: the search only needs the web player token (fetched automatically), but the lyrics themselves need your own Apple Music sign-in. How to get the token: sign in at music.apple.com in a browser, open Developer Tools > Application > Cookies > https://music.apple.com, and copy the value of media-user-token. A valid Apple Music account is required; without one this source returns no lyrics at all.";
-apple_music_official_ttml_token_missing_inline = "No token yet — this source cannot return any lyrics.";
+apple_music_official_ttml_token_missing_inline = "No token entered — this source cannot return any lyrics.";
 apple_music_token_missing = "Apple Music sign-in token is missing";
 apple_music_token_invalid = "Apple Music sign-in token is invalid or expired";
 apple_music_token_popup = "Apple Music official lyrics need your own sign-in token. Go to Settings > Experiments > \"Apple Music official TTML lyrics\" and paste a media-user-token (browser: music.apple.com > Developer Tools > Application > Cookies).";

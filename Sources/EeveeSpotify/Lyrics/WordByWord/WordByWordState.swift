@@ -8,6 +8,12 @@ import SwiftUI
 var currentLyricsDto: LyricsDto?
 var currentLyricsVersion: Int = 0
 
+/// `currentLyricsDto` 里**已经加进去**的网易云时间轴偏移（毫秒）。
+///
+/// 运行时改偏移时只补差值（`新偏移 - 已经加过的`），不去重新取词；
+/// 写入点：`storeLyricsDto`（按实际来源）与 `resetWordByWordLyrics`（清零）。
+var currentNeteaseOffsetAppliedMs: Int = 0
+
 /// ★ 2026-10-11（用户提的现场）：**这一次"取词"走到哪一步了。**
 ///
 /// 为什么需要它：以前只有"有词 / 没词"两态，而"没词"其实是**三件不同的事** ——

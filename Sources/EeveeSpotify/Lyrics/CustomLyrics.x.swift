@@ -833,6 +833,11 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
         currentLyricsDtoTrackId = lyricsLayerTrackId
             ?? statefulPlayer?.currentTrack()?.trackIdentifier
             ?? ""
+        // ★ 2026-10-20：网易云的时间轴偏移已经在仓库返回时加进这份 dto 了；
+        //   这里记下“已经加了多少”，运行时调偏移时只补差值（见 `reapplyNeteaseTimingOffset`）。
+        currentNeteaseOffsetAppliedMs = (source == .netease && !currentLyricsDtoTrackId.isEmpty)
+            ? NeteaseTimingOffset.offsetMs(forTrackId: currentLyricsDtoTrackId)
+            : 0
         // ⚠️ 提供者要在**版本号自增之前**写好：观察者（两个 overlay 层）都是
         // 盯着版本号决定要不要重建的，版本一变它们就会立刻读 `currentLyricsProvider`。
         currentLyricsProvider = dto.providerName
@@ -882,6 +887,7 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
         // 模型归属也要一起清：留着它会让"这份数据属于哪一首"永远指向上一首。
         currentLyricsDtoTrackId = ""
         currentLyricsProvider = ""
+        currentNeteaseOffsetAppliedMs = 0
         // 署名两样也要一起清：留着会让"这首歌没有我们的词"时页面上还挂着上一首的贡献者。
         currentLyricsProviderURL = nil
         currentLyricsContributors = []
@@ -1166,4 +1172,26 @@ func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics
     // 需要提供者时读 `currentLyricsProvider` / `currentLyricsDto?.providerName`。
 
     return try lyrics.serializedBytes()
+}
+
+/// 改完网易云时间轴偏移后，把**当前已经显示**的歌词按差值平移，并通知观察者重挂。
+///
+/// - 只对「当前这份歌词实际来自网易云」生效；别的源不动。
+/// - 只改内存里的 `currentLyricsDto`，不重新联网、不动仓库缓存。
+/// - 必须在主线程：`currentLyricsDto` / `currentLyricsVersion` 是 UI 侧每拍在读的全局量。
+func reapplyNeteaseTimingOffset() {
+    onMainThreadSync {
+        guard currentLyricsProvider == LyricsSource.netease.description else { return }
+        guard let dto = currentLyricsDto, !currentLyricsDtoTrackId.isEmpty else { return }
+
+        let desired = NeteaseTimingOffset.offsetMs(forTrackId: currentLyricsDtoTrackId)
+        let delta = desired - currentNeteaseOffsetAppliedMs
+        guard delta != 0 else { return }
+
+        currentLyricsDto = dto.applyingTimingOffset(delta)
+        currentNeteaseOffsetAppliedMs = desired
+        currentLyricsVersion += 1
+        WordByWordHost.shared.refreshForCurrentLyrics()
+        writeDebugLog("[NetEase] timing offset re-applied — \(desired)ms (delta \(delta)ms)")
+    }
 }

@@ -1,7 +1,15 @@
+import Foundation
 import SwiftUI
 
 struct EeveeLyricsSettingsView: View {
     @StateObject var viewModel = EeveeLyricsSettingsViewModel()
+
+    // 网易云时间轴偏移（只对网易云生效）。默认值来自 `NeteaseTimingOffset`；
+    // 当前歌曲那一行只在“这份歌词实际来自网易云”时有内容。
+    @State private var neteaseOffsetMs = NeteaseTimingOffset.sourceOffsetMs
+    @State private var currentSongTrackId = ""
+    @State private var currentSongOffsetMs = 0
+    @State private var currentSongHasOverride = false
 
     var body: some View {
         List {
@@ -26,6 +34,7 @@ struct EeveeLyricsSettingsView: View {
             if viewModel.lyricsSource == .netease {
                 neteaseRomajiLocalSection()
                 neteaseHideTranslationSection()
+                neteaseTimingOffsetSection()
             }
             
             if viewModel.lyricsSource != .notReplaced {
@@ -224,5 +233,92 @@ struct EeveeLyricsSettingsView: View {
         } footer: {
             Text("musixmatch_language_description".localized)
         }
+    }
+
+    /// 网易云歌词时间轴偏移。
+    ///
+    /// 只对网易云生效：它的歌词是 UGC，同一首歌的不同上传版本时间轴质量参差不齐；
+    /// 其它源来自官方/稳定库，偏差通常是个别歌，不值得为它们各配一套。
+    ///
+    /// 默认偏移作用于这个源的全部歌词；「当前歌曲」那一行是单曲覆盖，
+    /// 只在当前这份歌词**实际来自网易云**时出现。
+    @ViewBuilder private func neteaseTimingOffsetSection() -> some View {
+        Section {
+            HStack {
+                Text("netease_offset_default".localized)
+                Spacer()
+                Text(formattedOffset(neteaseOffsetMs))
+                    .foregroundColor(.secondary)
+                    .monospacedDigit()
+            }
+            Stepper(value: $neteaseOffsetMs, in: -5000...5000, step: 50) {
+                Text("netease_offset_step".localized)
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            }
+            .onChange(of: neteaseOffsetMs) { newValue in
+                NeteaseTimingOffset.sourceOffsetMs = newValue
+                reapplyNeteaseTimingOffset()
+                refreshCurrentSongOffset()
+            }
+
+            if !currentSongTrackId.isEmpty {
+                HStack {
+                    Text("netease_offset_current_song".localized)
+                    Spacer()
+                    Text(formattedOffset(currentSongOffsetMs))
+                        .foregroundColor(.secondary)
+                        .monospacedDigit()
+                }
+                HStack(spacing: 12) {
+                    Button("-0.1s") { adjustCurrentSong(by: -100) }
+                    Button("+0.1s") { adjustCurrentSong(by: 100) }
+                    Spacer()
+                    if currentSongHasOverride {
+                        Button("netease_offset_clear_song".localized) {
+                            NeteaseTimingOffset.clearOverride(forTrackId: currentSongTrackId)
+                            reapplyNeteaseTimingOffset()
+                            refreshCurrentSongOffset()
+                        }
+                    }
+                }
+            }
+
+            if !NeteaseTimingOffset.trackOffsets.isEmpty {
+                Button("netease_offset_clear_all".localized) {
+                    NeteaseTimingOffset.clearAllOverrides()
+                    reapplyNeteaseTimingOffset()
+                    refreshCurrentSongOffset()
+                }
+                .foregroundColor(.red)
+            }
+        } footer: {
+            Text("netease_offset_description".localized)
+        }
+        .onAppear {
+            neteaseOffsetMs = NeteaseTimingOffset.sourceOffsetMs
+            refreshCurrentSongOffset()
+        }
+    }
+
+    private func formattedOffset(_ milliseconds: Int) -> String {
+        String(format: "%+.2fs", Double(milliseconds) / 1000)
+    }
+
+    /// 「当前歌曲」那一行：只在当前歌词**实际来自网易云**时取到 track id。
+    private func refreshCurrentSongOffset() {
+        let isNetease = currentLyricsProvider == LyricsSource.netease.description
+        let trackId = isNetease ? currentLyricsDtoTrackId : ""
+        currentSongTrackId = trackId
+        currentSongHasOverride = !trackId.isEmpty && NeteaseTimingOffset.hasOverride(forTrackId: trackId)
+        currentSongOffsetMs = trackId.isEmpty ? 0 : NeteaseTimingOffset.offsetMs(forTrackId: trackId)
+    }
+
+    private func adjustCurrentSong(by deltaMs: Int) {
+        guard !currentSongTrackId.isEmpty else { return }
+        let base = NeteaseTimingOffset.offsetMs(forTrackId: currentSongTrackId)
+        NeteaseTimingOffset.setOffset(base + deltaMs, forTrackId: currentSongTrackId)
+        reapplyNeteaseTimingOffset()
+        refreshCurrentSongOffset()
     }
 }

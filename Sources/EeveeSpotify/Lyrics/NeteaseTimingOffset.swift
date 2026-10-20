@@ -94,6 +94,12 @@ enum NeteaseTimingOffset {
         save(offsets)
     }
 
+    /// 只清单曲覆盖（设置页那颗「清除全部单曲偏移」用这个；**不动**默认偏移）。
+    static func clearAllOverrides() {
+        UserDefaults.standard.removeObject(forKey: trackOffsetsKey)
+    }
+
+    /// 默认 + 单曲覆盖一起清（完整重置/排障用）。
     static func clearAll() {
         UserDefaults.standard.removeObject(forKey: sourceOffsetKey)
         UserDefaults.standard.removeObject(forKey: trackOffsetsKey)

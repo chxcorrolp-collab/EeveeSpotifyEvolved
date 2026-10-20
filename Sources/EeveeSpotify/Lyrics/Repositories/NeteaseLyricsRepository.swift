@@ -1016,56 +1016,19 @@ class NeteaseLyricsRepository: LyricsRepository {
             // ⚠️ **不能**为了拿 ytlrc 再调一次 `fetchYrcRaw`：那是一次额外的网络请求。
             var yrcText: String? = nil
             var ytlrcText: String? = nil
+            // ⛔ 2026-10-20 回退（用户：「先回退这部分逻辑，因为效果不好」）：
+            //    2026-10-18 曾在这里加过「选中的条目没有 yrc 时，再去探最多两条同时长
+            //    兄弟条目、改用有 yrc 的那条」。它把"选歌"和"有没有逐词"绑在了一起，
+            //    而网易的候选质量差异很大 —— 换一条只为拿 yrc，常常等于换成另一版录音。
+            //    ⇒ 回到"选中哪条就用哪条的 yrc"，不再替换。
             if preferWordByWord {
-                var yrcRaw: (yrc: String?, ytlrc: String?)? = nil
                 do {
-                    yrcRaw = try fetchYrcRaw(songId: chosenSongId)
+                    let yrcRaw = try fetchYrcRaw(songId: chosenSongId)
+                    yrcText = yrcRaw.yrc
+                    ytlrcText = yrcRaw.ytlrc
                 } catch {
                     writeDebugLog("[NetEase] yrc (eapi) fetch failed: \(error)")
                 }
-
-                // ★★ 2026-10-18（用户）：「逐词歌词开启的情况下，如果多个歌曲符合，
-                //    优先采用有逐词的；如果又有多个逐词，取满足条件的第一个。」
-                //
-                // 为什么必须有：同一首歌在网易常有**多个条目**（同名同歌手、专辑不同），
-                // 而 yrc 并不是每一条都有。真实现场「独白 — DUSTCELL」：
-                //   自白(196680ms) 无 yrc ／ 独白(195428ms) 有 51 行 yrc，
-                // 旧规则"相关度里第一条时长相符的"恰好选中了没 yrc 的那条。
-                //
-                // 代价：只有「有多条同时长候选、且选中的这条没有 yrc」时才会多发请求，
-                // 最多探 2 条；单候选的歌一次也不多打（循环体进不去）。
-                if parseYrc(yrcRaw?.yrc ?? "").isEmpty {
-                    var probed = 0
-                    for song in songs {
-                        guard probed < 2 else { break }
-                        guard let altId = songId(from: song), altId != chosenSongId else { continue }
-                        if let spotify = spotifyDurationMs, let ms = candidateDuration(song),
-                           abs(ms - spotify) > durationToleranceMs {
-                            continue
-                        }
-                        // 歌手**明确不符**（翻唱）的不探 —— 它们不属于"同样符合条件"的那一类。
-                        if case .some(false) = artistMatches(song) { continue }
-                        probed += 1
-                        guard let alt = try? fetchYrcRaw(songId: altId) else {
-                            writeDebugLog("[NetEase] sibling id=\(altId) — yrc fetch failed")
-                            continue
-                        }
-                        let altParsed = parseYrc(alt.yrc ?? "")
-                        guard !altParsed.isEmpty else {
-                            writeDebugLog("[NetEase] sibling id=\(altId) — no yrc either")
-                            continue
-                        }
-                        yrcRaw = alt
-                        writeDebugLog(
-                            "[NetEase] adopted a sibling's yrc — id=\(altId),"
-                                + " \(altParsed.count) line(s); the chosen entry had none"
-                        )
-                        break
-                    }
-                }
-
-                yrcText = yrcRaw?.yrc
-                ytlrcText = yrcRaw?.ytlrc
             }
             let yrcParsed: [(offsetMs: Int, content: String, words: [LyricsWordDto])] =
                 yrcText.map { parseYrc($0) } ?? []

@@ -1,30 +1,35 @@
 EeveeSpotify Version Update Locations
 =====================================
 
-The authoritative setter is **Scripts/bump-version.py**, run by the
-`.github/workflows/bump-version.yml` workflow (Actions → "Bump version").
-It updates every version this repository displays, in one pass:
+The authoritative setter for the **code** versions is
+**Scripts/bump-version.py**, run by `.github/workflows/bump-version.yml`
+(Actions → "Bump version"). It updates these two files in one pass:
 
 1. control
-   - `Version: X.Y.Z`   <- the .deb package version (also the IPA filename)
+   - `Version: X.Y.Z` or `Version: X.Y.Z-beta`
+     <- the .deb package version (also the IPA filename)
 
 2. Sources/EeveeSpotify/Tweak.x.swift
-   - `static let version = "X.Y.Z"` (the tweak's runtime version)
-   - `static let buildNumber = "N"` (shown next to it in the settings page / log)
+   - `static let version = "X.Y.Z"` (or `"X.Y.Z-beta"`) — the runtime version
+   - `static let buildNumber = "N"` — shown next to it in the settings page / log
 
-3. README.md
-   - the "Public release" row of the Versions table: `vX.Y.Z`
-   - the "Development last updated: `YYYY/MM/DD`(build N)" line
+README.md is **not** touched by the workflow: its Versions table and
+"Development last updated" line are maintained by hand.
 
-Run it locally with:
+Pre-release versions are supported: `2.0.0-beta`, `2.0.0-beta.1`, `2.0.0-rc.1`.
+The workflow input may include a leading `v` (`v2.0.0-beta`); the script strips
+it because the settings view renders `"v\(EeveeSpotify.version)"` itself and the
+Debian `Version:` field does not use the prefix. The value stored in both files
+is therefore without `v` (e.g. `2.0.0-beta`).
+
+Run locally with:
 
     python3 Scripts/bump-version.py --version 6.6.9
-    python3 Scripts/bump-version.py --version 6.6.9 --build 110
-    python3 Scripts/bump-version.py --version 6.6.9 --no-readme --dry-run
+    python3 Scripts/bump-version.py --version v2.0.0-beta --build 110
+    python3 Scripts/bump-version.py --version 2.0.0-beta --dry-run
 
-`--build` defaults to the current Tweak.x.swift buildNumber + 1; `--date`
-defaults to today in Asia/Shanghai; `--no-readme` leaves README.md alone;
-`--dry-run` prints what would change without writing.
+`--build` defaults to the current Tweak.x.swift buildNumber + 1; `--dry-run`
+prints what would change without writing.
 
 Why a workflow as well as the script: it validates the input, shows the diff
 even when you do not want to commit, and commits with the repository identity

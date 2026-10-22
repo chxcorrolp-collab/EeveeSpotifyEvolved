@@ -1,33 +1,29 @@
 name: Bump version
 
-# 手动触发：把本仓库**展示的所有版本**一次改到位。
+# 手动触发：把本仓库**代码里**的版本一次改到位。
 #
-# 为什么要一个 workflow，而不是只靠文档记住：
+# 改两处（README 不动 —— 那张表和日期由维护者手改）：
 #   · `control:Version`（deb / 两个 IPA workflow 在运行时读它）；
-#   · `Tweak.x.swift` 的 `static let version` / `buildNumber`（设置页与启动日志显示）；
-#   · `README.md` 的 Versions 表与 "Development last updated" 行。
-# 这三处很容易漂（本仓库当前就出现过 control 6.6.8 / Tweak 1.0.0 / README build 165
-# 各不相同的情况）。实际改文件的是 `Scripts/bump-version.py` —— 本 workflow 只负责
-# 校验输入、跑脚本、可选地提交并推送。
+#   · `Tweak.x.swift` 的 `static let version` / `buildNumber`（设置页与启动日志显示）。
 #
-# 为什么不 push 触发：改版本是发布动作，应该人按；而且自动提交再触发自己会糊成一圈。
+# 版本允许预发布后缀：`2.0.0-beta` / `2.0.0-rc.1`。输入带 `v` 前缀也能用
+# （`v2.0.0-beta`）—— 脚本会去掉：设置页自己会拼 `"v\(version)"`，而 Debian 的
+# `Version:` 字段不用这个前缀。
+#
+# 实际改文件的是 `Scripts/bump-version.py`；本 workflow 只负责校验输入、跑脚本、
+# 可选地提交并推送。改版本是发布动作，所以手动触发，不做 push 自动改。
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "New version (X.Y.Z) — written to control, Tweak.x.swift and the README table"
+        description: "New version: X.Y.Z or X.Y.Z-beta (a leading v is stripped)"
         required: true
         type: string
       build:
         description: "Build number (leave empty = current Tweak.x.swift buildNumber + 1)"
         required: false
         type: string
-      update_readme:
-        description: "Also update README.md (Versions table + development date/build)"
-        required: false
-        type: boolean
-        default: true
       commit:
         description: "Commit and push (uncheck to only print the diff)"
         required: false
@@ -49,19 +45,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Bump every displayed version
+      - name: Bump control and Tweak.x.swift
         env:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_BUILD: ${{ inputs.build }}
-          INPUT_README: ${{ inputs.update_readme }}
         run: |
           set -euo pipefail
           args=(--version "$INPUT_VERSION")
           if [ -n "${INPUT_BUILD:-}" ]; then
             args+=(--build "$INPUT_BUILD")
-          fi
-          if [ "$INPUT_README" != "true" ]; then
-            args+=(--no-readme)
           fi
           python3 Scripts/bump-version.py "${args[@]}"
 
@@ -77,7 +69,7 @@ jobs:
       - name: Show the diff
         run: |
           git diff --stat
-          git diff
+          git diff -- control Sources/EeveeSpotify/Tweak.x.swift
 
       - name: Commit and push
         if: ${{ inputs.commit }}
@@ -85,10 +77,10 @@ jobs:
           set -euo pipefail
           git config user.name "zbzxbg"
           git config user.email "yuanhainigu@outlook.com"
-          # 只 add 这三个文件：脚本可能还改了别的（不应该），不要把意外的东西带进提交。
-          git add control Sources/EeveeSpotify/Tweak.x.swift README.md
+          # 只 add 这两个文件：脚本不应该动别的东西，也不要把 README 带进来。
+          git add control Sources/EeveeSpotify/Tweak.x.swift
           if git diff --cached --quiet; then
-            echo "Nothing to commit — every file is already at $VERSION (build $BUILD)."
+            echo "Nothing to commit — control and Tweak.x.swift are already at $VERSION (build $BUILD)."
             exit 0
           fi
           git commit -m "Version: bump to $VERSION (build $BUILD)"

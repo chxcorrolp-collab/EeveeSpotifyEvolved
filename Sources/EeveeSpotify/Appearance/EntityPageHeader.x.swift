@@ -458,7 +458,15 @@ enum EntityPageHeaderManager {
 
         // ★ 2026-10-17（用户：「歌单页可能会有封面挡住自画字」）：z 序与几何两道保险。
         raiseToTop(header, in: headerRoot, role: "playlist")
-        probeCoverOverlap(cover: cover, headerView: header, role: "playlist")
+        // ⚠️ 2026-10-22（用户：「歌单页往下滑再回去之后，控件压在列表上了」）：
+        //    `fullbleed` 是"找不到封面时的整幅兜底"（整块页头背景）—— 它的 frame 几乎盖满
+        //    整个页头，拿来量"封面压到文字"会得到几百 pt 的假重叠，把我们的内容一路往下推。
+        //    几何判据**只认真封面**：找不到就跳过这一支（宁可这一拍不动，也不要把页头撑出边界）。
+        probeCoverOverlap(
+            cover: cover === fullbleed ? nil : cover,
+            headerView: header,
+            role: "playlist"
+        )
         // ★★ 2026-10-18（图片 152：藏掉那排 pill 之后**留下一条空白**）：下一轮要把这条空白折掉，
         //    得先知道"空在哪两段之间"。这里把三段高度打进日志（每页一次）：
         logOnce(
@@ -635,31 +643,53 @@ enum EntityPageHeaderManager {
     ///
     /// ★ 2026-10-17：这是用户那句"**可能会挡住**"的判据。z 序已由 `raiseToTop` 保证我们在最上，
     /// 所以这里捕的是**几何上的打架**（封面下缘伸进文字带 ⇒ 字压在封面上、或封面的阴影糊住字）。
-    /// 真命中时的下一步二选一：把封面在文字带内**遮掉**（mask），或者把我们的内容整体挪出封面区。
+    ///
+    /// ★★ 2026-10-22（用户报"歌单页滑一下再回去，控件压到列表上"）：上一版是**只增不减**
+    ///    且拿**已经下移过**的 `textTop` 去量 —— 滚动时封面帧一变就会再加一截，回来之后
+    ///    累加值留在那儿，内容被推出页头、压在列表上。
+    ///    现在两件事一起改：
+    ///    · 用 `textTop - currentDrop`（**没加过 drop 的自然位置**）量 ⇒ 同一个封面位置永远
+    ///      得到同一个目标值，不会累加；
+    ///    · 没有重叠时把 drop **清回 0**（`fullbleed` 那种假重叠已经被调用方挡掉，
+    ///      这里清的是"滚动过程中量到的、现在已经不成立的"那一截）。
     private static func probeCoverOverlap(cover: UIView?, headerView: EntityPageHeaderView, role: String) {
         guard let cover, headerView.bounds.height > 1, headerView.window != nil else { return }
         // ★★ 2026-10-19（日志 555 的现场：歌单页 `text top -1pt`）：`textTop` 用 -1 表示"没有标题"，
         //    但**标题上沿正好压在本视图顶边**时也是 -1 ⇒ 原来那句 `guard textTop > 0` 会把这种页
         //    整段跳过（"把字挪出封面"从来没跑过）。现在先问 `hasTitle`，再把 -1 夹成 0 继续量。
         guard headerView.hasTitle else { return }
-        let textTop = max(0, headerView.textTop)
+        let current = coverDrop(of: headerView)
+        let naturalTextTop = max(0, headerView.textTop - current)
         let frame = cover.convert(cover.bounds, to: headerView)
-        guard frame.maxY > textTop + 1, frame.minY < headerView.bounds.height else { return }
+        guard frame.maxY > naturalTextTop + 1, frame.minY < headerView.bounds.height else {
+            // 自然位置下没有重叠 ⇒ 之前那截 drop 已经不需要了（多半是滚动中途量到的）。
+            guard current > 0.5 else { return }
+            objc_setAssociatedObject(
+                headerView,
+                &coverDropKey,
+                NSNumber(value: 0),
+                .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+            )
+            logOnce(
+                "coverDropClear_" + role + "_" + String(describing: ObjectIdentifier(headerView)),
+                "\(role): the cover no longer overlaps our text — cleared the extra \(Int(current.rounded()))pt"
+            )
+            return
+        }
+        let overlap = frame.maxY - naturalTextTop
+        let wanted = min(coverDropLimit, max(0, overlap))
+        guard abs(wanted - current) > 0.5 else { return }
         let coverBottom = Int(frame.maxY.rounded())
-        let textLine = Int(textTop.rounded())
+        let textLine = Int(naturalTextTop.rounded())
         logOnce(
             "coverOverlap_" + role + "_" + String(describing: ObjectIdentifier(headerView)),
             "\(role): the cover reaches \(coverBottom)pt but our text starts at \(textLine)pt"
-                + " — they overlap; the text is drawn on top (z-order), say something if it reads badly"
+                + " — they overlap; moving our block down to \(Int(wanted.rounded()))pt"
         )
 
         // ★★ 2026-10-18：**不再只是"记一行日志"** —— 用户要的是字别压在封面上（图片 152）。
         //   艺人页的"字压图"是**故意**的（AM 就是那样）⇒ 只对专辑 / 歌单页动手。
         guard role != "artist" else { return }
-        let overlap = frame.maxY - textTop
-        let current = coverDrop(of: headerView)
-        let wanted = min(coverDropLimit, current + overlap)
-        guard wanted > current + 0.5 else { return }
         objc_setAssociatedObject(
             headerView,
             &coverDropKey,
@@ -669,7 +699,7 @@ enum EntityPageHeaderManager {
         logOnce(
             "coverDrop_" + role + "_" + String(describing: ObjectIdentifier(headerView)),
             "\(role): our text sat \(Int(overlap.rounded()))pt inside the cover"
-                + " — moved our block down \(Int(wanted.rounded()))pt in total"
+                + " — moved our block down \(Int(wanted.rounded()))pt"
                 + " (only our own view grew; Spotify's views are untouched)"
         )
     }
@@ -1278,7 +1308,10 @@ enum EntityPageHeaderManager {
         var queue: [(view: UIView, depth: Int)] = [(page, 0)]
         var visited = 0
 
-        while !queue.isEmpty, visited < 900 {
+        // ★ 2026-10-22：900 / 12 在现在的艺人页（列表很长、每张卡十几层）不够 ——
+        //   标题行明明在屏幕上，BFS 预算先用完了 ⇒ 一直读不到「热门新歌」/「艺人之选」，
+        //   卡片就落到苹果目录（死卡）。放宽到 1800 / 深度 14；仍然有界。
+        while !queue.isEmpty, visited < 1800 {
             let (view, depth) = queue.removeFirst()
             visited += 1
 
@@ -1309,7 +1342,7 @@ enum EntityPageHeaderManager {
                 return nil
             }
 
-            guard depth < 12 else { continue }
+            guard depth < 14 else { continue }
             queue.append(contentsOf: view.subviews.map { ($0, depth + 1) })
         }
         return nil
@@ -1702,14 +1735,16 @@ enum EntityPageHeaderManager {
             return
         }
 
-        // ③ 苹果的目录（`ArtistLatestReleaseSource`）现在只是**最后兜底**：
-        //    页面上的那一块一直没读到（懒加载，可能用户没滚到）才查一次。
-        if let cached = ArtistLatestReleaseSource.cached(for: name) {
-            applyLatestRelease(cached, to: headerView)
-            return
-        }
-
-        // 换艺人那一拍先把上一张藏掉（名字变了、卡片还印着上一张最难看）。
+        // ⛔ 2026-10-22（用户：「自画最新发布的卡片为什么点不动，而且似乎全部回退的
+        //    Apple 原生卡片」）：**不再拿苹果目录的发布来填这张卡**。
+        //
+        //    苹果目录（iTunes）里只有标题 / 日期 / 封面，**没有 Spotify 的专辑目标** ⇒
+        //    `applyLatestRelease` 只能把卡片设成 `isTappable = false`；用户看到的就是
+        //    "数据像是 Apple 的、点下去没反应"。更糟的是同名艺人会被目录匹配到别人
+        //    （日志 222：`Connect the World`）。
+        //    ⇒ 这一档只保留"从页面上读"的数据；页面那一块还没加载出来时卡片暂时不显示
+        //    （`startReleasePolling` 会在用户滚到 / Spotify 建出那一块时补上，那时可点）。
+        //    如果哪天真要恢复，正确做法是拿到 Spotify 的发布 id，而不是再画一张死卡。
         if releaseArtist != name {
             headerView.updateRelease(title: nil, date: nil, meta: nil)
         }
@@ -1718,27 +1753,13 @@ enum EntityPageHeaderManager {
         }
         guard releaseArtist != name else { return }
 
-        // ★ 2026-10-17（第二版闸门，见上面 `releaseSectionFirstSeen` 的说明）：按**秒**等，不按拍。
-        let seenAt = releaseSectionFirstSeen[name] ?? Date()
-        let waited = Date().timeIntervalSince(seenAt)
-        guard waited >= releaseFallbackDelay else { return }
-
+        // 记下"这一页已经等过"，避免同一页每拍都写一行；不再触发任何网络兜底。
         releaseArtist = name
-        writeDebugLog(
-            "[Release] no page section after \(Int(waited))s —"
-                + " asking the Apple catalogue as a fallback"
-        )
-
-        ArtistLatestReleaseSource.fetch(artist: name) { release in
-            guard let current = lastArtistHeaderView, currentArtistName == name else { return }
-            guard let release else {
-                // ★ 2026-10-17（第二版）：取不到时要**留一行**，否则"卡片没出现"在日志上
-                //   和"这段代码根本没跑"长得一模一样（数据源自己会先打一行 `iTunes search failed`）。
-                writeDebugLog("[Release] no release for \"\(name)\" — the card stays hidden")
-                return
-            }
-            applyLatestRelease(release, to: current)
-            writeDebugLog("[Release] card shows the latest release for \"\(name)\"")
+        if let waited = releaseSectionFirstSeen[name].map({ Date().timeIntervalSince($0) }) {
+            writeDebugLog(
+                "[Release] no page section after \(Int(waited))s —"
+                    + " the card waits for the page's own releases row (no Apple fallback)"
+            )
         }
     }
 

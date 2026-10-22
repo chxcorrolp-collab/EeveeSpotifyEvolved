@@ -13,16 +13,24 @@ extension NowPlayingLyricsPlate {
     static var loggedArtistProviderTrack = ""
 
     /// 把歌手那一行还原成纯歌手名（**离开页面 / 关开关** —— 不再跟着"收起歌词"走）。
+    ///
+    /// ★ 2026-10-22（用户：图片里 `（NetEase）` 被截断）：现在贴上去的可能是**裁过的**
+    ///   `歌手…（提供商）`，所以还原不能只摘括号（那样会把截断后的省略号留在 Spotify 的标签上）。
+    ///   贴的时候把**完整歌手名**记在 `lastArtistFullBase`，这里优先用它写回。
     static func restoreArtistLine(in page: UIView) {
         guard let suffix = lastArtistSuffix, let label = artistLabel(in: page) else { return }
         let current = effectiveLabelText(label)
-        guard current.hasSuffix(suffix) else {
-            lastArtistSuffix = nil
-            return
+        if current.hasSuffix(suffix), !lastArtistFullBase.isEmpty {
+            setLabelText(lastArtistFullBase, on: label)
+        } else if current.hasSuffix(suffix) {
+            setLabelText(String(current.dropLast(suffix.count)), on: label)
         }
-        setLabelText(String(current.dropLast(suffix.count)), on: label)
         lastArtistSuffix = nil
+        lastArtistFullBase = ""
     }
+
+    /// 上一次贴之前那一行的**完整**歌手名（可能是 `"A, B, C"`）—— 与上面还原那段一起用。
+    static var lastArtistFullBase = ""
 
     /// 上一次贴之前那一行的原文（用来分辨"换歌"与"被 binder 写回"，只给日志用）。
     static var lastArtistBase = ""
@@ -179,6 +187,98 @@ extension NowPlayingLyricsPlate {
         guard !provider.isEmpty else { return nil }
         return "（\(provider)）"
     }
+
+    // MARK: - 让「（提供商）」永远看得见
+
+    /// 这一行**实际能被看到**的宽度（page 坐标）。
+    ///
+    /// 三道取更窄的：
+    ///   · 歌手标签自己的 `bounds.width`；
+    ///   · 标签右边缘到**页面**右边（展开态整行右移 74pt 后，标签右边缘经常正好贴着屏幕边，
+    ///     照片里 `（NetEas` 就断在那里）；
+    ///   · 祖先里**开了 `clipsToBounds`** 的右边缘（标题行的 cell 可能比屏幕还窄一截）。
+    ///
+    /// ⚠️ 这里用 `convert`（带全部祖先 transform）而不是 `untransformed` —— 后者会把标题行
+    ///    那 74pt 的平移**减掉**，量出来的是"没右移时"的宽度，反而会把提供商裁得更短。
+    static func visibleArtistLineWidth(_ label: UILabel, in page: UIView) -> CGFloat {
+        let frame = label.convert(label.bounds, to: page)
+        var widths: [CGFloat] = []
+        if label.bounds.width > 1 { widths.append(label.bounds.width) }
+
+        let byPage = page.bounds.width - frame.minX
+        if byPage > 1 { widths.append(byPage) }
+
+        var node = label.superview
+        var hops = 0
+        while let current = node, hops < 24 {
+            if current.clipsToBounds {
+                let ancestor = current.convert(current.bounds, to: page)
+                let byAncestor = ancestor.maxX - frame.minX
+                if byAncestor > 1 { widths.append(byAncestor) }
+            }
+            if current === page { break }
+            node = current.superview
+            hops += 1
+        }
+        return widths.min() ?? 0
+    }
+
+    /// 这一行用什么字体量（Spotify 多半把字放在 `attributedText` 里）。
+    static func artistLineFont(_ label: UILabel) -> UIFont {
+        if let attributed = label.attributedText, attributed.length > 0,
+           let font = attributed.attribute(.font, at: 0, effectiveRange: nil) as? UIFont {
+            return font
+        }
+        return label.font ?? UIFont.systemFont(ofSize: 13)
+    }
+
+    /// `歌手（提供商）`，**先保证提供商完整**：放不下就从歌手名尾部裁、加省略号。
+    ///
+    /// 2026-10-22（用户：图片里 `日のメゾンデ, 礼衣, 大漠波新 （NetEas` 被截断）：
+    /// 以前只是把后缀拼到歌手名后面，Spotify 的标签按它自己的宽度从尾部截 ⇒ 被截掉的
+    /// 恰恰是**我们新加的提供商**（信息量最大的那一段）。现在按标签的**可见宽度**量一遍：
+    /// 放不下就把歌手名缩短到能容下 `…（提供商）`，提供商一个像素都不许少。
+    ///
+    /// 宽度量不到（首帧 / 标签还没布局）⇒ 原样返回，下一拍（0.3s）会再量。
+    static func fittedArtistLine(
+        base: String,
+        suffix: String,
+        maxWidth: CGFloat,
+        label: UILabel
+    ) -> String {
+        let full = base + suffix
+        guard maxWidth > 1 else { return full }
+
+        let attributes: [NSAttributedString.Key: Any] = [.font: artistLineFont(label)]
+        func width(_ text: String) -> CGFloat {
+            (text as NSString).size(withAttributes: attributes).width
+        }
+
+        // 留 2pt：UILabel 自己还会做一次舍入/字距，量到"刚好等于宽度"时仍可能把最后一个字裁掉。
+        let limit = maxWidth - 2
+        if width(full) <= limit { return full }
+
+        let ellipsis = "…"
+        let suffixWidth = width(suffix)
+        let ellipsisWidth = width(ellipsis)
+        let allowed = limit - suffixWidth - ellipsisWidth
+        // 连"…（提供商）"都放不下：宁可只剩提供商（它比歌手名更短，而且正是要展示的东西）。
+        guard allowed > 1 else { return suffix }
+
+        if width(base) <= allowed { return base + ellipsis + suffix }
+
+        var trimmed = base
+        while !trimmed.isEmpty {
+            trimmed = String(trimmed.dropLast())
+            if width(trimmed) <= allowed {
+                return trimmed + ellipsis + suffix
+            }
+        }
+        return ellipsis + suffix
+    }
+
+    /// 这一次"因为放不下而缩短了歌手名"——每首只报一行，避免 0.3s 节拍刷屏。
+    static var loggedArtistTruncationTrack = ""
 
     /// 改 Spotify 标签的文本时**保住它自己的字体/颜色**：有 `attributedText` 就在它上面改，
     /// 没有才退回 `text`（直接写 `text` 会把 Spotify 设的属性字符串整段丢掉）。

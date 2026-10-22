@@ -358,22 +358,36 @@ extension NowPlayingLyricsPlate {
         let current = effectiveLabelText(label)
         guard !current.isEmpty else { return }
 
-        // ★ 2026-10-12（独立复核点出来的死角）：**提供商换了名字**（同一首歌重新取词 /
-        //   回落到另一个源）时，`hasSuffix(suffix)` 只挡得住"当前这一段"，
-        //   于是会贴成 `歌手（NetEase）（Genius）`，而 `lastArtistSuffix` 只记得最新那一段
-        //   ⇒ `restoreArtistLine` 只摘一段，**上一段永远留在 Spotify 的标签上**。
-        //   所以贴之前先把**我们上一次贴的那一段**摘掉（记住的那一段，不靠猜括号）。
+        // ★ 2026-10-22（用户：图片里 `（NetEase）` 被截断）：现在显示的可能**是我们裁过的**
+        //   `歌手…（提供商）` —— 真名在 `lastArtistFullBase`，不能从显示文本反推（会把省略号当名字）。
         var base = current
-        if let previous = lastArtistSuffix, previous != suffix, base.hasSuffix(previous) {
-            base = String(base.dropLast(previous.count))
+        if let previous = lastArtistSuffix, current.hasSuffix(previous), !lastArtistFullBase.isEmpty {
+            base = lastArtistFullBase
+        } else if let previous = lastArtistSuffix, previous != suffix, current.hasSuffix(previous) {
+            base = String(current.dropLast(previous.count))
         }
-        guard !base.isEmpty, !base.hasSuffix(suffix) else { return }
+        // ⚠️ 这里**不许**再 `guard !base.hasSuffix(suffix)`：宽度一变（展开 ↔ 收起、旋转）时，
+        //    已经写着后缀的那一行要**重新按新宽度裁一次**，否则用户会在窄版式里继续看到截断。
+        guard !base.isEmpty else { return }
 
-        // 走到这里有两种情况：
-        //   · 第一次贴（文本就是 Spotify 给的纯歌手名）；
-        //   · binder 把文本写回成纯歌手名 ⇒ 再贴一次。
+        let maxWidth = visibleArtistLineWidth(label, in: page)
+        let wanted = fittedArtistLine(base: base, suffix: suffix, maxWidth: maxWidth, label: label)
+        if current != wanted {
+            setLabelText(wanted, on: label)
+
+            if wanted != base + suffix {
+                let trackId = currentTrackId() ?? ""
+                if loggedArtistTruncationTrack != trackId {
+                    loggedArtistTruncationTrack = trackId
+                    writeDebugLog(
+                        "[\(logTag)] the artist line was shortened to keep the provider visible —"
+                            + " \"\(wanted)\""
+                    )
+                }
+            }
+        }
         lastArtistSuffix = suffix
-        setLabelText(base + suffix, on: label)
+        lastArtistFullBase = base
 
         // ★ 2026-10-04：这条日志原来**一个进程只打一次**，于是"换歌之后有没有重新贴上"
         //   在日志里完全看不出来（用户这次报的就是"没有展示"，而我们手里没有一行能判它的证据）。
@@ -383,7 +397,7 @@ extension NowPlayingLyricsPlate {
             didLogArtistProvider = true
             loggedArtistProviderTrack = trackId
             writeDebugLog(
-                "[\(logTag)] lyrics provider written next to the artist — \"\(current)\" + \"\(suffix)\""
+                "[\(logTag)] lyrics provider written next to the artist — \"\(base)\" + \"\(suffix)\""
             )
         } else if !didLogArtistReset, current == lastArtistBase {
             // 同一行、同一个歌手名，却又走到这里 ⇒ 是 binder 写回，不是换歌。
@@ -393,6 +407,6 @@ extension NowPlayingLyricsPlate {
                     + " the 0.3s reconcile will keep putting the provider back"
             )
         }
-        lastArtistBase = current
+        lastArtistBase = base
     }
 }

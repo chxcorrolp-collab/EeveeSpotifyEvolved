@@ -47,18 +47,40 @@ extension NowPlayingLyricsPlate {
         }
 
         let key = ObjectIdentifier(cover)
-        if scaledCoverBase[key] == nil {
-            // **第一次**接管这一张：把它自己的 transform 记下来（还原用的就是它，不假设是恒等）。
-            scaledCoverBase[key] = cover.transform
+        applyRestingScale(to: cover, key: key, base: scaledCoverBase[key])
+    }
+
+    /// 把**这一张**封面当场缩到 `restingCoverSide`（记账 + 缩放）。两个调用点共用：
+    ///   · 0.3s 复查节拍（`applyCoverRestingScale`，兜底）；
+    ///   · 封面自己的 `layoutSubviews`（`coverDidLayOut` 的收起态分支，**换歌那一瞬间**）。
+    ///
+    /// ★ 2026-10-22（用户：「听歌的时候，会有 Spotify 大封面闪过」）：原来只有节拍那一条，
+    /// 换歌时新封面先是 366pt，要等下一拍才缩到 242pt ⇒ 那 0~0.3s 就是"大封面闪一下"。
+    /// 事件驱动的这一支把空档变成 0；节拍那条继续负责"被 Spotify 写回 transform"的兜底。
+    /// `key`/`base` 由调用方传入（节拍那边已经处理过"第一次接管"与出册清理）。
+    static func applyRestingScale(
+        to cover: UIView,
+        key: ObjectIdentifier? = nil,
+        base: CGAffineTransform? = nil
+    ) {
+        guard restingCoverSide > 1 else { return }
+        let identifier = key ?? ObjectIdentifier(cover)
+        let recorded: CGAffineTransform
+        if let base {
+            recorded = base
+        } else if let existing = scaledCoverBase[identifier] {
+            recorded = existing
+        } else {
+            recorded = cover.transform
         }
+        if scaledCoverBase[identifier] == nil { scaledCoverBase[identifier] = recorded }
         scaledCovers.add(cover)
-        let base = scaledCoverBase[key] ?? .identity
 
         let natural = cover.bounds.width
         guard natural > 1 else { return }
         let scale = min(1, restingCoverSide / natural)
         // 先让它自己那一套（多半是恒等）作用完，再叠我们的等比缩放 —— 两者都关于锚点（默认中心）。
-        let wanted = base.concatenating(CGAffineTransform(scaleX: scale, y: scale))
+        let wanted = recorded.concatenating(CGAffineTransform(scaleX: scale, y: scale))
         if cover.transform != wanted { cover.transform = wanted }
     }
 

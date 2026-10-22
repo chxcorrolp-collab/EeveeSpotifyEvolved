@@ -302,7 +302,10 @@ extension NowPlayingLyricsPlate {
     /// ⚠️ 参数按**短路**的顺序算：`hasLines` 为假时不去碰 `currentLines()` / `currentUntimedLines()`
     /// （那两个会建数组，而 `hasSomethingToShow()` 会走到这里）。
     static func noticeText() -> String? {
-        let dto = currentLyricsDto
+        // ★ 2026-10-22：上一首的模型要当成"没有行" —— 否则 `hasLines=true` / `hasDrawableLines=false`
+        //   会掉进 `.unavailable`（"未找到歌词"），而实际是这一首的歌词**还没到**。
+        let modelIsCurrent = lineModelIsCurrentTrack()
+        let dto = modelIsCurrent ? currentLyricsDto : nil
         let lines = dto?.lines ?? []
         let hasLines = !lines.isEmpty
         let notice = LyricsNoticePolicy.notice(
@@ -311,7 +314,8 @@ extension NowPlayingLyricsPlate {
             isInstrumental: dto?.isInstrumental == true,
             hasAnyTimestamp: hasLines && lines.contains { $0.offsetMs != nil },
             hasUntimedText: hasLines && currentUntimedLines() != nil,
-            isLookingUp: isLookingUpLyrics
+            // 模型还不属于这一首 ⇒ 等同于"还在查"（这一首的词马上就到/正在查）。
+            isLookingUp: isLookingUpLyrics || !modelIsCurrent
         )
         guard let notice else { return nil }
         switch notice {
@@ -418,7 +422,23 @@ extension NowPlayingLyricsPlate {
         }
     }
 
+    /// ★ 2026-10-22：这份行模型**属于当前这一首**吗？
+    ///
+    /// 与 `AppleMusicLyricsOverlayHost` / `WordByWordHost` / 单行歌词（`singleLyricStateNow`）
+    /// **同一口径**：`currentLyricsDtoTrackId` 与播放器实时曲目 id 都非空、且不相等 ⇒ 外来模型。
+    ///
+    /// 为什么听歌页这一层需要它：切歌后到新歌词到达之间，`currentLyricsDto` 还挂着**上一首**的行；
+    /// 这一层原来直接拿它画（其它两层各有自己的逐帧守卫，这里没有），用户看到的就是
+    /// 「当前歌曲显示上一首歌词」。判据只此一份，`currentLines()` / `currentUntimedLines()` 共用。
+    static func lineModelIsCurrentTrack() -> Bool {
+        let model = currentLyricsDtoTrackId
+        let live = currentTrackId() ?? ""
+        if !model.isEmpty, !live.isEmpty, model != live { return false }
+        return true
+    }
+
     static func currentLines() -> [LyricLine]? {
+        guard lineModelIsCurrentTrack() else { return nil }
         let lines = (currentLyricsDto?.toAppleMusicLyricLines()) ?? []
         return lines.isEmpty ? nil : lines
     }
@@ -433,6 +453,7 @@ extension NowPlayingLyricsPlate {
     /// ★ 返回的是 `(原数组下标, 文本)` —— 下标要**一直带着**，因为译文与罗马字都按同一个下标配对
     /// （空行被滤掉之后下标会错位，这正是本函数不返回 `[String]` 的原因）。
     static func currentUntimedLines() -> [(index: Int, text: String)]? {
+        guard lineModelIsCurrentTrack() else { return nil }
         guard let dto = currentLyricsDto, !dto.lines.isEmpty else { return nil }
         guard !dto.lines.contains(where: { $0.offsetMs != nil }) else { return nil }
         let items = dto.lines.enumerated().compactMap { index, line -> (index: Int, text: String)? in

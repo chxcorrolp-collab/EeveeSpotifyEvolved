@@ -379,7 +379,7 @@ extension NowPlayingLyricsPlate {
     // **整张歌词卡的根**，那一层正是我们自己预览歌词的宿主 ⇒ 会把我们自己的东西一起藏掉。
     // 真正要消失的那一行，去改**我们自己**的画法（`AppleMusicLyricsOverlayView.showsPreviewHeader`）。
 
-    /// **封面自己布局的那一刻，就地按住它自己的那张图**（pw 的 `CoverArtTiltView.layoutSubviews` 路子）。
+    /// **封面自己布局的那一刻**：展开时按住它，收起时**当场缩到 242pt**。
     ///
     /// 为什么不复用 `keepNativeCoverHidden`：那条要在整棵树里**再找一遍**哪张是当前封面，而换歌那一
     /// 瞬间**必然失手**（新封面 `alpha` 还是 0 ⇒ 挑中的是**上一张**，按掉旧对象、新封面整张露着）。
@@ -388,34 +388,48 @@ extension NowPlayingLyricsPlate {
     /// ⇒ 门禁：开关开 + **我们确实铺着** + tilt 在窗口里且够大 + 祖先里有 `CoverArtCellImpl`
     /// （最后这条把迷你条 / 卡片里那些 tilt 一次滤掉）。**不做节流**：动作是局部的（比走查便宜
     /// 一个量级），而节流正是"闪一下"的来源。
+    ///
+    /// ★ 2026-10-22（用户：「听歌的时候，会有 Spotify 大封面闪过」）：原来这条只在**展开**时
+    /// 动作；**收起态**（默认那一档）的 242pt 缩放只由 0.3s 复查节拍做 —— 换歌时新封面先是
+    /// 366pt，下一拍才变小 ⇒ 那 0~0.3s 就是"大封面闪一下"。现在收起态也走这条事件：
+    /// 封面自己一布局就缩（与节拍共用 `applyRestingScale` 的记账与还原）。
     static func coverDidLayOut(from tilt: UIView) {
         guard isEnabled, #available(iOS 26.0, *) else { return }
-        // ★ `wantsOpen` 必须在门禁里（照片 66）：进页面第一拍 `isOpen` 还是 false，
-        //   而那时原生封面已经在转场里动着了 —— 这条门禁原来把那一整段窗口漏掉了。
-        // ★ 2026-10-04：换成 `wantsOpenNow()` —— 意图**过期**之后这里不许再按住封面，
-        //   否则新封面在它自己第一次 `layoutSubviews` 就被按掉，而屏幕上什么都没有
-        //   （用户报的「按键换歌漏大封面」，见 `wantsOpenUntil`）。
-        guard LyricsDoorRules.shouldHoldNativeCover(
+        let shouldHold = LyricsDoorRules.shouldHoldNativeCover(
             isOpen: door.isOpen,
             isLive: isAnythingLive,
             intentValid: wantsOpenNow()
-        ) else { return }
-        guard !door.pageLeaving else { return }
-        guard tilt.window != nil, tilt.bounds.width >= 200 else { return noteCoverGuardReject() }
-        guard isInsideCoverCell(tilt) else { return noteCoverGuardReject() }
-        guard let cover = sameSizeChild(of: tilt), cover.alpha > 0.01 else {
-            return noteCoverGuardReject()
-        }
-        guard let page = lastPage, page.window != nil else { return noteCoverGuardReject() }
-
-        hideSpotifyCover(cover)
-
-        coverLocalHides += 1
-        guard coverLocalHides == 1 || coverLocalHides % 20 == 0 else { return }
-        writeDebugLog(
-            "[\(logTag)] hid the native cover from its own tilt (local path) — hide #\(coverLocalHides),"
-                + " \(coverLocalRejects) gate rejection(s) so far"
         )
+        guard !door.pageLeaving else { return }
+        // 门禁没过时只有"该按住"那一档才计数：收起态的封面常常还没进树（`alpha=0` /
+        // 大图还没挂上），那不是"守卫失效"，别把排查计数污染成假报警。
+        func reject() {
+            if shouldHold { noteCoverGuardReject() }
+        }
+        guard tilt.window != nil, tilt.bounds.width >= 200 else { return reject() }
+        guard isInsideCoverCell(tilt) else { return reject() }
+        guard let cover = sameSizeChild(of: tilt), cover.alpha > 0.01 else {
+            return reject()
+        }
+        guard let page = lastPage, page.window != nil else { return reject() }
+
+        if shouldHold {
+            hideSpotifyCover(cover)
+
+            coverLocalHides += 1
+            guard coverLocalHides == 1 || coverLocalHides % 20 == 0 else { return }
+            writeDebugLog(
+                "[\(logTag)] hid the native cover from its own tilt (local path) — hide #\(coverLocalHides),"
+                    + " \(coverLocalRejects) gate rejection(s) so far"
+            )
+            return
+        }
+
+        // 收起态：和节拍那条**缩同一张对象**（`Encore.ImageView`，不是外面那层壳），
+        // 否则会双重缩放（242/366 叠两次）。找不到就留给下一拍节拍兜底。
+        guard let imageView = findByIdentifier(coverImageIdentifier, in: cover),
+              imageView.bounds.width >= 200 else { return }
+        applyRestingScale(to: imageView)
     }
 
     /// 门禁没过的计数 + 一次总结。

@@ -628,7 +628,7 @@ now_playing_section = "歌曲播放页";
 // 所以那五条文案只有这一份。
 now_playing_layout = "修改Spotify听歌页布局";
 now_playing_layout_description = "包含：%@。";
-now_playing_layout_footer = "关掉总开关即逐项还原；隐藏官方单行歌词要重启Spotify才彻底还原。";
+now_playing_layout_footer = "关掉总开关即逐项还原；隐藏官方单行歌词要重启Spotify。";
 now_playing_backdrop = "整页封面取色底";
 // ── 听歌页「一屏」（2026-10-03）────────────────────────────────────────────
 // 把播放器下面的卡片全折起来 + 列表钉在它的顶部（kumone / Music app 那种"一屏一首歌"）。
@@ -638,13 +638,13 @@ now_playing_one_screen = "隐藏Spotify歌曲播放页模块";
 now_playing_volume = "展示音量条";
 now_playing_volume_description = "该功能测试中，不推荐开启。";
 now_playing_lyrics_in_player = "歌词进播放器";
-now_playing_single_lyric = "展示（自画）单行歌词";
+now_playing_single_lyric = "展示单行歌词(非Spotify官方)";
 show_romanized_lyrics = "展示罗马化歌词";
 show_lyrics_translation = "展示歌词翻译";
 now_playing_blur_unplayed_lyrics = "未播放歌词行模糊化";
-now_playing_control_glyphs = "控制键替换为本地";
+now_playing_control_glyphs = "控制键替换";
 apple_music_official_ttml = "启用Apple Music官方TTML歌词";
-apple_music_official_ttml_description = "实验性功能。选项开启后可能会忽略当前所有有关于歌词的设置。";
+apple_music_official_ttml_description = "选项开启后可能会忽略部分有关于歌词的设置。";
 apple_music_official_ttml_token = "Apple Music 登录令牌（media-user-token）";
 apple_music_official_ttml_token_placeholder = "粘贴 media-user-token";
 apple_music_official_ttml_token_hint = "苹果没有公开的歌词接口：搜索只需要网页令牌（本功能会自动抓取），但取歌词必须有你自己的 Apple Music 登录态。获取方法：浏览器登录 music.apple.com → 开发者工具 → 应用 → Cookie → https://music.apple.com → 复制 media-user-token 的值。需要有效的 Apple Music 账号，没有账号时这一源拿不到任何歌词。";

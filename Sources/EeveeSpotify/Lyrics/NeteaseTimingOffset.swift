@@ -32,6 +32,13 @@ enum NeteaseTimingOffset {
     /// 用 String 而不是 Data，是为了让它能走设置备份的“普通 `key=value`”路径
     /// （`SettingsBackup` 只对 `flagOverrides` 这一个 Data 键做特殊处理）。
     static let trackOffsetsKey = "ngzhwm_neteaseOffsetByTrack"
+    /// 单曲覆盖的**显示名**：`[Spotify track id: "歌名 — 歌手"]` 的 JSON 文本。
+    ///
+    /// 为什么要它：设置页现在把**每一首保存过偏移的歌**列出来（用户要「A 歌偏移多少、
+    /// B 歌偏移多少」），而单曲覆盖的键是 Spotify 的 track id —— 没有名字的话那一列全是
+    /// 一串十六进制，没法选。只在用户改这一首的偏移时顺手记下来；老数据没有名字就显示
+    /// 「未知歌曲 + 短 id」，不猜。
+    static let trackTitlesKey = "ngzhwm_neteaseOffsetTrackTitles"
 
     /// 单级偏移的上下限（±5s）与步进（50ms）。
     static let maxOffsetMs = 5000
@@ -41,7 +48,7 @@ enum NeteaseTimingOffset {
     static let maxTrackOverrides = 300
 
     /// 备份 / 全局重置 / 本页重置要认识的键。
-    static var ownedKeys: [String] { [sourceOffsetKey, trackOffsetsKey] }
+    static var ownedKeys: [String] { [sourceOffsetKey, trackOffsetsKey, trackTitlesKey] }
 
     // MARK: - 默认偏移
 
@@ -56,6 +63,16 @@ enum NeteaseTimingOffset {
         guard let text = UserDefaults.standard.string(forKey: trackOffsetsKey),
               let data = text.data(using: .utf8),
               let decoded = try? JSONDecoder().decode([String: Int].self, from: data) else {
+            return [:]
+        }
+        return decoded
+    }
+
+    /// 单曲覆盖的显示名（见 `trackTitlesKey`）。老数据没有这一份 ⇒ 空字典。
+    static var trackTitles: [String: String] {
+        guard let text = UserDefaults.standard.string(forKey: trackTitlesKey),
+              let data = text.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String: String].self, from: data) else {
             return [:]
         }
         return decoded
@@ -78,12 +95,27 @@ enum NeteaseTimingOffset {
 
     /// 写单曲覆盖。传 0 也照样存（0 也是一个明确的“这首歌不偏”），
     /// 想回到默认请用 `clearOverride`。
-    static func setOffset(_ milliseconds: Int, forTrackId trackId: String) {
+    ///
+    /// - Parameter trackTitle: 这一首的显示名（`"歌名 — 歌手"`）。只在用户改当前播放这一首时传；
+    ///   设置页的"已保存列表"里改别的歌时传 `nil`，保持已存的名字（没有就是没有）。
+    static func setOffset(_ milliseconds: Int, forTrackId trackId: String, trackTitle: String? = nil) {
         let trimmed = trackId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         var offsets = trackOffsets
         offsets[trimmed] = clamped(milliseconds)
-        save(offsets)
+        let saved = save(offsets)
+
+        var titles = trackTitles
+        if let trackTitle {
+            let name = trackTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty {
+                titles.removeValue(forKey: trimmed)
+            } else {
+                titles[trimmed] = String(name.prefix(120))
+            }
+        }
+        // 只留还在偏移表里的名字（`save` 可能刚丢掉最老的那几条）。
+        saveTitles(titles.filter { saved[$0.key] != nil })
     }
 
     static func clearOverride(forTrackId trackId: String) {
@@ -92,17 +124,22 @@ enum NeteaseTimingOffset {
         var offsets = trackOffsets
         guard offsets.removeValue(forKey: trimmed) != nil else { return }
         save(offsets)
+        var titles = trackTitles
+        titles.removeValue(forKey: trimmed)
+        saveTitles(titles)
     }
 
     /// 只清单曲覆盖（设置页那颗「清除全部单曲偏移」用这个；**不动**默认偏移）。
     static func clearAllOverrides() {
         UserDefaults.standard.removeObject(forKey: trackOffsetsKey)
+        UserDefaults.standard.removeObject(forKey: trackTitlesKey)
     }
 
     /// 默认 + 单曲覆盖一起清（完整重置/排障用）。
     static func clearAll() {
         UserDefaults.standard.removeObject(forKey: sourceOffsetKey)
         UserDefaults.standard.removeObject(forKey: trackOffsetsKey)
+        UserDefaults.standard.removeObject(forKey: trackTitlesKey)
     }
 
     // MARK: - 归一化
@@ -116,7 +153,8 @@ enum NeteaseTimingOffset {
         return min(max(Int(steps) * stepMs, -maxOffsetMs), maxOffsetMs)
     }
 
-    private static func save(_ offsets: [String: Int]) {
+    @discardableResult
+    private static func save(_ offsets: [String: Int]) -> [String: Int] {
         var offsets = offsets
         if offsets.count > maxTrackOverrides {
             let overflow = offsets.count - maxTrackOverrides
@@ -126,7 +164,19 @@ enum NeteaseTimingOffset {
         }
 
         guard let data = try? JSONEncoder().encode(offsets),
-              let text = String(data: data, encoding: .utf8) else { return }
+              let text = String(data: data, encoding: .utf8) else { return offsets }
         UserDefaults.standard.set(text, forKey: trackOffsetsKey)
+        return offsets
+    }
+
+    /// 写"单曲显示名"那份小字典；空字典就把键删掉（备份/重置看到的是"没有"）。
+    private static func saveTitles(_ titles: [String: String]) {
+        if titles.isEmpty {
+            UserDefaults.standard.removeObject(forKey: trackTitlesKey)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(titles),
+              let text = String(data: data, encoding: .utf8) else { return }
+        UserDefaults.standard.set(text, forKey: trackTitlesKey)
     }
 }

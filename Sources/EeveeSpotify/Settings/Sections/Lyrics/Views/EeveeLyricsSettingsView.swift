@@ -10,6 +10,17 @@ struct EeveeLyricsSettingsView: View {
     @State private var currentSongTrackId = ""
     @State private var currentSongOffsetMs = 0
     @State private var currentSongHasOverride = false
+    /// 当前播放这首的显示名（只给"当前歌曲"那一行做副标题，不改任何存储）。
+    @State private var currentSongTitle = ""
+    @State private var currentSongArtist = ""
+    /// 已保存的单曲偏移（**不含当前播放这首**；它在下面单独一行，避免同一首出现两次）。
+    @State private var savedSongOffsets: [SavedSongOffset] = []
+
+    private struct SavedSongOffset: Identifiable {
+        let id: String
+        let title: String
+        let offsetMs: Int
+    }
 
     var body: some View {
         List {
@@ -242,6 +253,13 @@ struct EeveeLyricsSettingsView: View {
     ///
     /// 默认偏移作用于这个源的全部歌词；「当前歌曲」那一行是单曲覆盖，
     /// 只在当前这份歌词**实际来自网易云**时出现。
+    ///
+    /// ★ 2026-10-22（用户：「做成可以调整 A 歌曲偏移多少、B 歌曲偏移多少」）：
+    ///    **按曲目分开存本来就有**（`NeteaseTimingOffset` 按 Spotify track id 存），只是设置页
+    ///    以前只显示"正在播的那一首"，用户看不到另外那些。现在：
+    ///     ① 当前歌曲那一行显示歌名（不再只写「当前歌曲」）；
+    ///     ② 多出一节「已保存的单曲偏移」，每首一行、可单独 ±0.1s、左滑删除；
+    ///     ③ 改当前歌曲时把歌名一起存下来（老数据没名字就显示「未知歌曲 · 后 6 位 id」）。
     @ViewBuilder private func neteaseTimingOffsetSection() -> some View {
         Section {
             HStack {
@@ -264,7 +282,15 @@ struct EeveeLyricsSettingsView: View {
 
             if !currentSongTrackId.isEmpty {
                 HStack {
-                    Text("netease_offset_current_song".localized)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("netease_offset_current_song".localized)
+                        if !currentSongTitle.isEmpty {
+                            Text(currentSongTitle)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
                     Spacer()
                     Text(formattedOffset(currentSongOffsetMs))
                         .foregroundColor(.secondary)
@@ -282,6 +308,7 @@ struct EeveeLyricsSettingsView: View {
                         }
                     }
                 }
+                .buttonStyle(.borderless)
             }
 
             if !NeteaseTimingOffset.trackOffsets.isEmpty {
@@ -299,10 +326,41 @@ struct EeveeLyricsSettingsView: View {
             neteaseOffsetMs = NeteaseTimingOffset.sourceOffsetMs
             refreshCurrentSongOffset()
         }
+
+        if !savedSongOffsets.isEmpty {
+            Section(header: Text("netease_offset_saved".localized)) {
+                ForEach(savedSongOffsets) { song in
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(song.title)
+                                .font(.subheadline)
+                                .lineLimit(1)
+                            Text(formattedOffset(song.offsetMs))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .monospacedDigit()
+                        }
+                        Spacer()
+                        Button("-0.1s") { adjustSavedSong(song, by: -100) }
+                        Button("+0.1s") { adjustSavedSong(song, by: 100) }
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .onDelete(perform: deleteSavedSongs)
+            }
+        }
     }
 
     private func formattedOffset(_ milliseconds: Int) -> String {
         String(format: "%+.2fs", Double(milliseconds) / 1000)
+    }
+
+    /// `"歌名 — 歌手"`（缺一项就只留另一项；两项都空 = 空串）。
+    private var currentSongDisplayName: String {
+        [currentSongTitle, currentSongArtist]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " — ")
     }
 
     /// 「当前歌曲」那一行：只在当前歌词**实际来自网易云**时取到 track id。
@@ -312,12 +370,64 @@ struct EeveeLyricsSettingsView: View {
         currentSongTrackId = trackId
         currentSongHasOverride = !trackId.isEmpty && NeteaseTimingOffset.hasOverride(forTrackId: trackId)
         currentSongOffsetMs = trackId.isEmpty ? 0 : NeteaseTimingOffset.offsetMs(forTrackId: trackId)
+
+        // 歌名只是给这一行做副标题（也用于把它写进"已保存"列表），取不到就留空。
+        let track = statefulPlayer?.currentTrack() ?? nowPlayingScrollViewController?.loadedTrack
+        currentSongTitle = track?.string(ifResponding: "trackTitle") ?? ""
+        currentSongArtist = track?.string(ifResponding: "artistName")
+            ?? track?.string(ifResponding: "artistTitle")
+            ?? ""
+
+        refreshSavedSongOffsets()
+    }
+
+    /// 已保存那一列：**不含当前播放这首**（它在上面单独一行，避免同一首出现两次）。
+    private func refreshSavedSongOffsets() {
+        let offsets = NeteaseTimingOffset.trackOffsets
+        let titles = NeteaseTimingOffset.trackTitles
+        let currentId = currentSongTrackId
+        let unknownName = "netease_offset_unknown_song".localized
+
+        savedSongOffsets = offsets.compactMap { entry -> SavedSongOffset? in
+            if !currentId.isEmpty, entry.key == currentId { return nil }
+            let stored = titles[entry.key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let name = stored.isEmpty ? unknownName + " · " + shortTrackId(entry.key) : stored
+            return SavedSongOffset(id: entry.key, title: name, offsetMs: entry.value)
+        }
+        .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+
+    /// 老数据没有存过歌名：只显示 track id 的后 6 位，不编造。
+    private func shortTrackId(_ trackId: String) -> String {
+        let trimmed = trackId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 8 else { return trimmed }
+        return String(trimmed.suffix(6))
     }
 
     private func adjustCurrentSong(by deltaMs: Int) {
         guard !currentSongTrackId.isEmpty else { return }
         let base = NeteaseTimingOffset.offsetMs(forTrackId: currentSongTrackId)
-        NeteaseTimingOffset.setOffset(base + deltaMs, forTrackId: currentSongTrackId)
+        NeteaseTimingOffset.setOffset(
+            base + deltaMs,
+            forTrackId: currentSongTrackId,
+            trackTitle: currentSongDisplayName
+        )
+        reapplyNeteaseTimingOffset()
+        refreshCurrentSongOffset()
+    }
+
+    /// 已保存列表里的某一首：改的**不是当前播放这首**，不传歌名（保持已存的名字）。
+    private func adjustSavedSong(_ song: SavedSongOffset, by deltaMs: Int) {
+        let base = NeteaseTimingOffset.offsetMs(forTrackId: song.id)
+        NeteaseTimingOffset.setOffset(base + deltaMs, forTrackId: song.id)
+        reapplyNeteaseTimingOffset()
+        refreshCurrentSongOffset()
+    }
+
+    private func deleteSavedSongs(at offsets: IndexSet) {
+        for index in offsets where savedSongOffsets.indices.contains(index) {
+            NeteaseTimingOffset.clearOverride(forTrackId: savedSongOffsets[index].id)
+        }
         reapplyNeteaseTimingOffset()
         refreshCurrentSongOffset()
     }

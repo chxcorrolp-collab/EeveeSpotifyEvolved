@@ -138,19 +138,20 @@ struct PagesAppearanceSettingsView: View {
             //       · 隐藏   = `hideHomeHeader == true`（此时 `homeLargeTitle` 的值**被忽略**）
             //   **两个键都保留**（存储语义不变、老值继续有效、不写迁移）。
             //
-            // ⚠️ 本节**刻意没有 header**：三个段标签里第一个就是 `home_section`（"主页"），
-            //    本节再加一个"主页"标题会让同一个字符串在一屏里出现两次。
-            // ⚠️ 选择器**没有可见标签**：段标签自己说明在选什么，无障碍标签仍指向 `home_section`。
+            // ⚠️ 2026-10-22（用户：「没看懂这个是干嘛的」+ 截图里中间那段被截成
+            //    `Apple Music...`）：**不要再用 segmented**。三段式在 414pt 上放不下
+            //    「Apple Music 式主页」，而且段标签只有状态名、没有"这是在设置什么"的说明。
+            //    改成带标签的 Picker（列表里一行，点开才选三个状态）+ footer 解释三档语义。
             Section {
                 Picker(selection: homeHeaderStyleBinding) {
-                    Text("home_section".localized).tag(HomeHeaderStyle.system)
+                    Text("home_header_original".localized).tag(HomeHeaderStyle.system)
                     Text("home_large_title".localized).tag(HomeHeaderStyle.amStyle)
                     Text("hide_home_header".localized).tag(HomeHeaderStyle.hidden)
                 } label: {
-                    EmptyView()
+                    Text("home_header_style".localized)
                 }
-                .pickerStyle(.segmented)
-                .accessibilityLabel(Text("home_section".localized))
+            } footer: {
+                Text("home_header_style_description".localized)
             }
 
             // ── 音乐库 ──────────────────────────────────────────────────────────────

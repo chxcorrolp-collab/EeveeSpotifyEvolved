@@ -171,6 +171,8 @@ netease_offset_clear_song = "Clear Song Offset";
 netease_offset_clear_all = "Clear All Song Offsets";
 netease_offset_step = "Adjust in 50 ms steps";
 netease_offset_description = "Applies to NetEase lyrics only. Positive values show lyrics later; a per-song offset overrides the default and stays with that Spotify track.";
+netease_offset_saved = "Saved song offsets";
+netease_offset_unknown_song = "Unknown song";
 ngzhwm_romanization_description = "Configure romanization separately for each language. If romanization is not enabled for a language, its lyrics are displayed as-is without romanization.";
 ngzhwm_chinese_romanization = "Romanize Chinese Lyrics";
 ngzhwm_japanese_romanization = "Romanize Japanese Lyrics";
@@ -476,6 +478,9 @@ library_large_title = "Apple Music style library";
 home_section = "Home";
 home_large_title = "Apple Music style home";
 home_header_title = "Home";
+home_header_style = "Home header style";
+home_header_original = "Original";
+home_header_style_description = "Original = Spotify's default; Apple Music = large-title style; Hidden = no Home header.";
 tab_bar_hide_labels = "Hide tab labels";
 tab_bar_hide_create = "Hide the Create tab";
 

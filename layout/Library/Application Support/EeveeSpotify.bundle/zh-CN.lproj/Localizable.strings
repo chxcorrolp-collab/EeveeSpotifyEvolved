@@ -163,6 +163,8 @@ netease_offset_clear_song = "清除单曲偏移";
 netease_offset_clear_all = "清除全部单曲偏移";
 netease_offset_step = "以 50 毫秒为一步调整";
 netease_offset_description = "只对网易云歌词生效。正数表示歌词延后显示；单曲偏移会覆盖默认偏移，并按这首 Spotify 曲目保存。";
+netease_offset_saved = "已保存的单曲偏移";
+netease_offset_unknown_song = "未知歌曲";
 ngzhwm_romanization_description = "单独设置每种语言的歌词是否罗马化。如果某种语言的歌词未开启罗马化选项，该语言的歌词会直接显示，不进行罗马化。";
 ngzhwm_chinese_romanization = "中文歌词罗马化";
 ngzhwm_japanese_romanization = "日语歌词罗马化";
@@ -464,6 +466,9 @@ library_large_title = "Apple Music 式音乐库";
 home_section = "主页";
 home_large_title = "Apple Music 式主页";
 home_header_title = "主页";
+home_header_style = "首页顶部样式";
+home_header_original = "原样";
+home_header_style_description = "原样 = Spotify 默认；Apple Music 式 = 大标题样式；隐藏 = 不显示首页顶部条。";
 
 flag_catalog_search_placeholder = "按名称或 scope 过滤";
 flag_catalog_empty_result = "没有匹配的 flag";

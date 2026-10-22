@@ -1,0 +1,95 @@
+name: Bump version
+
+# 手动触发：把本仓库**展示的所有版本**一次改到位。
+#
+# 为什么要一个 workflow，而不是只靠文档记住：
+#   · `control:Version`（deb / 两个 IPA workflow 在运行时读它）；
+#   · `Tweak.x.swift` 的 `static let version` / `buildNumber`（设置页与启动日志显示）；
+#   · `README.md` 的 Versions 表与 "Development last updated" 行。
+# 这三处很容易漂（本仓库当前就出现过 control 6.6.8 / Tweak 1.0.0 / README build 165
+# 各不相同的情况）。实际改文件的是 `Scripts/bump-version.py` —— 本 workflow 只负责
+# 校验输入、跑脚本、可选地提交并推送。
+#
+# 为什么不 push 触发：改版本是发布动作，应该人按；而且自动提交再触发自己会糊成一圈。
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "New version (X.Y.Z) — written to control, Tweak.x.swift and the README table"
+        required: true
+        type: string
+      build:
+        description: "Build number (leave empty = current Tweak.x.swift buildNumber + 1)"
+        required: false
+        type: string
+      update_readme:
+        description: "Also update README.md (Versions table + development date/build)"
+        required: false
+        type: boolean
+        default: true
+      commit:
+        description: "Commit and push (uncheck to only print the diff)"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bump-version
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump every displayed version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_BUILD: ${{ inputs.build }}
+          INPUT_README: ${{ inputs.update_readme }}
+        run: |
+          set -euo pipefail
+          args=(--version "$INPUT_VERSION")
+          if [ -n "${INPUT_BUILD:-}" ]; then
+            args+=(--build "$INPUT_BUILD")
+          fi
+          if [ "$INPUT_README" != "true" ]; then
+            args+=(--no-readme)
+          fi
+          python3 Scripts/bump-version.py "${args[@]}"
+
+          # 把脚本**实际写进去**的值带回后面的步骤：--build 为空时脚本会自己 +1，
+          # 提交信息里必须写最终值，不能写 inputs.build。
+          VERSION=$(grep -m1 'static let version = ' Sources/EeveeSpotify/Tweak.x.swift \
+            | sed -E 's/.*"([^"]+)".*/\1/')
+          BUILD=$(grep -m1 'static let buildNumber = ' Sources/EeveeSpotify/Tweak.x.swift \
+            | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "BUILD=$BUILD" >> "$GITHUB_ENV"
+
+      - name: Show the diff
+        run: |
+          git diff --stat
+          git diff
+
+      - name: Commit and push
+        if: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          git config user.name "zbzxbg"
+          git config user.email "yuanhainigu@outlook.com"
+          # 只 add 这三个文件：脚本可能还改了别的（不应该），不要把意外的东西带进提交。
+          git add control Sources/EeveeSpotify/Tweak.x.swift README.md
+          if git diff --cached --quiet; then
+            echo "Nothing to commit — every file is already at $VERSION (build $BUILD)."
+            exit 0
+          fi
+          git commit -m "Version: bump to $VERSION (build $BUILD)"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

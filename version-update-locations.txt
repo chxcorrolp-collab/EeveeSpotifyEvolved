@@ -1,33 +1,44 @@
 EeveeSpotify Version Update Locations
 =====================================
 
-When bumping the version, update these 2 files:
+The authoritative setter is **Scripts/bump-version.py**, run by the
+`.github/workflows/bump-version.yml` workflow (Actions → "Bump version").
+It updates every version this repository displays, in one pass:
 
 1. control
-   - line 3: `Version: X.X.X`   <- the .deb package version
+   - `Version: X.Y.Z`   <- the .deb package version (also the IPA filename)
 
 2. Sources/EeveeSpotify/Tweak.x.swift
-   - the `static let version = "X.X.X"` constant (the tweak's runtime version)
-   - line numbers drift, so find it instead of trusting a fixed one:
-       grep -n 'static let version' Sources/EeveeSpotify/Tweak.x.swift
-   - note it sits far down the file (~line 292 as of 2026-10-12); do not go
-     looking for it near the top
+   - `static let version = "X.Y.Z"` (the tweak's runtime version)
+   - `static let buildNumber = "N"` (shown next to it in the settings page / log)
 
-Both must match for consistent versioning across:
-- .deb packages (control)
-- Tweak runtime (Tweak.x.swift)
-- IPA builds (they report the tweak version)
+3. README.md
+   - the "Public release" row of the Versions table: `vX.Y.Z`
+   - the "Development last updated: `YYYY/MM/DD`(build N)" line
 
-There is NO third place to edit. build-ipa-local.sh reads the version out of
-control at run time:
+Run it locally with:
 
-    VERSION=$(grep -E '^Version:' control | awk '{print $2}')
+    python3 Scripts/bump-version.py --version 6.6.9
+    python3 Scripts/bump-version.py --version 6.6.9 --build 110
+    python3 Scripts/bump-version.py --version 6.6.9 --no-readme --dry-run
 
-so it can never drift from control.
+`--build` defaults to the current Tweak.x.swift buildNumber + 1; `--date`
+defaults to today in Asia/Shanghai; `--no-readme` leaves README.md alone;
+`--dry-run` prints what would change without writing.
 
-----
-Fixed 2026-10-12: this file used to say "update these 3 files" and pointed at
-Tweak.x.swift "line 62" and at a VERSION="X.X.X" on "line 8" of
-build-ipa-local.sh. Both were wrong — line 62 is not that constant, and line 8
-of that script is a header comment. There were only ever two edit sites, and the
-third "must match" claim described something that is derived, not typed.
+Why a workflow as well as the script: it validates the input, shows the diff
+even when you do not want to commit, and commits with the repository identity
+(zbzxbg <yuanhainigu@outlook.com>) using an English message. It is manual on
+purpose — bumping a version is a release action, and a push-triggered commit
+would retrigger itself.
+
+Derived, never typed
+--------------------
+- `build-ipa-local.sh` and both build-ipa workflows read the version from
+  control at run time (`grep -E '^Version:' control`), so an IPA cannot be
+  built with a stale package version.
+- The `.deb` filename and the IPA output name are derived from control.
+
+If you add another place that shows the version, add it to
+`Scripts/bump-version.py` (and this list) — do not reintroduce a "remember to
+edit this by hand" step.

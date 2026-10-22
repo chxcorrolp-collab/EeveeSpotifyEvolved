@@ -200,6 +200,17 @@ extension NowPlayingLyricsPlate {
 
     // MARK: - ★ 2026-10-04：封面与歌词键之间的**一行居中歌词**（用户建议的第二条）
 
+    /// 单行歌词的一拍快照：哪一行、原文、以及播放到哪一秒。
+    ///
+    /// ★ 2026-10-22（用户：「自画单行歌词没有接逐词歌词」）：原来这里只交出 `String`，
+    /// 所以那一行永远是"整行亮着"。现在把**行模型 + 播放位置**一起带出来，渲染时按
+    /// `LyricLine.syllables` 的**音节时间轴**逐字上色（见 `singleLyricAttributedText`）。
+    struct SingleLyricState {
+        let line: LyricLine
+        let text: String
+        let playback: TimeInterval
+    }
+
     /// 封面与歌词键之间的**一行居中歌词**（我们自己的 `UILabel`）。
     ///
     /// 落点：**封面底边与控件条上沿的中点**，宽度与歌词块同宽（两侧各 `stageSideInset`）⇒ 这一行
@@ -214,16 +225,20 @@ extension NowPlayingLyricsPlate {
     ///
     /// **什么时候不显示**：开关关 / 歌词展开着（再来一行是重复）/ 页面要走 / 还没词 /
     /// **一行带时间轴的都没有**（那就没有"当前行"这回事 —— 静态歌词那一档不适用）。
+    ///
     /// ⚠️ `weak`：页面归它所有；万一有哪条路没走到 `removeSingleLyric`，也不该由这个静态变量
     /// **钉住上一页的标签**。
     static weak var singleLyric: UILabel?
     static var singleLyricShownText = ""
+    /// 上一次摆上去的是**哪一行**（同一行只更新填充、不重放交叉淡入）。
+    static var singleLyricShownLineID = ""
     static var singleLyricLines: [LyricLine] = []
     static var singleLyricCacheKey = ""
     static var didLogSingleLyric = false
+    static var didLogSingleLyricTiming = false
 
     /// 这一行**现在该写哪一句**（`nil` = 现在不该有它）。
-    static func singleLyricTextNow() -> String? {
+    static func singleLyricStateNow() -> SingleLyricState? {
         guard UserDefaults.nowPlayingSingleLyric else { return nil }
 
         // ⚠️ 行模型可能还是**上一首**的：切歌**不一定**伴随歌词请求（客户端缓存命中 / 离线歌词时
@@ -254,20 +269,53 @@ extension NowPlayingLyricsPlate {
               let line = singleLyricLines.first(where: { $0.id == highlighted }) else {
             return nil
         }
-        let text = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : text
+        // ⚠️ 用**未裁剪**的 `line.text`：它与 `syllables.map(\.text).joined()` 严格同源
+        //    （见 `LyricLinesAdapter` 里"必须用 line.content"那段），裁掉首尾空格会让
+        //    逐字区间整体错位。
+        let text = line.text
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+
+        if !didLogSingleLyricTiming {
+            didLogSingleLyricTiming = true
+            writeDebugLog(
+                "[\(logTag)] the one-line lyric follows "
+                    + (line.syllables.isEmpty
+                        ? "line timing (this line has no word timeline)"
+                        : "word timing (\(line.syllables.count) syllable(s))")
+            )
+        }
+        return SingleLyricState(line: line, text: text, playback: playback)
     }
 
     /// 每拍摆一次。**关闭 / 展开 / 离页**都会把它收起来（`alpha = 0`，对象留着给下一拍用）。
     static func applySingleLyric(in page: UIView) {
-        guard isEnabled, !door.isOpen, page.window != nil, let text = singleLyricTextNow() else {
+        guard isEnabled, !door.isOpen, page.window != nil,
+              let state = singleLyricStateNow() else {
             hideSingleLyric()
             return
         }
         let label = ensureSingleLyricLabel(in: page)
-        layoutSingleLyric(label, in: page)
-        showSingleLyric(text, on: label)
+        let metrics = singleLyricMetrics(for: state.text, in: page)
+        if label.font != metrics.font { label.font = metrics.font }
+        label.numberOfLines = singleLyricMaxLines
+        layoutSingleLyric(label, in: page, height: metrics.height)
+        showSingleLyric(state, on: label, font: metrics.font)
     }
+
+    /// 单行歌词最多摆几行 / 字号范围 / 已唱与未唱的不透明度。
+    ///
+    /// ★ 2026-10-22（用户：「当前行太长会出现『歌词歌词歌词……』的截断」）：原来固定
+    /// `numberOfLines = 1` + 直接 `.byTruncatingTail` ⇒ 长句必被切。现在**先在两行以内
+    /// 自动缩字号**（短句仍是一行 22pt），只有极端长句才在 15pt / 两行处退回省略号。
+    private static let singleLyricMaxLines = 2
+    private static let singleLyricMaxFontSize: CGFloat = 22
+    private static let singleLyricMinFontSize: CGFloat = 15
+    private static let singleLyricSungAlpha: CGFloat = 0.96
+    private static let singleLyricUnsungAlpha: CGFloat = 0.45
+
+    /// 字号/框高的缓存：`applySingleLyric` 每 0.3s 跑一次，而行文本一唱就是几秒 ——
+    /// 不缓存的话每一拍都要做最多 8 次 `boundingRect`（一次换句才需要量）。
+    private static var singleLyricMetricsCache: (text: String, width: CGFloat, font: UIFont, height: CGFloat)?
 
     static func ensureSingleLyricLabel(in page: UIView) -> UILabel {
         if let existing = singleLyric {
@@ -282,14 +330,14 @@ extension NowPlayingLyricsPlate {
         let label = UILabel()
         label.accessibilityIdentifier = "eevee-npv-single-lyric"
         label.textAlignment = .center
-        label.numberOfLines = 1
+        label.numberOfLines = singleLyricMaxLines
         label.lineBreakMode = .byTruncatingTail
         // ⚠️ **不吃触摸**：它落在封面与控件条之间那条空带上，那一带下面是别人的手势区。
         label.isUserInteractionEnabled = false
         // 字号取 `.player` 档的主歌词字号（22pt）—— 与展开时那一页同一个量级，
         // 展开/收起时不会有"字忽然变大变小"的感觉。
-        label.font = UIFont.systemFont(ofSize: 22, weight: .semibold)
-        label.textColor = UIColor.white.withAlphaComponent(0.96)
+        label.font = UIFont.systemFont(ofSize: singleLyricMaxFontSize, weight: .semibold)
+        label.textColor = UIColor.white.withAlphaComponent(singleLyricSungAlpha)
         // 底下是我们的取色渐变，深浅都可能 ⇒ 与标题行同样的可读性手法：一点阴影。
         label.layer.shadowColor = UIColor.black.cgColor
         label.layer.shadowOpacity = 0.35
@@ -304,25 +352,74 @@ extension NowPlayingLyricsPlate {
             didLogSingleLyric = true
             writeDebugLog(
                 "[\(logTag)] the one-line lyric between the cover and the lyrics button is up"
-                    + " (22pt, centred between the cover's bottom and \(Int(controlBandMidY - controlBandHalfHeight)))"
+                    + " (22pt, shrinks to 15pt / two lines for long lines;"
+                    + " centred between the cover's bottom and \(Int(controlBandMidY - controlBandHalfHeight)))"
             )
         }
         return label
     }
 
+    /// 这一行要用的字号与框高：**先在两行以内找最大可用字号**（22 → 15pt）。
+    ///
+    /// 为什么不是直接 `adjustsFontSizeToFitWidth`：那个属性只对**单行**标签可靠；
+    /// 这里要允许折成两行，所以手动量（`boundingRect` 的换行口径与 UILabel 一致，
+    /// 都是 CoreText 的同一条折行规则）。
+    private static func singleLyricMetrics(
+        for text: String,
+        in page: UIView
+    ) -> (font: UIFont, height: CGFloat) {
+        let width = max(60, page.bounds.width - stageSideInset * 2)
+        if let cached = singleLyricMetricsCache,
+           cached.text == text,
+           abs(cached.width - width) < 0.5 {
+            return (cached.font, cached.height)
+        }
+
+        var font = UIFont.systemFont(ofSize: singleLyricMinFontSize, weight: .semibold)
+        var measured = measuredTextHeight(text, font: font, width: width)
+
+        for size in stride(from: singleLyricMaxFontSize, through: singleLyricMinFontSize, by: -1) {
+            let candidate = UIFont.systemFont(ofSize: size, weight: .semibold)
+            let height = measuredTextHeight(text, font: candidate, width: width)
+            if height <= candidate.lineHeight * CGFloat(singleLyricMaxLines) + 1 {
+                font = candidate
+                measured = height
+                break
+            }
+        }
+
+        // 连最小字号都放不下两行 ⇒ 保持两行高、末尾省略（不再让它无限长高、压到封面/控件）。
+        let maxHeight = font.lineHeight * CGFloat(singleLyricMaxLines) + 1
+        let height = max(30, ceil(min(measured, maxHeight)) + 2)
+        singleLyricMetricsCache = (text, width, font, height)
+        return (font, height)
+    }
+
+    private static func measuredTextHeight(_ text: String, font: UIFont, width: CGFloat) -> CGFloat {
+        let bounds = (text as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font],
+            context: nil
+        )
+        return ceil(bounds.height)
+    }
+
     /// 摆哪一行：**封面底边与控件条上沿的中点**（见上面那段）。
-    static func layoutSingleLyric(_ label: UILabel, in page: UIView) {
+    ///
+    /// 长句折成两行时框会变高，仍然以这个中点为心、并夹在控件条上沿之上。
+    static func layoutSingleLyric(_ label: UILabel, in page: UIView, height: CGFloat) {
         let bandTop = controlBandMidY - controlBandHalfHeight
         let coverBottom = visibleCoverBottom(in: page) ?? page.bounds.midY
-        let height: CGFloat = 30
         // ⚠️ 夹一道上限（独立复核）：`visibleCoverBottom` 拿不到主封面时会退回**卡片**那张的底边
         //    （≈878）⇒ 中点会落到进度条上。宁可让它贴着控件条上沿，也不要压住进度条。
-        let centerY = min((coverBottom + bandTop) / 2, bandTop - height / 2)
+        let boxHeight = min(height, max(30, bandTop - coverBottom - 8))
+        let centerY = min((coverBottom + bandTop) / 2, bandTop - boxHeight / 2)
         let frame = CGRect(
             x: stageSideInset,
-            y: (centerY - height / 2).rounded(),
+            y: (centerY - boxHeight / 2).rounded(),
             width: max(60, page.bounds.width - stageSideInset * 2),
-            height: height
+            height: boxHeight
         )
         if label.frame != frame { label.frame = frame }
     }
@@ -338,13 +435,88 @@ extension NowPlayingLyricsPlate {
         guard let label = singleLyric, label.alpha > 0.01 else { return }
         label.alpha = 0
         singleLyricShownText = ""
+        singleLyricShownLineID = ""
     }
 
-    /// 换句时**交叉淡入**（0.18s）；开「减弱动态效果」就直接换字。
-    static func showSingleLyric(_ text: String, on label: UILabel) {
+    /// 这一行按**唱到哪个字**上色：已唱 = 亮、未唱 = 暗，当前字按进度插值。
+    ///
+    /// 判据只认 `LyricLine.syllables`（**真·逐词时间轴**）：纯逐行的来源不编造时间轴，
+    /// 整行保持亮色 —— 与展开时那一页同一套纪律（`SynchronizedLyricText` 对没有音节的
+    /// 行也只画普通文本）。音节拼回来的文本必须与行文本**逐字相同**，否则整行同色
+    /// （宁可没有逐字，也不要上色上错位）。
+    ///
+    /// ⚠️ 填充前沿是按**音节内的字符**均分算的（与 `TimedLyricTextBuilder` 的口径一致），
+    ///    但刷新节拍仍是既有的 0.3s reconcile（本仓库纪律：不为这一行新开定时器）⇒
+    ///    看到的是"逐词/逐字亮起来"，不是 60fps 的连续填充。
+    private static func singleLyricAttributedText(
+        for state: SingleLyricState,
+        font: UIFont
+    ) -> NSAttributedString {
+        let result = NSMutableAttributedString(
+            string: state.text,
+            attributes: [
+                .font: font,
+                .foregroundColor: UIColor.white.withAlphaComponent(singleLyricUnsungAlpha),
+            ]
+        )
+
+        let syllables = state.line.syllables
+        guard !syllables.isEmpty,
+              syllables.map(\.text).joined() == state.text else {
+            // 没有逐词时间轴（或与行文本对不上）：整行亮色，不做假动画。
+            result.addAttribute(
+                .foregroundColor,
+                value: UIColor.white.withAlphaComponent(singleLyricSungAlpha),
+                range: NSRange(location: 0, length: result.length)
+            )
+            return result
+        }
+
+        var location = 0
+        for syllable in syllables {
+            let length = (syllable.text as NSString).length
+            defer { location += length }
+            guard length > 0 else { continue }
+
+            let duration = max(syllable.endTime - syllable.startTime, 0)
+            for index in 0..<length {
+                let charStart = duration > 0
+                    ? syllable.startTime + duration * Double(index) / Double(length)
+                    : syllable.startTime
+                let charEnd = duration > 0
+                    ? syllable.startTime + duration * Double(index + 1) / Double(length)
+                    : syllable.startTime
+
+                let progress: CGFloat
+                if state.playback >= charEnd {
+                    progress = 1
+                } else if state.playback <= charStart {
+                    progress = 0
+                } else {
+                    progress = CGFloat((state.playback - charStart) / max(charEnd - charStart, 0.001))
+                }
+                let alpha = singleLyricUnsungAlpha
+                    + (singleLyricSungAlpha - singleLyricUnsungAlpha) * progress
+                result.addAttribute(
+                    .foregroundColor,
+                    value: UIColor.white.withAlphaComponent(alpha),
+                    range: NSRange(location: location + index, length: 1)
+                )
+            }
+        }
+        return result
+    }
+
+    /// 换句时**交叉淡入**（0.18s）；**同一行**只更新逐字填充（不重放淡入，否则每拍都在闪）。
+    static func showSingleLyric(_ state: SingleLyricState, on label: UILabel, font: UIFont) {
+        let attributed = singleLyricAttributedText(for: state, font: font)
+        let sameLine = singleLyricShownLineID == state.line.id
+            && singleLyricShownText == state.text
+
         if label.alpha < 0.99 {
-            label.text = text
-            singleLyricShownText = text
+            label.attributedText = attributed
+            singleLyricShownText = state.text
+            singleLyricShownLineID = state.line.id
             UIView.animate(
                 withDuration: 0.18,
                 animations: { label.alpha = 1 },
@@ -352,17 +524,24 @@ extension NowPlayingLyricsPlate {
             )
             return
         }
-        guard singleLyricShownText != text else { return }
-        singleLyricShownText = text
+
+        if sameLine {
+            // 逐字填充：只换属性，不做交叉淡入（0.3s 一拍，重放淡入会一直闪）。
+            label.attributedText = attributed
+            return
+        }
+
+        singleLyricShownText = state.text
+        singleLyricShownLineID = state.line.id
         guard !UIAccessibility.isReduceMotionEnabled else {
-            label.text = text
+            label.attributedText = attributed
             return
         }
         UIView.transition(
             with: label,
             duration: 0.18,
             options: [.transitionCrossDissolve, .allowUserInteraction],
-            animations: { label.text = text },
+            animations: { label.attributedText = attributed },
             completion: nil
         )
     }
@@ -372,8 +551,10 @@ extension NowPlayingLyricsPlate {
         singleLyric?.removeFromSuperview()
         singleLyric = nil
         singleLyricShownText = ""
+        singleLyricShownLineID = ""
         singleLyricCacheKey = ""
         singleLyricLines = []
+        singleLyricMetricsCache = nil
     }
 
     // MARK: - ★ 2026-10-12：被我们移走的标题行**还能点**（点歌名 / 歌手跳专辑 / 歌手页）

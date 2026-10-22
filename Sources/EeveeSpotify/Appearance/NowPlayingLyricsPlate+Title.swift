@@ -83,7 +83,9 @@ extension NowPlayingLyricsPlate {
         // mask 挂在这个元素的 layer 上 ⇒ x=0 对的是元素**当前（位移后）**的左边，用它算会多出一个 `shift`
         // ⇒ `width == bounds.width` ⇒ mask 被删掉。要用 `convert`（**含 transform**）。
         let titleLeft = title.convert(title.bounds, to: page).minX
-        let pageLimit = (page.bounds.maxX - 8) - titleLeft
+        // ★ 2026-10-22：右沿的余量也用 `titleGap`（原来是写死的 8pt）；与"离控件"那条
+        //   同一个数 ⇒ 用户报的"滚动的右边界太靠右"只需调 `titleGap` 一处。
+        let pageLimit = (page.bounds.maxX - titleGap) - titleLeft
         let limitRoom = trailingControlX(in: title, page: page)
             .map { $0 - titleLeft - titleGap }
         let room = min(min(limitRoom ?? pageLimit, pageLimit), bounds.width)

@@ -59,7 +59,12 @@ enum NowPlayingLyricsPlate {
     // 长标题的 marquee 有 10pt 落在屏幕右边之外；28 + 64 + 12 + 308 = **412 ≤ 414** ✓ 全在屏内。
     static let thumbSide: CGFloat = 64
     static let thumbGap: CGFloat = 12
-    static let titleGap: CGFloat = 12
+    /// 标题（长标题会滚动）**右侧渐隐起点**离"右边缘"的距离。pw 原值是 12。
+    ///
+    /// ★ 2026-10-22（用户：「右滚动的边界还是太靠右了，继续往左偏」）：12 → **24**，
+    /// 并且它同时用作"离页面右沿"的余量（`applyTitleMask` 里两处都用它）⇒ 长标题的
+    /// 渐隐/滚动可见边界一起左移。想再左/再右只改这一个数。
+    static let titleGap: CGFloat = 24
     static let titleFade: CGFloat = 20
     static let thumbTop: CGFloat = 8
     /// header 与歌词之间那段**空气**：`stageTop = header 下沿 + 这一条`。

@@ -1212,15 +1212,22 @@ class NeteaseLyricsRepository: LyricsRepository {
             // ⚠️ **不能**为了拿 ytlrc 再调一次 `fetchYrcRaw`：那是一次额外的网络请求。
             var yrcText: String? = nil
             var ytlrcText: String? = nil
-            // ★★ 2026-10-22（用户）：逐词开启时，如果选中的 A 没有逐词，而**同名同艺人**
-            //   的另一条 B 有逐词，就用 B 的 yrc/ytlrc。
+            var yrcParsed: [(offsetMs: Int, content: String, words: [LyricsWordDto])] = []
+
+            // ★★ 2026-10-22（用户）：逐词开启时，yrc 有两种"不可用"要分开处理：
             //
-            // 历史：2026-10-18 那版放宽到"同时长 + 歌手不是明确不符"就换，用户 2026-10-20
-            // 让回退（「效果不好」）—— 它常常换成另一版录音。这一版按用户新规则收紧：
-            // **主标题（name）与全体艺人名必须完全一样**（归一化后相等），专辑不比较；
-            // 时长再夹一道 ±5s 的安全网，防止"同名同艺人、但其实是另一版长度差很多"的
-            // yrc 把时间轴带歪。只从 B 取 yrc + ytlrc；A 的 lrc/tlyric/romalrc 不动
-            // （一旦采用 yrc，正文本来就由 yrc 重建，见下面 `lines = yrcParsed...`）。
+            //   ① **残 yrc**：选中的条目有 yrc，但正文缺字（现场「ただ声一つ —
+            //      Rokudenashi」：yrc 123 字 vs lrc 357 字；ytlrc 只有 55 字符 ⇒
+            //      "歌词缺少 + 翻译不见"）。判据：yrc 正文 < lrc 正文的 90%。
+            //      这种 yrc 一律丢掉，先保证正文与翻译正确（走 lrc + tlyric）。
+            //   ② **没有 yrc**：用户 2026-10-22 的规则 —— 找**同名同艺人**（专辑不比）
+            //      的兄弟条目用它的 yrc/ytlrc；时长夹 ±5s。
+            //
+            //   ⚠️ 残 yrc 还有一条**修复**路径（阶段 B）：同名 + 时长差 ≤2s，且兄弟的
+            //      yrc 正文同样覆盖 lrc ≥90% ⇒ 采用。这一档**不要求艺人名相同**：
+            //      正文覆盖已经证明是同一份词，而"Rokudenashi"与"ロクデナシ"本来就是
+            //      同一个艺人的罗马字/日文写法（用户 2026-10-18 报的现场）。
+            //      没有覆盖率这道门就不会用 —— 那正是 2026-10-18 那版被回退的原因。
             if preferWordByWord {
                 var yrcRaw: (yrc: String?, ytlrc: String?)? = nil
                 do {
@@ -1228,52 +1235,103 @@ class NeteaseLyricsRepository: LyricsRepository {
                 } catch {
                     writeDebugLog("[NetEase] yrc (eapi) fetch failed: \(error)")
                 }
+                yrcParsed = parseYrc(yrcRaw?.yrc ?? "")
 
-                if parseYrc(yrcRaw?.yrc ?? "").isEmpty {
+                let lrcBody = parseLrc(lrc).map(\.content).joined()
+                /// yrc 正文至少要有 lrc 的 90%（lrc 太短就不比）。
+                func yrcCoversTheLrc(
+                    _ candidate: [(offsetMs: Int, content: String, words: [LyricsWordDto])]
+                ) -> Bool {
+                    guard !candidate.isEmpty else { return false }
+                    guard lrcBody.count >= 40 else { return true }
+                    let body = candidate.map(\.content).joined()
+                    return body.count >= Int(Double(lrcBody.count) * 0.9)
+                }
+
+                // ① 残 yrc ⇒ 丢掉，当作"没有可用 yrc"。
+                if !yrcParsed.isEmpty, !yrcCoversTheLrc(yrcParsed) {
+                    writeDebugLog(
+                        "[NetEase] yrc looks truncated — \(yrcParsed.map(\.content).joined().count)"
+                            + " char(s) vs lrc \(lrcBody.count) char(s); dropping it"
+                    )
+                    yrcParsed = []
+                    yrcRaw = nil
+                }
+
+                // ② 没有可用 yrc ⇒ 找兄弟条目。
+                if yrcParsed.isEmpty {
                     let chosenName = normalizedSongName(chosen)
                     let chosenArtists = normalizedArtistNames(chosen)
-                    if chosenName.isEmpty || chosenArtists.isEmpty {
-                        writeDebugLog(
-                            "[NetEase] chosen entry has no yrc and no comparable name/artists"
-                                + " — not probing same-name siblings"
-                        )
+                    let referenceDuration = candidateDuration(chosen) ?? spotifyDurationMs
+                    var probedStrict = 0
+                    var probedRepair = 0
+
+                    if chosenName.isEmpty {
+                        writeDebugLog("[NetEase] chosen entry has no comparable title — not probing siblings")
                     } else {
-                        let maxProbes = 2
-                        var probed = 0
-                        for song in candidates {
-                            guard probed < maxProbes else { break }
-                            guard let altId = songId(from: song), altId != chosenSongId else { continue }
-                            // 用户规则：**歌曲名与艺人名必须完全一样**；专辑不要求一样。
-                            guard normalizedSongName(song) == chosenName,
-                                  normalizedArtistNames(song) == chosenArtists else { continue }
-                            if let spotify = spotifyDurationMs,
-                               let ms = candidateDuration(song),
-                               abs(ms - spotify) > durationToleranceMs {
-                                continue
+                        // 阶段 A（用户规则）：同名 + 同艺人。
+                        if !chosenArtists.isEmpty {
+                            for song in candidates {
+                                guard probedStrict < 2 else { break }
+                                guard let altId = songId(from: song), altId != chosenSongId else { continue }
+                                guard normalizedSongName(song) == chosenName,
+                                      normalizedArtistNames(song) == chosenArtists else { continue }
+                                if let reference = referenceDuration,
+                                   let ms = candidateDuration(song),
+                                   abs(ms - reference) > durationToleranceMs {
+                                    continue
+                                }
+                                probedStrict += 1
+                                guard let alt = try? fetchYrcRaw(songId: altId) else {
+                                    // ⚠️ 日志里的 id 用 `(id …)` 包起来：导出脱敏规则 4b
+                                    //    （`DebugLogSanitizer`）认这个形状，会换成 `<redacted>`。
+                                    writeDebugLog("[NetEase] same-name sibling (id \(altId)) — yrc fetch failed")
+                                    continue
+                                }
+                                let altParsed = parseYrc(alt.yrc ?? "")
+                                guard !altParsed.isEmpty, yrcCoversTheLrc(altParsed) else {
+                                    writeDebugLog("[NetEase] same-name sibling (id \(altId)) — no usable yrc")
+                                    continue
+                                }
+                                yrcRaw = alt
+                                writeDebugLog(
+                                    "[NetEase] adopted a same-name sibling's yrc (id \(altId)),"
+                                        + " \(altParsed.count) line(s); the chosen entry had none"
+                                )
+                                break
                             }
-                            probed += 1
-                            guard let alt = try? fetchYrcRaw(songId: altId) else {
-                                // ⚠️ 日志里的 id 用 `(id …)` 包起来：导出脱敏规则 4b
-                                //    （`DebugLogSanitizer`）认这个形状，会换成 `<redacted>`。
-                                writeDebugLog("[NetEase] same-name sibling (id \(altId)) — yrc fetch failed")
-                                continue
-                            }
-                            let altParsed = parseYrc(alt.yrc ?? "")
-                            guard !altParsed.isEmpty else {
-                                writeDebugLog("[NetEase] same-name sibling (id \(altId)) — no yrc either")
-                                continue
-                            }
-                            yrcRaw = alt
-                            writeDebugLog(
-                                "[NetEase] adopted a same-name sibling's yrc (id \(altId)),"
-                                    + " \(altParsed.count) line(s); the chosen entry had none"
-                            )
-                            break
                         }
-                        if probed == 0 {
+
+                        // 阶段 B（修复残 yrc）：同名 + 时长差 ≤2s + 兄弟 yrc 覆盖 lrc。
+                        // 不要求艺人名相同（理由见上面那段）；严格同名的条目在阶段 A 已经探过。
+                        if yrcRaw == nil, let reference = referenceDuration {
+                            for song in candidates {
+                                guard probedRepair < 3 else { break }
+                                guard let altId = songId(from: song), altId != chosenSongId else { continue }
+                                guard normalizedSongName(song) == chosenName else { continue }
+                                guard let ms = candidateDuration(song),
+                                      abs(ms - reference) <= 2_000 else { continue }
+                                if normalizedArtistNames(song) == chosenArtists { continue }
+                                probedRepair += 1
+                                guard let alt = try? fetchYrcRaw(songId: altId) else { continue }
+                                let altParsed = parseYrc(alt.yrc ?? "")
+                                guard !altParsed.isEmpty, yrcCoversTheLrc(altParsed) else {
+                                    writeDebugLog("[NetEase] repair sibling (id \(altId)) — no usable yrc")
+                                    continue
+                                }
+                                yrcRaw = alt
+                                writeDebugLog(
+                                    "[NetEase] adopted a verified same-title sibling's yrc (id \(altId)),"
+                                        + " \(altParsed.count) line(s); the chosen entry's yrc was unusable"
+                                )
+                                break
+                            }
+                        }
+
+                        if yrcRaw == nil, probedStrict == 0, probedRepair == 0 {
                             writeDebugLog(
-                                "[NetEase] chosen entry has no yrc — no same-name/same-artist"
-                                    + " sibling to probe (\(candidates.count) candidate(s))"
+                                "[NetEase] no usable yrc and no sibling to probe"
+                                    + " (\(candidates.count) candidate(s))"
                             )
                         }
                     }
@@ -1281,9 +1339,10 @@ class NeteaseLyricsRepository: LyricsRepository {
 
                 yrcText = yrcRaw?.yrc
                 ytlrcText = yrcRaw?.ytlrc
+                if let finalYrc = yrcText {
+                    yrcParsed = parseYrc(finalYrc)
+                }
             }
-            let yrcParsed: [(offsetMs: Int, content: String, words: [LyricsWordDto])] =
-                yrcText.map { parseYrc($0) } ?? []
 
             if !yrcParsed.isEmpty {
                 writeDebugLog("[NetEase] Word-by-word (yrc) lyrics — \(yrcParsed.count) line(s)")

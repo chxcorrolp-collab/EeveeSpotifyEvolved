@@ -150,9 +150,10 @@ Some of the modified features in this fork have been verified to work in this en
 - The Spicy Lyrics lyrics provider, as well as the logging and export functionality, comes from [SideloadLabs](https://github.com/SideloadLabs/EeveeSpotifyReincarnated).
 - The Apple Music official TTML source (Settings → Experiments) follows [apple-music-downloader](https://github.com/zhaarey/apple-music-downloader) for finding the web player's developer token (`internal/amp-api/token.go`), and [Manzana-Apple-Music-Lyrics](https://github.com/dropcreations/Manzana-Apple-Music-Lyrics) for the songs/lyrics endpoints (`api/api.py`).
 - The inspiration for the karaoke lyrics and interludes came from [MeloX](https://github.com/youshen2/MeloX).
-- The NetEase weapi request scheme (double AES-CBC and the RSA `encSecKey`) follows [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi). That repository now carries only a README and no license file, so no license name is claimed here; the Swift implementation in this repository is our own.
-- The NetEase search strategy — old search first, eapi cloudsearch fallback, the title/artist/album query ladder and weighted title/artist/album/duration matching — is modelled on [Lyricify Lyrics Helper](https://github.com/WXRIW/Lyricify-Lyrics-Helper) (Apache-2.0). No source code was copied.
-- The NetEase `abroad` response shape and the cloudsearch endpoint were identified with reference to [163MusicLyrics](https://github.com/jitwxs/163MusicLyrics) (Apache-2.0). No source code was copied.
+- NetEase’s lyric source search logic is based on the following projects:
+  [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi)
+  [Lyricify Lyrics Helper](https://github.com/WXRIW/Lyricify-Lyrics-Helper)
+  [163MusicLyrics](https://github.com/jitwxs/163MusicLyrics)
 - The liquid glass-related design was inspired by [spoti.pw](https://spoti.pw). Code from v0.21.1 and earlier (GPL-3.0, © Vojtěch Škopek) is used; the full notice is available in-app under "Licenses". v0.22.0+ is PolyForm Strict: none of its source code was read or reused.
 - The layout design of the Now Playing page and the main pages was inspired by [kumone](https://github.com/missuo/kumone).
 - The artist page design was inspired by Apple Music from Apple Inc.

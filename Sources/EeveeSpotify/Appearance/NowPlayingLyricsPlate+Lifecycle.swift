@@ -408,12 +408,12 @@ extension NowPlayingLyricsPlate {
         }
         guard tilt.window != nil, tilt.bounds.width >= 200 else { return reject() }
         guard isInsideCoverCell(tilt) else { return reject() }
-        guard let cover = sameSizeChild(of: tilt), cover.alpha > 0.01 else {
-            return reject()
-        }
-        guard let page = lastPage, page.window != nil else { return reject() }
+        guard lastPage?.window != nil else { return reject() }
 
         if shouldHold {
+            guard let cover = sameSizeChild(of: tilt), cover.alpha > 0.01 else {
+                return reject()
+            }
             hideSpotifyCover(cover)
 
             coverLocalHides += 1
@@ -426,9 +426,15 @@ extension NowPlayingLyricsPlate {
         }
 
         // 收起态：和节拍那条**缩同一张对象**（`Encore.ImageView`，不是外面那层壳），
-        // 否则会双重缩放（242/366 叠两次）。找不到就留给下一拍节拍兜底。
-        guard let imageView = findByIdentifier(coverImageIdentifier, in: cover),
-              imageView.bounds.width >= 200 else { return }
+        // 否则会双重缩放（242/366 叠两次）。
+        //
+        // ★★ 2026-10-22（用户：「切歌过程中会有 Spotify 原生封面闪过」）：
+        //   上一版要求"`sameSizeChild` 是第一层、且里面那张已经是 ≥200pt"，可换歌那一瞬间
+        //   新封面常常**还没布局完**（日志 5：`artwork picked … 366×366 at 24,159` 之后才缩）
+        //   ⇒ 条件一挡就什么都不做，要等 0.3s 的节拍才缩成 242pt，用户看到的就是一张大封面。
+        //   现在从 **tilt 自己**往下找那张图（不要求等大小的直接子视图），也不要求它已经够宽；
+        //   `applyRestingScale` 会按对象记账，等它真的有尺寸了节拍那条也会接着用同一份底值。
+        guard let imageView = findByIdentifier(coverImageIdentifier, in: tilt) else { return }
         applyRestingScale(to: imageView)
     }
 
@@ -494,6 +500,10 @@ extension NowPlayingLyricsPlate {
     /// 只有 `toggle()` 那一条路会因为**一次**失败而永久认死。
     @discardableResult
     static func openAndMount(in page: UIView) -> Bool {
+        // ⚠️ 共享 CADisplayLink 只有一个槽：收起态那一行歌词可能正占着它（见
+        //    `NowPlayingSingleLyricHost.startClockIfAvailable`）⇒ **铺展开页之前必须先还**，
+        //    否则展开页会掉回 0.5s 的复查节拍（逐词一格一格跳）。
+        releaseSingleLyricClock()
         // ★ 「屏幕上已经有我们的东西」时，这次量不到**不许改意图**。
         //   否则会出现独立只读复核点出来的那个死角：歌词明明还开着、而 `isOpen` 已经是
         //   `false` ⇒ 用户再点走的是"展开"那一支 ⇒ **关不掉**。

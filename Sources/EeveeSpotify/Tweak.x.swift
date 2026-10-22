@@ -443,6 +443,12 @@ struct EeveeSpotify: Tweak {
         //   那条每 0.3s 的复查节拍永远追不上"新封面刚建好"的那一帧（见 `CoverFlashGuard.x.swift`）。
         activateCoverFlashGuard()
 
+        // ★★ 2026-10-22（日志 5）：艺人页「最新发布」卡片的数据改由 Spotify 自己的 Web API 提供时，
+        //   卡片手里只有一个 `spotify:album:…`（页面里"那一格"还是懒加载骨架，没法转发点击）——
+        //   打开它只能走 App **自己的**链接分发器。这条 hook 只把那个单例记成弱引用，
+        //   真正的门禁在卡片那一侧（见 `SpotifyURIOpener.x.swift`）。目标类缺失只记一行日志。
+        activateSpotifyURIOpener()
+
         // ★ 2026-10-13（用户：「我们的观感不好，我想让这些页面看起来像 Apple Music」）：
         //   歌单页**页头**换成 AM 形态（标题/创建者/长度居中 + shuffle + 白色 Play 胶囊）。
         //   借鉴 spoti.pw **v0.21.1**（GPL-3.0）的 `SGRHeaderInfo` 与 `PlaylistHeader.x`，

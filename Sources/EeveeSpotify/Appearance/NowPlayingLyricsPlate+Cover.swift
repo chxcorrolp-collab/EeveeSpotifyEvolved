@@ -102,13 +102,33 @@ extension NowPlayingLyricsPlate {
         // ⚠️ **判据必须和 `measure()` 用的是同一个**（`visibleCover`）：页面上 `Encore.ImageView` 有一堆
         // （48×48 的图标、64×64 的…），按 id 走有界 BFS 取**第一个匹配**往往**不是那张封面** ⇒ 藏错了
         // 一个小图标、缩略图拿到别人的图，而 **Spotify 的封面一直整张露着**（标题与歌词就画在它上面）。
-        guard let list = findByIdentifier(listIdentifier, in: page),
-              let source = visibleCover(in: list, page: page) else { return nil }
+        let list = findByIdentifier(listIdentifier, in: page)
+        let source = list.flatMap { visibleCover(in: $0, page: page) }
         // ★ **先吃缓存**（页面开着的时候就已经认下来的那张），再退回"现在去抓树"。
         //   后者在真机树里经常还没就绪（`UIImageView(alpha=0.00)`），那正是"点了没反应"的来源。
-        guard let image = rememberArtworkIfNeeded(in: page)
-                ?? firstImage(in: source)
-                ?? anyCoverImage(in: list) else {
+        var availableImage = rememberArtworkIfNeeded(in: page)
+        if availableImage == nil, let source { availableImage = firstImage(in: source) }
+        if availableImage == nil, let list { availableImage = anyCoverImage(in: list) }
+
+        // ★★ 2026-10-22（用户：「切歌过程中会有 Spotify 原生封面闪过」）：
+        //    换歌那一两秒里 Spotify 的新封面对象**还没有图**（日志 5：`no image inside that cover view`），
+        //    而展开页已经铺着 ⇒ `layoutAndMount` 失败 ⇒ 原生封面整张露回来，下一拍又藏掉 = 闪一下。
+        //    ⇒ 已经有我们自己那张宿主时，**先留着上一帧的图**把这一拍铺住（同图不同曲也看不出来），
+        //      新图一到就原地替换。只有第一次铺（还没有宿主）才必须等图。
+        if let existingHost = coverHost, let existingImage = coverImage {
+            if let image = availableImage { existingImage.image = image }
+            let coverFrame = geometry.cover
+            existingHost.bounds = CGRect(origin: .zero, size: coverFrame.size)
+            existingHost.center = CGPoint(x: coverFrame.midX, y: coverFrame.midY)
+            existingHost.layer.shadowPath = UIBezierPath(rect: existingHost.bounds).cgPath
+            if existingHost.superview !== page { page.addSubview(existingHost) }
+            page.bringSubviewToFront(existingHost)
+            if let source { hideSpotifyCover(source) }
+            return existingHost
+        }
+
+        guard let source else { return nil }
+        guard let image = availableImage else {
             noteSkip("no image inside that cover view (\(NSStringFromClass(type(of: source))))")
             return nil
         }

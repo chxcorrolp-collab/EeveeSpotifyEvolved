@@ -942,6 +942,11 @@ enum EntityPageHeaderManager {
         // 2026-10-18 晚：**不再安排"扫列表读简介"** —— 那一套（延后 1.5s 读一次 + 每 1.5s 补读、
         // 最多 10 次）试过几轮都不成立：那一段是懒加载的，不滚到就不建，零滚动读到的永远是空。
         // 已整体删除；用户侧改成"先滑到页面底部、再回来点 i"（占位符里就这么写）。
+        // ★★ 2026-10-22（Web API 那条线）：**换了一位艺人 ⇒ 上一页记下的专辑目标立刻作废**。
+        //   否则点新页面上的卡片会去打开**上一位艺人**的专辑 —— 那是这张卡最不能犯的错。
+        if !artistNameStorage.isEmpty, artistNameStorage != name {
+            clearWebReleaseURI(reason: "the page moved on to another artist")
+        }
         artistNameStorage = name
 
         // 副标题：`Components.Header.UI.Metadata` —— 树里是 "58,4M monthly listeners"。
@@ -1468,34 +1473,49 @@ enum EntityPageHeaderManager {
     /// `collectionView(_:didSelectItemAt:)`（真人点卡那一条），所以落地页与 Spotify 自己完全一致
     /// （专辑 / 单曲就进那一张，不会跑到「全部歌曲」）。
     ///
-    /// 目标没了（换页、列表重建、或数据来自苹果目录那条兜底）就**什么都不转发**，只留一行日志。
+    /// ★★ 2026-10-22（日志 5）：页面那一行是**懒加载骨架**、卡片的数据来自 Web API 时，
+    /// 页面上**没有**可转发的那一格 —— 这时用记下来的**专辑 URI**走 App 自己的链接分发器
+    /// （`SpotifyURIOpener.open`）。三档顺序固定：还在页面上的那一格 → 重新找到的那一格 → 专辑 URI。
+    ///
+    /// 三档都不成立（换页 / 数据不属于这一页 / URI 也被清了）就**什么都不做**，只留一行日志。
     private static func handleReleaseCardTap() {
-        guard releaseCardSourceName == currentArtistName else {
-            writeDebugLog("[Release] card tapped — the card belongs to another artist page, nothing forwarded")
+        let name = currentArtistName
+
+        // ① 页面里那一格还在、而且确实属于**这一页**的艺人 ⇒ 照旧转发给它。
+        if releaseCardSourceName == name, let source = releaseCardSource, source.window != nil {
+            let path = eeveeSelectAncestorCell(of: source)
+                ?? eeveeActivate(source)
+                ?? "NOTHING"
+            writeDebugLog("[Release] card tapped — fired: \(path)")
             return
         }
 
-        var source = releaseCardSource
-        if source?.window == nil {
-            // ★ 2026-10-17：列表会把那一格回收（"热门新歌"在列表很下面，页头滚回去时它可能已经没了）
-            // ⇒ 先按**标题行**重新找一次，再退回记下来的那颗。
-            if let headerView = lastArtistHeaderView,
-               let page = eeveeAncestor(withIdentifier: "creator-page", of: headerView),
-               let found = sectionCard(in: page, headingMatches: isReleaseHeading) {
-                let card = firstNestedCell(in: found.cell) ?? found.cell
-                releaseCardSource = card
-                source = card
-            }
-        }
-
-        guard let source, source.window != nil else {
-            writeDebugLog("[Release] card tapped — the source row is gone, nothing forwarded")
+        // ② 那一格被列表回收了（"热门新歌"在列表很下面，页头滚回去时它可能已经没了）
+        //    ⇒ 先按**标题行**重新找一次（原逻辑），找到就转发。
+        if releaseCardSourceName == name,
+           let headerView = lastArtistHeaderView,
+           let page = eeveeAncestor(withIdentifier: "creator-page", of: headerView),
+           let found = sectionCard(in: page, headingMatches: isReleaseHeading) {
+            let card = firstNestedCell(in: found.cell) ?? found.cell
+            releaseCardSource = card
+            let path = eeveeSelectAncestorCell(of: card)
+                ?? eeveeActivate(card)
+                ?? "NOTHING"
+            writeDebugLog("[Release] card tapped — re-found the page row, fired: \(path)")
             return
         }
-        let path = eeveeSelectAncestorCell(of: source)
-            ?? eeveeActivate(source)
-            ?? "NOTHING"
-        writeDebugLog("[Release] card tapped — fired: \(path)")
+
+        // ③ 卡片的数据来自 **Web API**（页面上那一行还是骨架）⇒ 用记下来的专辑 URI 打开。
+        //    ⚠️ 只认"这一页的艺人"记下的那个 URI（换页之后不能去开上一位艺人的专辑）。
+        guard releaseAlbumArtist == name, let uri = releaseAlbumURI, !uri.isEmpty else {
+            writeDebugLog(
+                "[Release] card tapped — no page row and no album uri for \"\(name)\", nothing opened"
+            )
+            return
+        }
+        let opened = SpotifyURIOpener.open(uri)
+        let resultText = opened ? "opened" : "NOT opened"
+        writeDebugLog("[Release] card tapped — \(uri) \(resultText) through the link dispatcher")
     }
 
     // MARK: - 「显示更多」：进页替用户展开一次
@@ -1716,6 +1736,9 @@ enum EntityPageHeaderManager {
             }
             captureLatestRelease(in: page)
             captureArtistPick(in: page)
+            // ★ 2026-10-22（Web API 那条线）：页面里那一行**一直是骨架**时，这一拍也顺手保证
+            //   屏幕上那张卡有数据（墙钟节流在里面；已经拿到 / 页面里已有数据时它立刻返回）。
+            askSpotifyForLatestRelease(artist: releasePollName)
         }
         RunLoop.main.add(timer, forMode: .common)
         releasePollTimer = timer
@@ -1735,6 +1758,22 @@ enum EntityPageHeaderManager {
             return
         }
 
+        // ③ ★★ 2026-10-22（日志 5 的现场）：**页面那一块只是骨架** ——
+        //    `RetrievalRowLoadingElementUI … 正在加载`，Spotify 懒加载，进页那一刻它**根本不存在**
+        //    ⇒ 只读页面的数据线永远出不来卡片。这里补一条**不依赖页面**的数据线：
+        //    用 `DataLoaderServiceHooks` 抓的令牌直接问 Spotify 自己的 Web API
+        //    （`ArtistReleasesFromSpotify`）。取回来的那一张连同**专辑 URI**一起画上去，
+        //    于是卡片既显示得出来、也点得动（`handleReleaseCardTap` 用那个 URI 打开）。
+        //
+        //    ⚠️ 页面里的数据永远优先：一旦 `captureLatestRelease` / `captureArtistPick` 读到那一格，
+        //    `applyPick` 会清掉这里的 URI（卡片与点击都回到页面那一格）。
+        if let release = webReleaseApplied[name] {
+            if webReleaseShownHeader !== headerView {
+                applyWebReleaseCard(release, artist: name, headerView: headerView)
+            }
+            return
+        }
+
         // ⛔ 2026-10-22（用户：「自画最新发布的卡片为什么点不动，而且似乎全部回退的
         //    Apple 原生卡片」）：**不再拿苹果目录的发布来填这张卡**。
         //
@@ -1742,9 +1781,9 @@ enum EntityPageHeaderManager {
         //    `applyLatestRelease` 只能把卡片设成 `isTappable = false`；用户看到的就是
         //    "数据像是 Apple 的、点下去没反应"。更糟的是同名艺人会被目录匹配到别人
         //    （日志 222：`Connect the World`）。
-        //    ⇒ 这一档只保留"从页面上读"的数据；页面那一块还没加载出来时卡片暂时不显示
-        //    （`startReleasePolling` 会在用户滚到 / Spotify 建出那一块时补上，那时可点）。
-        //    如果哪天真要恢复，正确做法是拿到 Spotify 的发布 id，而不是再画一张死卡。
+        //    ⇒ 这一档不再画任何死卡；页面那一块还没加载出来时由上面的 ③ 补上
+        //    （Spotify 自己的 Web API，带专辑 URI ⇒ 可点，数据也对得上这位艺人）。
+        //    如果哪天真要恢复苹果目录，正确做法是拿到 Spotify 的发布 id，而不是再画一张死卡。
         if releaseArtist != name {
             headerView.updateRelease(title: nil, date: nil, meta: nil)
         }
@@ -1753,14 +1792,17 @@ enum EntityPageHeaderManager {
         }
         guard releaseArtist != name else { return }
 
-        // 记下"这一页已经等过"，避免同一页每拍都写一行；不再触发任何网络兜底。
+        // 记下"这一页已经等过"，避免同一页每拍都写一行。
         releaseArtist = name
         if let waited = releaseSectionFirstSeen[name].map({ Date().timeIntervalSince($0) }) {
             writeDebugLog(
                 "[Release] no page section after \(Int(waited))s —"
-                    + " the card waits for the page's own releases row (no Apple fallback)"
+                    + " asking the Web API while the page's own row is still a skeleton"
             )
         }
+        // ★ 2026-10-22：进页这一刻就把 Web API 那条请求发出去（墙钟节流在
+        //   `askSpotifyForLatestRelease` 里 —— 布局拍每帧都来，不能每帧都问）。
+        askSpotifyForLatestRelease(artist: name)
     }
 
     /// ★★ 2026-10-18（图片 150「只剩半只猫」）：**显卡的那一拍照样把页头补高**。
@@ -1798,6 +1840,11 @@ enum EntityPageHeaderManager {
 
     /// 页面里读到的卡片（「艺人之选」/「热门新歌」）—— 数据与目标都是那一格 ⇒ **可点**。
     private static func applyPick(_ pick: ArtistPick, to headerView: EntityPageHeaderView) {
+        // ★★ 2026-10-22：**页面里的数据一到，Web API 那张卡立刻作废** ——
+        //   数据与点击都回到页面那一格（用户要求：页面那一格最终读到时要替换掉 Web API 的卡片，
+        //   点击回到"转发给那一格"）。清的是**专辑 URI**，不动 `webReleaseApplied`
+        //   （离开再回来时还要能同步重画一次，见 `askSpotifyForLatestRelease`）。
+        clearWebReleaseURI(reason: "the page's own row now provides the card")
         headerView.updateRelease(
             title: pick.title,
             date: nil,
@@ -1808,6 +1855,182 @@ enum EntityPageHeaderManager {
         )
         // ★★ 2026-10-18：同上 —— 页头高度与卡片同一拍补上。
         growHeaderForReleaseCard(headerView)
+    }
+
+    // MARK: - 「最新发布」：Spotify Web API 那条线（页面那一行是骨架时的数据源）
+    //
+    // 2026-10-22（日志 5 的现场）：进艺人页时页面里那一行是
+    // `RetrievalRowLoadingElementUI … 正在加载` 的**骨架**，Spotify 懒加载 ⇒ 只读页面的数据线
+    // 进页必然读不到（用户原话：「刚进艺人页没有，重进之后可能就有了」）。
+    // 这一段补的就是那条**不依赖页面**的路：`ArtistReleasesFromSpotify` 用抓到的令牌问
+    // Spotify 自己的 Web API，拿回"这位艺人的最新一张" + **专辑 URI**，于是卡片
+    // ① 进页很快就出现，② 点得动（`SpotifyURIOpener.open`）。
+    //
+    // 纪律：页面里的数据（艺人之选 / 热门新歌）**永远优先**；一旦读到就清掉这里的 URI，
+    // 卡片与点击都回到"转发给页面那一格"。
+
+    /// 现在这张卡要打开的专辑（Web API 来源）。**必须与 `releaseAlbumArtist` 一起对得上当前页**。
+    private static var releaseAlbumURI: String?
+    private static var releaseAlbumArtist: String?
+    /// 已经画到哪一份页头上 —— 同一份页头只画一次（`updateRelease` 会重启封面下载，不能每拍都来）。
+    private static weak var webReleaseShownHeader: EntityPageHeaderView?
+    /// 每位艺人取回来的那一张（**同步重画**用：离开再回来不用再问网络）。
+    private static var webReleaseApplied: [String: SpotifyArtistRelease] = [:]
+    /// 每位艺人上一次问接口的**墙钟**（布局拍每帧都来，不能每帧都问）。
+    private static var webReleaseAskedAt: [String: Date] = [:]
+    private static var webReleaseAskCount: [String: Int] = [:]
+    private static let webReleaseRetryInterval: TimeInterval = 20
+
+    /// 问一次 Web API（**墙钟节流**）。三道闸门：
+    ///
+    ///   · 页面里已经有数据（艺人之选 / 热门新歌）⇒ 不问；
+    ///   · 这位艺人已经取回来过 ⇒ 只同步重画，不问；
+    ///   · 20s 之内问过 ⇒ 跳过（`webReleaseRetryInterval`；90s 的轮询因此最多问 4 次）。
+    ///
+    /// 由 `scheduleLatestRelease`（进页那一刻）与 `startReleasePolling` 的节拍各调一次。
+    private static func askSpotifyForLatestRelease(artist: String) {
+        guard isEnabled else { return }
+        guard !artist.isEmpty else {
+            writeDebugLog("[Release] spotify — no artist name on the page yet, not asking")
+            return
+        }
+        // 页面里的数据优先（用户：优先艺人之选，其次页面上的最新发布）。
+        // 这一档**故意不写日志**：页面那条路自己已经有一行（`latest release from the page — …` /
+        // `artist pick — …`），而且这里的调用点是"每一拍"级的，多一行只会刷屏。
+        guard artistPickCache[artist] == nil, releaseSectionCache[artist] == nil else { return }
+
+        if let release = webReleaseApplied[artist] {
+            if let headerView = lastArtistHeaderView, headerView.window != nil,
+               webReleaseShownHeader !== headerView {
+                applyWebReleaseCard(release, artist: artist, headerView: headerView)
+            }
+            return
+        }
+
+        let now = Date()
+        // 节流那一档**故意不打日志**：它在每一拍都会命中（每帧一行 = 把日志冲掉）。
+        // "问过几次"由下面那行 `attempt N` 回答。
+        if let asked = webReleaseAskedAt[artist], now.timeIntervalSince(asked) < webReleaseRetryInterval {
+            return
+        }
+        webReleaseAskedAt[artist] = now
+        let attempt = (webReleaseAskCount[artist] ?? 0) + 1
+        webReleaseAskCount[artist] = attempt
+        writeDebugLog("[Release] spotify — asking the Web API for \"\(artist)\" (attempt \(attempt))")
+
+        // 回调契约：**主队列**（数据源保证；`applyWebRelease` 里还兜了一次）。
+        ArtistReleasesFromSpotify.fetch(artist: artist) { release in
+            applyWebRelease(release, artist: artist)
+        }
+    }
+
+    /// 接口回来了（主队列）。取回来的那一张要**记住**（离开再回来同步重画），
+    /// 但只有"还是这一页 + 页面里还没有数据 + 页头还在屏上"时才画。
+    private static func applyWebRelease(_ release: SpotifyArtistRelease?, artist: String) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { applyWebRelease(release, artist: artist) }
+            return
+        }
+
+        guard let release else {
+            writeDebugLog(
+                "[Release] spotify — \"\(artist)\": nothing usable, the card keeps waiting for the page row"
+            )
+            return
+        }
+        webReleaseApplied[artist] = release
+
+        guard isEnabled else {
+            writeDebugLog("[Release] spotify — \"\(artist)\": the artist page header is off, card not drawn")
+            return
+        }
+        guard currentArtistName == artist else {
+            writeDebugLog(
+                "[Release] spotify — \"\(artist)\": the page moved on before the answer, kept for later"
+            )
+            return
+        }
+        guard artistPickCache[artist] == nil, releaseSectionCache[artist] == nil else {
+            writeDebugLog("[Release] spotify — \"\(artist)\": the page row arrived first, keeping its card")
+            return
+        }
+        guard let headerView = lastArtistHeaderView, headerView.window != nil else {
+            writeDebugLog(
+                "[Release] spotify — \"\(artist)\": the page is not on screen, stored for the next visit"
+            )
+            return
+        }
+        applyWebReleaseCard(release, artist: artist, headerView: headerView)
+    }
+
+    /// 把 Web API 的那一张画到卡片上 —— **可点**，目标就是它自己的专辑 URI。
+    ///
+    /// 三条守卫都是"绝不能画错"：页头还在树上、页面里的数据没抢走这张卡、
+    /// 接口回的主艺人名与页面上那位**归一化后仍然相等**。
+    private static func applyWebReleaseCard(
+        _ release: SpotifyArtistRelease,
+        artist: String,
+        headerView: EntityPageHeaderView
+    ) {
+        guard headerView.window != nil, headerView.superview != nil else {
+            writeDebugLog("[Release] spotify — \"\(artist)\": the header view left the tree, card not drawn")
+            return
+        }
+        guard artistPickCache[artist] == nil, releaseSectionCache[artist] == nil else {
+            writeDebugLog(
+                "[Release] spotify — \"\(artist)\": the page row owns the card now, Web API result ignored"
+            )
+            return
+        }
+        let wanted = ArtistReleasesFromSpotify.normalized(artist)
+        let arrived = ArtistReleasesFromSpotify.normalized(release.artistName)
+        guard !arrived.isEmpty, arrived == wanted else {
+            writeDebugLog(
+                "[Release] spotify — \"\(artist)\": the answer names \"\(release.artistName)\","
+                    + " not this page — no card (never guess)"
+            )
+            return
+        }
+
+        releaseAlbumURI = release.albumURI
+        releaseAlbumArtist = artist
+        webReleaseShownHeader = headerView
+
+        let meta = release.trackCount > 0
+            ? String(format: "artist_latest_release_tracks".localized, release.trackCount)
+            : nil
+        headerView.updateRelease(
+            title: release.title,
+            date: release.dateText,
+            meta: meta,
+            artworkURL: release.artworkURL,
+            // 有专辑 URI ⇒ 点得动（`handleReleaseCardTap` 第 ③ 档用它打开）。
+            isTappable: true
+        )
+        // ★★ 2026-10-18 的纪律：显卡的那一把顺手把页头补高
+        //   （否则姓名与三颗整体上移 106pt，满幅照片被吃掉一半）。
+        growHeaderForReleaseCard(headerView)
+
+        let dateText = release.dateText ?? "-"
+        writeDebugLog(
+            "[Release] spotify — \"\(artist)\": card shows \"\(release.title)\" (\(dateText))"
+                + ", tap opens \(release.albumURI)"
+        )
+    }
+
+    /// Web API 那张卡的**点击目标**作废（页面里那一格读到了 / 换页了）。
+    ///
+    /// 只清"现在该打开什么"与"画在哪份页头上"；`webReleaseApplied` **保留** ——
+    /// 离开再回来时还能同步重画一次（那时页面里那一格多半又没了）。
+    private static func clearWebReleaseURI(reason: String) {
+        // 没有要清的就**不打日志**：`applyPick` 每一拍都会调到这里（每帧一行 = 刷屏）。
+        guard releaseAlbumURI != nil || releaseAlbumArtist != nil || webReleaseShownHeader != nil else {
+            return
+        }
+        releaseAlbumURI = nil
+        releaseAlbumArtist = nil
+        webReleaseShownHeader = nil
+        writeDebugLog("[Release] spotify — cleared the Web API album target (\(reason))")
     }
 
     /// 标题行的文字是不是"艺人之选"这一块（多语言各写一条 —— Spotify 的 UI 跟着 App 语言走）。

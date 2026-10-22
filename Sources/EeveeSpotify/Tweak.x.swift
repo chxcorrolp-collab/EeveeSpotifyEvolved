@@ -290,7 +290,6 @@ func eeveeEnvFlag(_ name: String) -> Bool {
 
 struct EeveeSpotify: Tweak {
     static let version = "2.0.0-beta"
-    static let buildNumber = "165"
     static let repoSlug = GeneratedConfig.repoSlug
     
     static var hookTarget: VersionHookTarget {
@@ -553,7 +552,7 @@ struct EeveeSpotify: Tweak {
         let iosVersion = UIDevice.current.systemVersion
         let deviceModel = UIDevice.current.model
 
-        writeDebugLog("=== EeveeSpotify \(EeveeSpotify.version) (build \(EeveeSpotify.buildNumber)) starting ===")
+        writeDebugLog("=== EeveeSpotify \(EeveeSpotify.version) starting ===")
         // ★ 2026-10-13：**默认值变更的补偿**（用户要求"Genius 功能默认改成开启"）。
         //   `lyricsOptions` 是**整块 JSON** 落盘的 ⇒ 只改 `defaultValue` 追不到已经写过的那份，
         //   所以这里一次性把盘上那份也打开（只做一次，之后尊重用户在设置里的开关）。

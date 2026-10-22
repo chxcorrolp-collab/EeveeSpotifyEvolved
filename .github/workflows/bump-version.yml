@@ -2,9 +2,11 @@ name: Bump version
 
 # 手动触发：把本仓库**代码里**的版本一次改到位。
 #
-# 改两处（README 不动 —— 那张表和日期由维护者手改）：
+# 改两处（README 不动 —— 版本引用由维护者手改）：
 #   · `control:Version`（deb / 两个 IPA workflow 在运行时读它）；
-#   · `Tweak.x.swift` 的 `static let version` / `buildNumber`（设置页与启动日志显示）。
+#   · `Tweak.x.swift` 的 `static let version`（设置页与启动日志显示）。
+#
+# 代码里不再有 build number：设置页只显示 `v2.0.0-beta`，启动日志也只写版本。
 #
 # 版本允许预发布后缀：`2.0.0-beta` / `2.0.0-rc.1`。输入带 `v` 前缀也能用
 # （`v2.0.0-beta`）—— 脚本会去掉：设置页自己会拼 `"v\(version)"`，而 Debian 的
@@ -19,10 +21,6 @@ on:
       version:
         description: "New version: X.Y.Z or X.Y.Z-beta (a leading v is stripped)"
         required: true
-        type: string
-      build:
-        description: "Build number (leave empty = current Tweak.x.swift buildNumber + 1)"
-        required: false
         type: string
       commit:
         description: "Commit and push (uncheck to only print the diff)"
@@ -48,23 +46,14 @@ jobs:
       - name: Bump control and Tweak.x.swift
         env:
           INPUT_VERSION: ${{ inputs.version }}
-          INPUT_BUILD: ${{ inputs.build }}
         run: |
           set -euo pipefail
-          args=(--version "$INPUT_VERSION")
-          if [ -n "${INPUT_BUILD:-}" ]; then
-            args+=(--build "$INPUT_BUILD")
-          fi
-          python3 Scripts/bump-version.py "${args[@]}"
+          python3 Scripts/bump-version.py --version "$INPUT_VERSION"
 
-          # 把脚本**实际写进去**的值带回后面的步骤：--build 为空时脚本会自己 +1，
-          # 提交信息里必须写最终值，不能写 inputs.build。
+          # 把脚本**实际写进去**的值带回后面的步骤（输入带 v 时脚本会去掉前缀）。
           VERSION=$(grep -m1 'static let version = ' Sources/EeveeSpotify/Tweak.x.swift \
             | sed -E 's/.*"([^"]+)".*/\1/')
-          BUILD=$(grep -m1 'static let buildNumber = ' Sources/EeveeSpotify/Tweak.x.swift \
-            | sed -E 's/.*"([^"]+)".*/\1/')
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "BUILD=$BUILD" >> "$GITHUB_ENV"
 
       - name: Show the diff
         run: |
@@ -80,8 +69,8 @@ jobs:
           # 只 add 这两个文件：脚本不应该动别的东西，也不要把 README 带进来。
           git add control Sources/EeveeSpotify/Tweak.x.swift
           if git diff --cached --quiet; then
-            echo "Nothing to commit — control and Tweak.x.swift are already at $VERSION (build $BUILD)."
+            echo "Nothing to commit — control and Tweak.x.swift are already at $VERSION."
             exit 0
           fi
-          git commit -m "Version: bump to $VERSION (build $BUILD)"
+          git commit -m "Version: bump to $VERSION"
           git push origin "HEAD:${GITHUB_REF_NAME}"

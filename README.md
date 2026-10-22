@@ -87,7 +87,7 @@ Both IPA pipelines build the same tweak; the difference is whether `zxPluginsInj
 | --- | --- | --- |
 | Public release | [`v1.0.0`](https://github.com/zbzxbg/EeveeSpotifyEvolved/releases) | 9.1.88 |
 
-Development last updated: `2026/10/20`(build 164).
+Development last updated: `2026/10/22`(build 165).
 
 > [!WARNING]
 > Development versions are not publicly distributed to users.

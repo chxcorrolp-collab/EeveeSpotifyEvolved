@@ -940,6 +940,13 @@ class NeteaseLyricsRepository: LyricsRepository {
         }
 
         // 从所有查询里收候选，按 NetEase song id 去重。
+        //
+        // ★ 2026-10-22：记下"这条候选是从**标题 + 主艺人**那条查询里出来的吗"。
+        //   前 `artistQueryCount` 条查询是 `标题 + 主艺人`，后面才是只有标题
+        //   （见上面 `searchQueries` 的组装顺序）。后面选歌时会用这份归属，
+        //   因为只有标题那条查询会带进大量同名翻唱。
+        let artistQueryCount = titleVariants.count
+        var artistQuerySongIDs = Set<Int>()
         var candidates: [[String: Any]] = []
         var seenSongIDs = Set<Int>()
         for (index, keyword) in searchQueries.enumerated() {
@@ -956,6 +963,7 @@ class NeteaseLyricsRepository: LyricsRepository {
             for song in songs {
                 guard let id = songId(from: song) else { continue }
                 guard seenSongIDs.insert(id).inserted else { continue }
+                if index < artistQueryCount { artistQuerySongIDs.insert(id) }
                 candidates.append(song)
             }
             if songs.contains(where: looksLikeExactMatch) { break }
@@ -1110,6 +1118,41 @@ class NeteaseLyricsRepository: LyricsRepository {
             return abs(ms - spotify) <= durationToleranceMs
         }
 
+        // ── ★★ 2026-10-22（用户：「网易云会找错很多歌」）──────────────────────
+        //
+        // 四个现场（Spotify 侧是罗马字标题，网易侧是日文标题）：
+        //   Sakurasou / Natsunose → 桜葬；Moderate (feat. wanko) / MIMI → もでらーと；
+        //   Telepathy / esoragoto → テレパシー；Answer (feat. wanko) / MIMI → 解答。
+        // 正确条目的标题在网易是日文，`titleMatchScore` 拿不到分；而"只有标题"那条
+        // 搜索会带回一堆**同名英文翻唱**（Sakurasou / Moderate / Answer …）⇒ 标题 4 分
+        // 直接压过正确条目的"艺人 + 时长"。用户看到的就是"找错歌"。
+        //
+        // 修法：**先按时长收窄**。Spotify 的 `trackDurationMilliseconds` 与网易同一条录音
+        // 通常只差几百毫秒；如果某个候选的时长落在 ±2s 内，就只在**这些**候选里打分
+        // （其中优先"标题 + 主艺人"查询出来的）。没有这种候选时才用原来的全表打分。
+        // 翻唱那几条的时长都差 1.4–4.4s，自然被挡在外面；标题的跨文字优势不再能压过
+        // "时长完全对上"的正确条目。
+        let exactDurationToleranceMs = 2_000
+        var selectionIndices = Array(candidates.indices)
+        if let spotify = spotifyDurationMs {
+            let exact = candidates.indices.filter { index in
+                guard let ms = candidateDuration(candidates[index]) else { return false }
+                return abs(ms - spotify) <= exactDurationToleranceMs
+            }
+            if !exact.isEmpty {
+                let fromArtistQuery = exact.filter { index in
+                    guard let id = songId(from: candidates[index]) else { return false }
+                    return artistQuerySongIDs.contains(id)
+                }
+                selectionIndices = fromArtistQuery.isEmpty ? exact : fromArtistQuery
+                writeDebugLog(
+                    "[NetEase] pick pool narrowed to \(selectionIndices.count)/\(candidates.count)"
+                        + " candidate(s) — duration within \(exactDurationToleranceMs)ms of \(spotify)ms"
+                        + (fromArtistQuery.isEmpty ? "" : ", all found by the title+artist search")
+                )
+            }
+        }
+
         var chosen: [String: Any]?
         var chosenIndex = -1
         var chosenScore = Int.min
@@ -1117,7 +1160,9 @@ class NeteaseLyricsRepository: LyricsRepository {
         var chosenArtistScore = 0
         var chosenDurationScore = 0
 
-        for (index, song) in candidates.enumerated() where passesDurationGate(song) {
+        for index in selectionIndices {
+            let song = candidates[index]
+            guard passesDurationGate(song) else { continue }
             let title = titleMatchScore(song)
             let artist = artistMatchScore(song)
             let duration = durationMatchScore(song)

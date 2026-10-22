@@ -46,7 +46,7 @@ A derivative work based on [EeveeSpotifyReincarnated](https://github.com/Sideloa
 
 | Your setup | Download |
 | --- | --- |
-| Jailbroken | the `.deb` (rootless and RootHide variants) |
+| Jailbroken | the `.deb` (rootless and roothide variants) |
 | TrollStore | `-patched.ipa` |
 | Paid developer certificate (1 year) | `-patched.ipa` |
 | SideStore / AltStore / Sideloadly / free or enterprise certificate | `.ipa` (no patch) |
@@ -77,7 +77,7 @@ The IPA pipelines bundle `Orion.framework` into the app, since a sideloaded app 
 - iOS 16.1 or later (iOS 26+ recommended for the liquid-glass look)
 - Spotify 9.1.88 (current public release: [`v1.0.0`](https://github.com/zbzxbg/EeveeSpotifyEvolved/releases))
 
-Verified on: iPhone 11 · Spotify 9.1.88 · iOS 27.0.1 · certificate-signed · LCSign · rootless DEB. There are many features and I can't test them all myself, so reports are welcome.
+Verified on: iPhone 11 · Spotify 9.1.88 · iOS 27.0.1 · certificate-signed · LCSign · rootless deb.
 
 ## Building an IPA
 

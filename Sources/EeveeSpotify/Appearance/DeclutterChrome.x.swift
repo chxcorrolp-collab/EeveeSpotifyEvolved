@@ -62,7 +62,13 @@ enum DeclutterChrome {
     ///
     /// 默认**关**：用户说过那一行本身不是问题（他反馈的是"逐词歌词开、更好的逐词歌词关"
     /// 时逐行歌词挂错地方，已修在 `InlineLyricsHostLocator`）。这个开关只留作选择。
-    static var hideSingalongLine: Bool { UserDefaults.hideSingalongLine }
+    ///
+    /// ★ 2026-10-22（用户）：它已并入「修改Spotify听歌页布局」总开关 ⇒
+    /// 实际生效值 = `nowPlayingLayout && hideSingalongLine`（总开关拨动时会把下面那颗键
+    /// 一起写成同一个值；这道 `&&` 是给外部写回兜底的）。
+    static var hideSingalongLine: Bool {
+        UserDefaults.nowPlayingLayout && UserDefaults.hideSingalongLine
+    }
 
     // MARK: - 首页 / 播放器那一批（2026-09-30 真机树实证）
 
@@ -194,7 +200,11 @@ enum DeclutterChrome {
     private static weak var lyricsPill: UIView?
     private static weak var videoPill: UIView?
 
-    static var hideNowPlayingPills: Bool { UserDefaults.hideNowPlayingPills }
+    /// ★ 2026-10-22（用户）：它已并入「修改Spotify听歌页布局」总开关 ⇒
+    /// 实际生效值 = `nowPlayingLayout && hideNowPlayingPills`（理由同上面那颗）。
+    static var hideNowPlayingPills: Bool {
+        UserDefaults.nowPlayingLayout && UserDefaults.hideNowPlayingPills
+    }
 
     /// 事件 hook 用：这颗 `Primary` 按钮带着我们关心的 id 吗？
     /// 命中就记下来并**当场**处理 —— 胶囊出现的那一帧就没了，不用等 0.3s 的复查节拍。

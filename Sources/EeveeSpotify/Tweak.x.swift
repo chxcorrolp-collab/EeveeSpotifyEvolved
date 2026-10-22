@@ -564,6 +564,12 @@ struct EeveeSpotify: Tweak {
         //   ⚠️ 关掉它仍然是"完全不动"（内容与高度精确写回），见
         //   `UserDefaults.applyTabBarSystemGlassDefaultIfNeeded()` 的注释。
         UserDefaults.applyTabBarSystemGlassDefaultIfNeeded()
+        // ★ 2026-10-22（用户：「整合以下功能…名字为：修改Spotify听歌页布局…默认开启」）：
+        //   把听歌页那五件结构改动（取色底 / 隐藏播放页模块 / 隐藏官方单行歌词 /
+        //   隐藏两颗胶囊 / 歌词进播放器）收进一颗总开关。每次启动都把盘上那五颗键
+        //   **按总开关归一**一次 —— 旧版本被单独关过的那几项、以及导入旧备份带进来的
+        //   单键值，都会在这一次收正；之后总开关就是唯一真相（详见该方法的注释）。
+        UserDefaults.normalizeNowPlayingLayoutKeys()
         // ★ 2026-10-13（用户要求：「**展示罗马化翻译 / 歌词翻译默认开启**」）：把
         //   「三颗逐语言罗马化开关 = 开」+「不隐藏译文」一次性写进键里 —— **只对没写过的键**，
         //   已经手动选过的设备保持他自己的选择（与上面那条、以及 Genius 回退那条同一条纪律）。

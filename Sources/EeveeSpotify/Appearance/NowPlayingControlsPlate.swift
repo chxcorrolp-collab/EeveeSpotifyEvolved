@@ -198,7 +198,11 @@ enum NowPlayingControlsPlate {
     /// （`refreshGlyphs` 在 hook 的每个布局回合都会跑，不能每次都打）。
     private static var lastReportedSignature: String = ""
 
-    static var isEnabled: Bool { UserDefaults.nowPlayingControlGlyphs }
+    /// ★ 2026-10-22：控制键字形是「修改Spotify听歌页布局」的**二级菜单**项 ⇒
+    /// 总开关关着时同样不生效（`nowPlayingLayout && nowPlayingControlGlyphs`）：
+    /// 关总开关要把 Spotify 的三个原生图标写回来，否则"布局关着、图标却还是本地字形"。
+    /// 子开关存的值不动（再打开总开关时沿用用户上次的选择）。
+    static var isEnabled: Bool { UserDefaults.nowPlayingLayout && UserDefaults.nowPlayingControlGlyphs }
 
     // MARK: - 对外入口
 

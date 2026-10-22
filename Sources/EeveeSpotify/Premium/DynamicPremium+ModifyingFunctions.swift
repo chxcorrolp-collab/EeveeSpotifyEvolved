@@ -676,12 +676,14 @@ private func reportLyricsReplacementOutcome(_ values: [AssignedValue]) {
 
         // 关掉开关时 `hits` 照样是 1（服务端确实下发了这条），但**我们没改**。
         // 不标出来，日志就会读成"改了"，判读 A/B 时会直接得出相反结论。
+        // ★ 2026-10-22：读 `DeclutterChrome.hideSingalongLine` 而不是裸键 —— 它把
+        //   「修改Spotify听歌页布局」总开关也算了进去。
         let skipped = (name == lyricsEntryPointFlagName
                         && !NgzhwmSettingsViewModel.isLyricsEntryPointFlagForced)
-            || (name == singalongLineFlagName && !UserDefaults.hideSingalongLine)
+            || (name == singalongLineFlagName && !DeclutterChrome.hideSingalongLine)
             // ★ 2026-10-17：新内容层的两条也跟「隐藏封面下单行歌词」走。
             || ((name == lyricsMigrationFlagName || name == lyricsRefactorFlagName)
-                && !UserDefaults.hideSingalongLine)
+                && !DeclutterChrome.hideSingalongLine)
 
         writeDebugLog(
             "[Flags] replacement \(key) — \(hits) match(es)"
@@ -786,9 +788,10 @@ private func modifyAssignedValues(_ values: inout [AssignedValue]) {
 
         // ★ 2026-10-09：同一条纪律给「封面下单行歌词」——用户把那个开关关掉时，
         //   这一条内置替换**整条跳过**，让 Spotify 的行为原样保留（他没有要求我们改它）。
+        //   ★ 2026-10-22：跟着总开关走（`DeclutterChrome.hideSingalongLine` 里带总开关的门）。
         if index < builtInReplacementCount,
            replacement.name == singalongLineFlagName,
-           !UserDefaults.hideSingalongLine {
+           !DeclutterChrome.hideSingalongLine {
             reportSingalongFlagSkippedOnce()
             continue
         }
@@ -796,7 +799,7 @@ private func modifyAssignedValues(_ values: inout [AssignedValue]) {
         // ★ 2026-10-17：新内容层的两条也跟同一个开关走（见 `propertyReplacements` 末尾）。
         if index < builtInReplacementCount,
            (replacement.name == lyricsMigrationFlagName || replacement.name == lyricsRefactorFlagName),
-           !UserDefaults.hideSingalongLine {
+           !DeclutterChrome.hideSingalongLine {
             continue
         }
 

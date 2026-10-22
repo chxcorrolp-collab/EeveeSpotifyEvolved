@@ -94,6 +94,11 @@ struct EeveeBackupSettingsView: View {
 
             Button {
                 let result = SettingsBackup.importText(importText)
+                // ★ 2026-10-22：听歌页那五件结构改动只有「修改Spotify听歌页布局」总开关
+                //   一个合法入口，而导入是**逐键**写盘的（五颗键都在白名单里）⇒ 一份旧备份
+                //   可以把 `hideSingalongLine=false` 之类单独写回来，造成"总开关开着、功能却没开"。
+                //   导入完立刻按总开关归一一次，页面上那颗开关才始终是真相。
+                UserDefaults.normalizeNowPlayingLayoutKeys()
                 status = describe(result)
                 exportText = SettingsBackup.exportText()
             } label: {

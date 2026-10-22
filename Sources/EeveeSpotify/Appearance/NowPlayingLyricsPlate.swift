@@ -280,7 +280,11 @@ enum NowPlayingLyricsPlate {
     /// 而这一层**本身就是** Apple Music 那套渲染 —— 挂上它的后果很具体：只开「逐词歌词」时
     /// **整层退出**，用户要的"版式留着、歌词照画"（缩封面 / 标题左上 / 控件条 / 单行歌词）全没了。
     /// 渲染能力由 `canShow()` 里那条 **iOS 26** 判据兜着（这一整条链本就是 iOS 26 起的）。
-    static var isEnabled: Bool { UserDefaults.nowPlayingLyricsInPlayer }
+    ///
+    /// ★ 2026-10-22：这颗键由「修改Spotify听歌页布局」总开关统一写
+    /// （`UserDefaults.nowPlayingLayout` 关掉时它也会被写成 `false`）；再叠一道总开关的门，
+    /// 保证"总开关关掉 ⇒ 这一套一律不生效"（外部写回 / 导入备份也挡得住）。
+    static var isEnabled: Bool { UserDefaults.nowPlayingLayout && UserDefaults.nowPlayingLyricsInPlayer }
 
 
     // MARK: - 实现分布

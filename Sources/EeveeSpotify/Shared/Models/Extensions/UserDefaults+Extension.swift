@@ -41,6 +41,8 @@ extension UserDefaults {
     private static let tabBarHideCreateKey = "tabBarHideCreate"
     private static let miniBarGlassKey = "miniBarGlass"
     private static let playlistSingleCoverKey = "playlistSingleCover"
+    /// ★ 2026-10-22：「修改Spotify听歌页布局」总开关（见 `nowPlayingLayout`）。
+    private static let nowPlayingLayoutKey = "nowPlayingLayout"
     private static let nowPlayingBackdropKey = "nowPlayingBackdrop"
     private static let nowPlayingOneScreenKey = "nowPlayingOneScreen"
     private static let nowPlayingVolumeKey = "nowPlayingVolume"
@@ -109,6 +111,7 @@ extension UserDefaults {
         tabBarHideCreateKey,
         miniBarGlassKey,
         playlistSingleCoverKey,
+        nowPlayingLayoutKey,
         nowPlayingBackdropKey,
         nowPlayingOneScreenKey,
         nowPlayingVolumeKey,
@@ -880,6 +883,74 @@ extension UserDefaults {
 
     // MARK: - 听歌页（NPV）：仿 AM 的取色渐变底
 
+    /// ★ 2026-10-22：「**修改Spotify听歌页布局**」总开关。**默认开**。
+    ///
+    /// 用户原话（2026-10-22）：
+    /// > 整合以下功能：整页取色底，隐藏Spotify歌曲播放页模块/隐藏Spotify官方单行歌词/
+    /// > 隐藏两个胶囊，歌词进播放器。上述功能整合，名字为：修改Spotify听歌页布局，
+    /// > 放在歌曲播放页的最上面（默认开启）。
+    ///
+    /// 它把这五件**结构改动**收进一颗开关（原来各占一行）：
+    ///   · `nowPlayingBackdrop`      —— 整页封面取色底；
+    ///   · `nowPlayingOneScreen`     —— 隐藏 Spotify 的播放页模块（卡片折叠 + 钉住列表）；
+    ///   · `hideSingalongLine`       —— 隐藏 Spotify 官方的单行歌词（含 `lyrics_under_cover_art_enabled` 那条 flag）；
+    ///   · `hideNowPlayingPills`     —— 隐藏「切换至视频 / 显示歌词」两颗胶囊；
+    ///   · `nowPlayingLyricsInPlayer`—— 把（我们自己的）歌词画进播放器中段。
+    ///
+    /// 语义：**总开关是这五件的唯一真相** —— 拨它时会把那五个键一起写成同一个值
+    /// （见 `NowPlayingSettingsView.applyLayoutChange`），落地代码仍然读各自的键，
+    /// 所以备份/导入看到的值与屏幕上的总开关永远一致。
+    ///
+    /// ⚠️ 那五颗键已经没有单独的 UI 了 ⇒ 每次启动（以及每次导入备份之后）都由
+    /// `normalizeNowPlayingLayoutKeys()` 按总开关归一一次。理由（旧备份会逐键写盘）写在那个方法上。
+    static var nowPlayingLayout: Bool {
+        get {
+            container.object(forKey: nowPlayingLayoutKey) as? Bool ?? true
+        }
+        set {
+            container.set(newValue, forKey: nowPlayingLayoutKey)
+        }
+    }
+
+    /// 把五件结构改动的键统一成**总开关的值** —— 总开关是唯一真相。
+    ///
+    /// 为什么需要"每次启动都做"，而不是只做一次迁移：
+    ///   · 这五颗键在设置页里已经没有单独的行了，它们唯一的合法来源就是总开关；
+    ///   · 但「备份与重置」的导入是**逐键写盘**的（五个键都在 `ownedKeys` 白名单里）——
+    ///     一份 2026-10-22 之前的备份带着 `hideSingalongLine=false` 导进来，就会变成
+    ///     "总开关显示开着、Spotify 官方单行歌词却还挂在那儿"，而页面上已经没有那颗开关可拨。
+    ///   ⇒ 启动时归一一次、导入备份之后再归一一次；挡不住"运行期间从外部写键"，
+    ///     但下一次启动/导入就会收正，不会静默地把界面和总开关拆成两套。
+    ///
+    /// 只写"值不对"的那几颗（正常情况下一个字节都不写），并打一行日志说明改了几颗。
+    ///
+    /// - Returns: 这次真的写了几颗键（0 = 本来就一致）。设置页拿它决定要不要**当场重放**一遍
+    ///   —— 备份导入把单键写歪之后，用户再回到这一页时界面和听歌页才会一起收正。
+    @discardableResult
+    static func normalizeNowPlayingLayoutKeys() -> Int {
+        let enabled = nowPlayingLayout
+        let keys = [
+            nowPlayingBackdropKey,
+            nowPlayingOneScreenKey,
+            nowPlayingLyricsInPlayerKey,
+            hideSingalongLineKey,
+            hideNowPlayingPillsKey,
+        ]
+
+        var changed = 0
+        for key in keys where (container.object(forKey: key) as? Bool) != enabled {
+            container.set(enabled, forKey: key)
+            changed += 1
+        }
+
+        guard changed > 0 else { return 0 }
+        writeDebugLog(
+            "[Layout] now-playing layout keys normalised to \(enabled ? "ON" : "OFF")"
+                + " (\(changed) of \(keys.count) key(s) disagreed with the master switch)"
+        )
+        return changed
+    }
+
     /// 听歌页**整页底色**换成"封面取色"的三层渐变（AM 那种）。**默认开**。
     ///
     /// 取值来源与理由（含"为什么不模糊"）都写在 `NowPlayingBackdrop` 的文件头。
@@ -920,18 +991,23 @@ extension UserDefaults {
         }
     }
 
-    /// 听歌页底部那条**音量条**（我们自己的一层覆盖层上的第一件控件）。**默认开**。
+    /// 听歌页底部那条**音量条**（我们自己的一层覆盖层上的第一件控件）。**默认关**。
     ///
     /// 它是 kumone 播放页下半屏的辨识度元素之一（Apple Music 没有）。落点与纪律写在
     /// `NowPlayingPageOverlay` 的文件头：**透明覆盖层 + 只加我们自己的视图 +
     /// 容器不吃触摸**，关掉 = 把那一层拿掉，天然完全还原。
     ///
-    /// ★ 2026-10-11（用户）：从「默认关」改成「**默认开**」——
+    /// ★ 2026-10-11（用户）：曾从「默认关」改成「**默认开**」——
     /// 原话「听歌页的那几个功能**全部默认开启**」。
-    /// （当初默认关的理由是"让用户先看一眼认不认"；用户看过照片 70/71 之后拍板要开。）
+    ///
+    /// ★ 2026-10-22（用户）：**又改回默认关**，并且只在这一项下面写
+    /// 「该功能测试中，不推荐开启。」——
+    /// 原话「除了展示音量条这个功能，其他的默认开启」。
+    /// 归属也变了：它现在是「修改Spotify听歌页布局」的**二级菜单**里的一项，
+    /// `NowPlayingPageOverlay.isEnabled` 因此还带一道总开关的门（`nowPlayingLayout`）。
     static var nowPlayingVolume: Bool {
         get {
-            container.object(forKey: nowPlayingVolumeKey) as? Bool ?? true
+            container.object(forKey: nowPlayingVolumeKey) as? Bool ?? false
         }
         set {
             container.set(newValue, forKey: nowPlayingVolumeKey)
@@ -1013,14 +1089,17 @@ extension UserDefaults {
         }
     }
 
-    /// 听歌页「**未播放歌词行模糊化**」—— 非当前播放的歌词行要不要**发糊**。**默认关**。
+    /// 听歌页「**未播放歌词行模糊化**」—— 非当前播放的歌词行要不要**发糊**。**默认开**。
     ///
     /// ★ 2026-10-12（用户原话）：
     /// > 现在是未播放歌词行是模糊不清的，加个功能叫「未播放歌词行模糊化」。
     /// > 关闭之后，未当前播放歌词行不模糊化，**默认关闭**。
     ///
-    /// 关着（默认）：非当前行**只变淡、不发糊**（变淡是"焦点"这件事的表达，两边都有）；
-    /// 翻开：回到改动前那条公式 `maximumNonFocusedBlurRadius × (1 − 焦点强度)`
+    /// ★ 2026-10-22（用户）：作为「修改Spotify听歌页布局」二级菜单的一员，
+    /// **默认值改成开** —— 原话「除了展示音量条这个功能，其他的默认开启」。
+    ///
+    /// 关着：非当前行**只变淡、不发糊**（变淡是"焦点"这件事的表达，两边都有）；
+    /// 翻开（默认）：回到改动前那条公式 `maximumNonFocusedBlurRadius × (1 − 焦点强度)`
     /// （`AppleMusicLyricsPage.blurRadius`）。
     ///
     /// ⚠️ 拨开关要**当场生效**：它只写 `UserDefaults`、不会让 `currentLyricsVersion` 变，
@@ -1028,7 +1107,7 @@ extension UserDefaults {
     ///    （与罗马字 / 译文两颗同一个理由；不进去就得等换歌 —— 那正是上一轮修掉的"哑开关"）。
     static var nowPlayingBlurUnplayedLyrics: Bool {
         get {
-            container.object(forKey: nowPlayingBlurUnplayedLyricsKey) as? Bool ?? false
+            container.object(forKey: nowPlayingBlurUnplayedLyricsKey) as? Bool ?? true
         }
         set {
             container.set(newValue, forKey: nowPlayingBlurUnplayedLyricsKey)

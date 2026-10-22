@@ -29,8 +29,9 @@ import ObjectiveC.runtime
 ///
 /// ## 开关
 ///
-/// 扩展功能 → 听歌页 →「底部音量条」，**默认关**（先看效果，再决定默认值）。
-/// 日志 tag：`[NPVPage]`。
+/// 设置 → 歌曲播放页 →「修改Spotify听歌页布局」的二级菜单 →「展示音量条」，**默认关**
+/// （2026-10-22 用户：该功能测试中，不推荐开启）。日志 tag：`[NPVPage]`。
+/// 总开关关着时它也不出现（`isEnabled` 里带着 `nowPlayingLayout` 的门，见下）。
 enum NowPlayingPageOverlay {
 
     static let logTag = "NPVPage"
@@ -91,7 +92,10 @@ enum NowPlayingPageOverlay {
 
     private static var didLogInstall = false
 
-    static var isEnabled: Bool { UserDefaults.nowPlayingVolume }
+    /// ★ 2026-10-22：音量条是「修改Spotify听歌页布局」的**二级菜单**项 ⇒
+    /// 总开关关着时它也不该出现（`nowPlayingLayout && nowPlayingVolume`）。
+    /// 关总开关会把音量条一起撤掉，但**不动**这颗子开关存的值（再打开时还是用户上次的选择）。
+    static var isEnabled: Bool { UserDefaults.nowPlayingLayout && UserDefaults.nowPlayingVolume }
 
     // MARK: - 对外入口
 

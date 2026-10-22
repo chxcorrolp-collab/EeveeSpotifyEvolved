@@ -25,8 +25,9 @@ import ObjectiveC.runtime
 /// ## 其它
 ///   · 重算时机：蹭 `DeclutterChrome` 既有的 0.3s 复查节拍（**不新开 hook、不挂可选方法**）；
 ///   · 卡片折叠那一半在 `NowPlayingOneScreenCards.x.swift`（那个必须是 Orion hook）；
-///   · 开关：听歌页 →「隐藏 Spotify 的听歌页模块」，**默认开**
-///     （`UserDefaults.nowPlayingOneScreen ?? true`），日志 tag `[OneScreen]`。
+///   · 开关：听歌页 →「修改Spotify听歌页布局」总开关（2026-10-22 起把原来那颗
+///     「隐藏 Spotify 的听歌页模块」收进去了），**默认开**
+///     （`UserDefaults.nowPlayingLayout && UserDefaults.nowPlayingOneScreen`），日志 tag `[OneScreen]`。
 ///     默认开的前提是"歌词进播放器"（`NowPlayingLyricsPlate`）补上了打开歌词的入口 ——
 ///     否则折掉歌词卡之后，听歌页就没有"打开歌词"的地方了。
 enum NowPlayingOneScreen {
@@ -55,7 +56,10 @@ enum NowPlayingOneScreen {
     /// 合并用的占位：一次布局里几十张卡只排一枪（本仓库纪律：短促重试不叠加）。
     private static var repinScheduled = false
 
-    static var isEnabled: Bool { UserDefaults.nowPlayingOneScreen }
+    /// ★ 2026-10-22：这颗开关由「修改Spotify听歌页布局」总开关统一写；
+    /// 再叠一道 `nowPlayingLayout` 的门，是为了"总开关关掉 ⇒ 这一套一律不生效"
+    /// （哪怕有外部写回 / 导入备份把那颗键写成了 true）。
+    static var isEnabled: Bool { UserDefaults.nowPlayingLayout && UserDefaults.nowPlayingOneScreen }
 
     // MARK: - 对外入口
 

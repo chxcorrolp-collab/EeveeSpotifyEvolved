@@ -126,9 +126,30 @@ class PetitLyricsRepository: LyricsRepository {
             }
 
             let preserveWords = NgzhwmSettingsViewModel.isWordByWordLyricsEnabled
-            writeDebugLog("[Petit] Words-synced lyrics — \(lyrics.lines.count) line(s)\(preserveWords ? " (word-by-word preserved)" : "")")
+            // ★ 2026-10-22（用户）：「Petit 会返回空白行歌词 ⇒ AM 呼吸灯过后（间奏）
+            //   是一行空白而不是下一行歌词」。
+            //
+            // Petit 的 wordsSynced 里，间奏/段落之间常夹着 `linestring` 为空（或纯空白）的
+            // **行**；这些行通常还带一个 word 时间戳 ⇒ `LyricsLineDto.isBlankForDisplay`
+            // 认不出它们（它只在"没有词级数据"时才算空白行），DTO 那层的统一筛空行也就漏过去了。
+            // 这里在**源头**按 `linestring` 丢掉：间奏交给 AM 那边按"行与行之间的时间间隙"
+            // 推出来的三个呼吸点，不交给一行空白。
+            let timedLines = lyrics.lines.filter { line in
+                if !line.linestring.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return true
+                }
+                // `linestring` 空、但词元素里真有字（异常形态）⇒ 保留，别误删一句。
+                return line.words.contains { word in
+                    !(word.wordstring ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
+            }
+            let droppedBlankLines = lyrics.lines.count - timedLines.count
+            if droppedBlankLines > 0 {
+                writeDebugLog("[Petit] dropped \(droppedBlankLines) blank line(s) (no text)")
+            }
+            writeDebugLog("[Petit] Words-synced lyrics — \(timedLines.count) line(s)\(preserveWords ? " (word-by-word preserved)" : "")")
             return LyricsDto(
-                lines: lyrics.lines.map {
+                lines: timedLines.map {
                     LyricsLineDto(
                         content: $0.linestring,
                         offsetMs: $0.words.first?.starttime,
@@ -136,14 +157,17 @@ class PetitLyricsRepository: LyricsRepository {
                     )
                 },
                 timeSynced: true,
-                romanization: lyrics.lines.map { $0.linestring }.canBeRomanized
+                romanization: timedLines.map { $0.linestring }.canBeRomanized
                     ? .canBeRomanized
                     : .original
             )
             
         case .plain:
             let stringLyrics = String(data: lyricsData, encoding: .utf8)!
-            let lines = stringLyrics.components(separatedBy: "\n")
+            // ★ 2026-10-22：同上 —— 纯文本也先丢掉空白行（原先靠 DTO 那层，但这里顺手
+            //   一起做，保证"空白行不进 payload"这条在源头就成立）。
+            let lines = stringLyrics.components(separatedBy: .newlines)
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             writeDebugLog("[Petit] Plain lyrics — \(lines.count) line(s)")
             return LyricsDto(
                 lines: lines.map { LyricsLineDto(content: $0) },

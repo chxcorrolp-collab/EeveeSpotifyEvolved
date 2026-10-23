@@ -19,6 +19,16 @@ struct EeveeNeteaseOffsetSettingsView: View {
     @State private var currentSongArtist = ""
     /// 已保存的单曲偏移（**不含当前播放这首**；它在上面单独一行，避免同一首出现两次）。
     @State private var savedSongOffsets: [SavedSongOffset] = []
+    /// 搜索词（歌名 / 歌手 / 曲目 id）。
+    @State private var query = ""
+
+    /// 保存的歌多到一屏看不完时才显示搜索框（太少时它只是噪音）；
+    /// 已经在搜索时**保持显示**，否则清空后框会突然消失。
+    private let searchAppearsAt = 6
+
+    private var showsSearchField: Bool {
+        !savedSongOffsets.isEmpty && (savedSongOffsets.count >= searchAppearsAt || !query.isEmpty)
+    }
 
     private struct SavedSongOffset: Identifiable {
         let id: String
@@ -92,7 +102,47 @@ struct EeveeNeteaseOffsetSettingsView: View {
 
     // MARK: - 已保存
 
+    /// 搜索过滤后的那一列。空搜索词 = 全部。
+    private var visibleSavedSongs: [SavedSongOffset] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return savedSongOffsets }
+        let needle = searchKey(trimmed)
+        guard !needle.isEmpty else { return savedSongOffsets }
+        let rawNeedle = trimmed.lowercased()
+        return savedSongOffsets.filter { song in
+            searchKey(song.title).contains(needle)
+                || song.id.lowercased().contains(rawNeedle)
+        }
+    }
+
+    /// 搜索归一化：**大小写 / 全角半角 / 变音符号都不敏感**，并且把平假名折成片假名
+    /// （「ふり」与「フリ」互搜得到 —— 日文标题两种写法都常见）。
+    private func searchKey(_ text: String) -> String {
+        let folded = text.folding(
+            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+            locale: nil
+        )
+        var result = ""
+        for scalar in folded.unicodeScalars {
+            if (0x3041...0x3096).contains(scalar.value),
+               let katakana = Unicode.Scalar(scalar.value + 0x60) {
+                result.unicodeScalars.append(katakana)
+            } else {
+                result.unicodeScalars.append(scalar)
+            }
+        }
+        return result
+    }
+
     @ViewBuilder private func savedSongsSection() -> some View {
+        if showsSearchField {
+            Section {
+                TextField("netease_offset_search".localized, text: $query)
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
+            }
+        }
+
         Section(header: Text("netease_offset_saved".localized)) {
             if savedSongOffsets.isEmpty {
                 Text(currentSongHasOverride
@@ -100,8 +150,12 @@ struct EeveeNeteaseOffsetSettingsView: View {
                      : "netease_offset_saved_empty".localized)
                     .font(.footnote)
                     .foregroundColor(.secondary)
+            } else if visibleSavedSongs.isEmpty {
+                Text("netease_offset_no_matches".localized)
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
             } else {
-                ForEach(savedSongOffsets) { song in
+                ForEach(visibleSavedSongs) { song in
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(song.title)
@@ -127,7 +181,7 @@ struct EeveeNeteaseOffsetSettingsView: View {
                     }
                     .buttonStyle(.borderless)
                 }
-                .onDelete(perform: deleteSavedSongs)
+                .onDelete(perform: deleteVisibleSongs)
             }
 
             if !NeteaseTimingOffset.trackOffsets.isEmpty {
@@ -139,7 +193,10 @@ struct EeveeNeteaseOffsetSettingsView: View {
                 .foregroundColor(.red)
             }
         } footer: {
-            Text("netease_offset_saved_description".localized)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("netease_offset_saved_count".localizeWithFormat(savedSongOffsets.count))
+                Text("netease_offset_saved_description".localized)
+            }
         }
     }
 
@@ -233,9 +290,10 @@ struct EeveeNeteaseOffsetSettingsView: View {
         refreshCurrentSongOffset()
     }
 
-    private func deleteSavedSongs(at offsets: IndexSet) {
-        for index in offsets where savedSongOffsets.indices.contains(index) {
-            NeteaseTimingOffset.clearOverride(forTrackId: savedSongOffsets[index].id)
+    /// 左滑删除：索引是**过滤后**那一列的位置，所以必须用 `visibleSavedSongs` 取 id。
+    private func deleteVisibleSongs(at offsets: IndexSet) {
+        for index in offsets where visibleSavedSongs.indices.contains(index) {
+            NeteaseTimingOffset.clearOverride(forTrackId: visibleSavedSongs[index].id)
         }
         reapplyNeteaseTimingOffset()
         refreshCurrentSongOffset()

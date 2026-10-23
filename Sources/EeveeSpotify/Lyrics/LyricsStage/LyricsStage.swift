@@ -98,8 +98,15 @@ final class LyricsStage {
     private var lines: [LyricLine] = []
     /// 行模型对应的 `currentLyricsVersion`（换歌 / 重新取词都会加）。
     private var renderedVersion = -1
-    /// 行模型**属于哪一首**（`currentLyricsDtoTrackId`），用于"切歌了、新词还没到"的判据。
-    private var renderedModelTrackId = ""
+    /// 上一次见到的**播放器实时曲目**。
+    ///
+    /// 为什么必须有它（2026-10-24 一轮编译前的自审抓出来的死锁）：切歌**不一定**伴随
+    /// 一次歌词请求（客户端缓存 / 离线歌词）⇒ `currentLyricsVersion` 不变，而"版本号变了
+    /// 才重建"是这一层唯一的重建入口 ⇒ 先 A、再 B（无请求）、再回 A 时，屏幕上就是**永久空屏**，
+    /// 而 `currentLyricsDto` 里其实还是 A 那份可以画的词。同一个坑 `AppleMusicLyricsOverlay`
+    /// 在真机日志 18 上踩过并修过（`dropForeignLineModel`），这里按同一条纪律处理：
+    /// **换歌 ⇒ 把版本号判据作废**，下一次对齐一定重新求值。
+    private var lastLiveTrackId = ""
     /// 已经渲染进去的样式（设置页当场改样式时要重建 rootView）。
     private var renderedStyle: LyricsStageStyle?
     /// 空状态那一句（还在查 / 没找到 / 纯音乐）。
@@ -112,10 +119,17 @@ final class LyricsStage {
 
     // MARK: 每帧状态
 
-    private var tickCount = 0
     private var lastPosition: TimeInterval = -1
-    /// 位置连续没变过多少拍（> 90 判暂停，见文件头「省电」）。
-    private var stalledTicks = 0
+    /// 位置连续没动过多少**秒**（≥1.5s 判暂停，见文件头「省电」）。
+    ///
+    /// ⚠️ 用墙钟而不是拍数：`AppleMusicLyricsTickView` 没有设 `preferredFrameRateRange`，
+    ///   ProMotion 上就是 120Hz ⇒ 按"90 拍"算会在 0.75s 就误判成暂停；
+    ///   "0.25s 对齐一次"同理，拍数口径在 120Hz 上会变成 8 次/秒。
+    private var stalledSeconds: TimeInterval = 0
+    /// 上一拍的时间戳。用 `ProcessInfo.systemUptime`：单调、不受系统时间调整影响。
+    private var lastTickUptime: TimeInterval = 0
+    /// 上一次"对齐状态"的时间戳（0.25s 节流）。
+    private var lastPresentationUptime: TimeInterval = 0
     private var didLogStall = false
 
     private var observers: [NSObjectProtocol] = []
@@ -137,8 +151,8 @@ final class LyricsStage {
 
         // 先把行模型、曲名歌手、样式**全都对齐一遍**再建页面：
         // 否则第一帧会闪一下"空舞台"（`force: true` 跳过版本号判据）。
+        // 空状态那一句同一次调用里也会算好，不用再单独赋一次。
         refreshPresentation(force: true, rebuild: false)
-        statusText = Self.statusTextForCurrentLyrics()
 
         let controller = LyricsStageViewController()
         controller.onDismiss = {
@@ -216,9 +230,10 @@ final class LyricsStage {
         stageController = nil
         hostingController = nil
         clock.isFollowing = true
-        stalledTicks = 0
         lastPosition = -1
-        tickCount = 0
+        stalledSeconds = 0
+        lastTickUptime = 0
+        lastPresentationUptime = 0
         didLogStall = false
 
         guard let stageWindow else {
@@ -237,13 +252,15 @@ final class LyricsStage {
     // MARK: - 每帧
 
     private func handleTick(_ seconds: TimeInterval) {
-        tickCount += 1
+        let uptime = ProcessInfo.processInfo.systemUptime
+        let delta = lastTickUptime == 0 ? 0 : max(0, uptime - lastTickUptime)
+        lastTickUptime = uptime
 
         // 位置不动 = 暂停（或这一首已经播完）：停止向 SwiftUI 提交时间，页面不再重绘。
         // ⚠️ 但仍然**每拍读一次位置** —— 那是发现"又播起来了"的唯一途径。
         if abs(seconds - lastPosition) > 0.0005 {
             lastPosition = seconds
-            stalledTicks = 0
+            stalledSeconds = 0
             if !clock.isFollowing {
                 clock.isFollowing = true
                 didLogStall = false
@@ -251,8 +268,8 @@ final class LyricsStage {
             }
             clock.submit(seconds: seconds)
         } else {
-            stalledTicks += 1
-            if stalledTicks == 90, clock.isFollowing {
+            stalledSeconds += delta
+            if stalledSeconds >= 1.5, clock.isFollowing {
                 clock.isFollowing = false
                 if !didLogStall {
                     didLogStall = true
@@ -264,9 +281,10 @@ final class LyricsStage {
             }
         }
 
-        // 约 0.25s 一次：换歌 / 新歌词 / 改样式 / 改曲名歌手。
+        // 0.25s 一次：换歌 / 新歌词 / 改样式 / 改曲名歌手。
         // 这些都不该每帧做（`toAppleMusicLyricLines()` 是整首的转换）。
-        if tickCount % 15 == 0 {
+        if uptime - lastPresentationUptime >= 0.25 {
+            lastPresentationUptime = uptime
             refreshPresentation(force: false, rebuild: true)
         }
     }
@@ -282,24 +300,47 @@ final class LyricsStage {
         var changed = false
         let version = currentLyricsVersion
 
+        // 曲名 / 歌手：从播放器实时读（与自绘壳同一口径，见 `AppleMusicLyricsOverlayHost`）。
+        // ⚠️ `EeveeSpotify.hookTarget` 是个**计算属性**：每次访问都会读 Info.plist 并 `NSLog`
+        //   一行（`Tweak.x.swift`）。这里 0.25s 就对一次齐，直接问它等于每秒往 syslog 写四行
+        //   ⇒ 版本分支只算一次（见 `Self.isLegacyHookTarget`）。
+        let track = statefulPlayer?.currentTrack() ?? nowPlayingScrollViewController?.loadedTrack
+        let liveTrackId = track?.trackIdentifier ?? ""
+
+        // 换歌 ⇒ 把"版本号"这道判据作废。
+        //
+        // 切歌不一定有新歌词请求（客户端缓存 / 离线歌词），`currentLyricsVersion` 就不变；
+        // 只靠"版本号变了才重建"会死在"先 A、再 B、再回 A"那一步（文件头 `lastLiveTrackId`
+        // 那段有完整复盘）。整份设置里**只有这里**能碰这两个判据。
+        if liveTrackId != lastLiveTrackId {
+            lastLiveTrackId = liveTrackId
+            renderedVersion = -1
+            if !lines.isEmpty {
+                lines = []
+                changed = true
+            }
+        }
+
         if force || version != renderedVersion {
             renderedVersion = version
-            renderedModelTrackId = currentLyricsDtoTrackId
-            lines = currentLyricsDto?.toAppleMusicLyricLines() ?? []
+            // 版本号被上面作废之后这里会重新跑一次 —— 所以**必须复核这份 dto 是谁的**：
+            // 不复核就会把上一首的词画在新歌下面（而且每次对齐都重建一遍、永远空不下来）。
+            let dtoBelongsToLiveTrack = currentLyricsDtoTrackId.isEmpty
+                || liveTrackId.isEmpty
+                || currentLyricsDtoTrackId == liveTrackId
+            lines = dtoBelongsToLiveTrack ? (currentLyricsDto?.toAppleMusicLyricLines() ?? []) : []
             providerName = currentLyricsProvider
             providerCredit = currentLyricsCreditText()
             statusText = Self.statusTextForCurrentLyrics()
             changed = true
             writeDebugLog(
                 "[\(Self.logTag)] line model rebuilt — \(lines.count) line(s) @v\(version)"
+                    + (dtoBelongsToLiveTrack ? "" : " (dto is another track — waiting)")
             )
         }
 
-        // 曲名 / 歌手：从播放器实时读（与自绘壳同一口径，见 `AppleMusicLyricsOverlayHost`）。
-        // `hookTarget` 那个分支是从那边逐字抄的：8.9.8 这条老路上标签类的方法名不一样。
-        let track = statefulPlayer?.currentTrack() ?? nowPlayingScrollViewController?.loadedTrack
         let title = track?.trackTitle() ?? ""
-        let artist = (EeveeSpotify.hookTarget == .lastAvailableiOS14
+        let artist = (Self.isLegacyHookTarget
             ? track?.artistTitle()
             : track?.artistName()) ?? ""
         if title != currentTrackTitle || artist != currentTrackArtist {
@@ -323,26 +364,16 @@ final class LyricsStage {
             changed = true
         }
 
-        // 行模型属于**别的**曲目（切歌了、而新歌词还没到）：先清空。
-        // 不清的话屏幕上会把上一首的歌词画在新歌下面（文档 §1 那个"壳写新歌名、
-        // 词还是上一首"的经典形态）。新词到达时版本号会变，下一次就会重建。
-        let liveTrackId = track?.trackIdentifier ?? ""
-        if !renderedModelTrackId.isEmpty,
-           !liveTrackId.isEmpty,
-           renderedModelTrackId != liveTrackId {
-            if !lines.isEmpty {
-                lines = []
-                statusText = Self.statusTextForCurrentLyrics()
-                changed = true
-                writeDebugLog(
-                    "[\(Self.logTag)] line model belongs to another track — cleared until lyrics arrive"
-                )
-            }
-        }
-
         guard changed, rebuild, let controller = hostingController else { return }
         controller.rootView = makeRootView()
     }
+
+    /// 播放器的版本分支：**只算一次**。
+    ///
+    /// ⚠️ `EeveeSpotify.hookTarget` 是计算属性，每次访问都会读 Info.plist 并 `NSLog`
+    ///   （`Tweak.x.swift:295`）。这一层每 0.25s 对齐一次，直接问它 = 每秒四行 syslog。
+    ///   8.9.8 那条老路上标签类的方法名不一样，所以这两条分支不能合并成一个调用。
+    private static let isLegacyHookTarget = EeveeSpotify.hookTarget == .lastAvailableiOS14
 
     private func makeRootView() -> LyricsStageRootView {
         LyricsStageRootView(
@@ -433,7 +464,10 @@ final class LyricsStage {
         window?.isHidden = false
         tickView?.isPaused = false
         clock.isFollowing = true
-        stalledTicks = 0
+        lastPosition = -1
+        stalledSeconds = 0
+        lastTickUptime = 0
+        lastPresentationUptime = 0
         didLogStall = false
         writeDebugLog("[\(Self.logTag)] foregrounded — window back, display link resumed")
     }

@@ -185,14 +185,19 @@ extension NowPlayingIOS27 {
         share: UIView?,
         queue: UIView?
     ) -> Bool {
-        // ⚠️ 要认**缓存**：`lyricsEntryTarget` 是节流的，被节流的那一拍返回 nil，
-        // 但上一拍已经找到的那颗还在（`lyricsEntryView`）—— 否则那颗键会每 3 秒"失灵 9 拍"、
-        // 左边那颗也会跟着一闪一闪。
-        let lyricsTarget = lyricsEntryTarget(in: page) ?? lyricsEntryView
         // ★ 2026-10-24：开了「歌词舞台」（设置 → 实验）就**不再需要**原生那颗键 ——
         //   左边这颗气泡直接开我们自己的全屏歌词窗口（`LyricsStageEntry`）。
         //   这也顺手修掉了"找不到 `ShowLyricsButton` 就变暗"那一档：舞台键不依赖它。
+        //
+        // ⚠️ 顺序很重要：舞台开着时**连找都不要去找**。`lyricsEntryTarget` 在找不到时
+        //   会做一次 ≤2000 节点的 BFS（每 ~3s 一次），而这份结果在舞台这一档**永远用不上**。
         let stageEnabled = LyricsStageEntry.isEnabled
+        // ⚠️ 要认**缓存**：`lyricsEntryTarget` 是节流的，被节流的那一拍返回 nil，
+        // 但上一拍已经找到的那颗还在（`lyricsEntryView`）—— 否则那颗键会每 3 秒"失灵 9 拍"、
+        // 左边那颗也会跟着一闪一闪。
+        let lyricsTarget: UIView? = stageEnabled
+            ? nil
+            : (lyricsEntryTarget(in: page) ?? lyricsEntryView)
         footerLyricsAvailable = stageEnabled || lyricsTarget != nil
 
         // 页面换了（或上一份的宿主没了）⇒ 先把旧字形拆干净，别留在上一页上。

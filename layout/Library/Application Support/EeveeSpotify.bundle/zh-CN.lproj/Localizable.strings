@@ -97,7 +97,7 @@ show_instagram_destination = "显示 Instagram 分享目标";
 show_instagram_destination_description = "始终把 Instagram 作为分享目标。%@";
 
 lyrics_stage = "歌词舞台";
-lyrics_stage_description = "开启后，听歌页底排左边的歌词气泡不再交给 Spotify，而是打开我们自己的全屏歌词窗口：气泡打开、下拉（或右上角箭头）关闭。需要先开启「iOS 27 听歌页」布局。";
+lyrics_stage_description = "开启后，听歌页底排左边的歌词气泡不再交给 Spotify，而是打开我们自己的全屏歌词窗口：气泡打开、下拉（或右上角箭头）关闭。需要 iOS 26 及以上，并且先开启「iOS 27 听歌页」布局。";
 lyrics_stage_style = "舞台样式";
 lyrics_stage_style_apple_music = "逐词歌词";
 lyrics_stage_style_tilt = "大字错落";

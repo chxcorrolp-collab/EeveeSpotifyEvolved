@@ -95,6 +95,11 @@ struct LyricsStageRootView: View {
                 seekToTappedLyricLine(time)
             },
             contentInsets: EdgeInsets(
+                // ⚠️ 这里传的是**一半**：`AppleMusicLyricsPage` 在 `headerContent` / `footerContent`
+                //    为 nil 时会把 top/bottom **各加两次**（见它 `scrollInsets` 的算法：
+                //    `(headerContent == nil ? contentInsets.top : …) + contentInsets.top`）
+                //    ⇒ 66 × 2 = 132、36 × 2 = 72，与外层壳 `headerBand` / `footerBand` 对齐。
+                //    那一页哪天改掉这个"加两次"，这两个值就得翻倍。
                 top: headerBand / 2,
                 leading: 26,
                 bottom: footerBand / 2,
@@ -110,6 +115,10 @@ struct LyricsStageRootView: View {
             headerContent: nil,
             footerContent: nil,
             closeContent: nil,
+            // ⚠️ 下面四个（headerHeight / headerTopInset / footerHeight / fadeBottomBand）
+            //    在**这一档里是不生效的**：没有 headerContent / footerContent 时，
+            //    `fadeMaskStops` 走 `legacyFadeStops`，只读 `fadeBottomOpaqueRatio`。
+            //    留着是为了和全屏歌词页那几个调用点的形状一致（改起来不用再背一遍标签）。
             headerHeight: 62,
             headerTopInset: -30,
             hidesShellOnScroll: false,

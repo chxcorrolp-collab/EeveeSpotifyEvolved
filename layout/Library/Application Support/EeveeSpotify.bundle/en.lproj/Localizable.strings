@@ -103,7 +103,7 @@ show_instagram_destination = "Show Instagram Destination";
 show_instagram_destination_description = "Always show the Instagram share destination. %@";
 
 lyrics_stage = "Lyrics stage";
-lyrics_stage_description = "Opens our own full-screen lyrics window instead of handing the tap to Spotify: the lyrics bubble on the left of the bottom row on the iOS 27 now-playing page opens it, and swiping down (or the chevron) closes it. Requires the iOS 27 now-playing layout.";
+lyrics_stage_description = "Opens our own full-screen lyrics window instead of handing the tap to Spotify: the lyrics bubble on the left of the bottom row on the iOS 27 now-playing page opens it, and swiping down (or the chevron) closes it. Requires iOS 26 or newer and the iOS 27 now-playing layout.";
 lyrics_stage_style = "Stage style";
 lyrics_stage_style_apple_music = "Word by word";
 lyrics_stage_style_tilt = "Big and offset";

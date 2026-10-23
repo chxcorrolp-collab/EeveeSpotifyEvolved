@@ -143,7 +143,17 @@ struct EeveeNeteaseOffsetSettingsView: View {
             }
         }
 
-        Section(header: Text("netease_offset_saved".localized)) {
+        // ⚠️ 这里必须用 `Section(header:footer:content:)`（header/footer 是 **View**、content 是
+        //    尾随闭包）—— `Section(header: X) { … } footer: { … }` 这种写法在本仓库的
+        //    SwiftUI 版本里没有对应重载，会被解析成 `init(header:footer:content:)` 而编译失败
+        //    （2026-10-23 实测：「incorrect argument label … have 'header:_:footer:'」）。
+        Section(
+            header: Text("netease_offset_saved".localized),
+            footer: VStack(alignment: .leading, spacing: 4) {
+                Text("netease_offset_saved_count".localizeWithFormat(savedSongOffsets.count))
+                Text("netease_offset_saved_description".localized)
+            }
+        ) {
             if savedSongOffsets.isEmpty {
                 Text(currentSongHasOverride
                      ? "netease_offset_saved_only_current".localized
@@ -191,11 +201,6 @@ struct EeveeNeteaseOffsetSettingsView: View {
                     refreshCurrentSongOffset()
                 }
                 .foregroundColor(.red)
-            }
-        } footer: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("netease_offset_saved_count".localizeWithFormat(savedSongOffsets.count))
-                Text("netease_offset_saved_description".localized)
             }
         }
     }

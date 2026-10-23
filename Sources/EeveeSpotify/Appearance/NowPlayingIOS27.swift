@@ -190,17 +190,31 @@ enum NowPlayingIOS27 {
     static var lastFieldImage: UIImage?
 
     static var didLogArtwork = false
+    static var didLogArtworkFrame = false
     static var didLogField = false
     static var didLogTitle = false
     static var didLogFrames = false
     static var didLogMissingCover = false
     static var didLogRestore = false
+    /// 连续多少拍"记下的那一页不在窗口里"（见 `reconcile` 里那段：换歌转场会短暂摘掉旧页，
+    /// 立刻收尾就等于把原生封面放回来 = 用户看到的那一闪）。
+    static var pageMissingTicks = 0
 
     // MARK: - 对外入口
 
     /// 进听歌页时叫一次（蹭既有的两个 appear 点）。
     static func apply(in page: UIView) {
+        // ⚠️ 别用一个**已经离开窗口**的页面覆盖记下来的好页面。
+        //
+        // 2026-10-24（用户：「切歌还是会闪一下原生大封面」）：日志 3 里
+        // `restored (page disappeared)` 一分钟出现 6 次，而 `[PLAYER] track changed` 只有 4 次 ——
+        // 也就是说 `reconcile` 反复把状态收掉、下一次 `apply` 又重装，那一两拍原生封面就露着。
+        // 换歌转场里旧页会被摘下来，这时若还用它覆盖 `lastPage` 就白白多一轮收尾/重建。
+        if page.window == nil, let live = lastPage, live.window != nil {
+            return
+        }
         lastPage = page
+        pageMissingTicks = 0
 
         guard isEnabled else {
             restore(reason: "switch off")
@@ -230,7 +244,18 @@ enum NowPlayingIOS27 {
         // 页面真的不在窗口里了 ⇒ 把写过的每一处还回去（cell 会被复用）。
         // ⚠️ 这一步**不能**放在 `isEnabled` 后面：用户可能"先离开播放器、再在设置里关掉"。
         if let page = lastPage, page.window == nil {
-            restore(reason: "page disappeared")
+            // ★ 2026-10-24（用户：「切歌还是会闪一下原生大封面」）：**别立刻收尾**。
+            //
+            // 换歌 / 转场里旧的那一页会被短暂摘出窗口；`restore()` 会把原生封面、原生行、
+            // 我们的字形统统放回去 —— 下一拍 `apply` 又重装，那一两拍就是用户看到的那一闪。
+            // 这里先数拍：连续 3 拍（≈0.9s，`DeclutterChrome` 是 0.3s 一拍）都还是"页面不在"，
+            // 才认为真的离开了播放器，那时再收尾（回收的 cell 不能留着 alpha = 0）。
+            pageMissingTicks += 1
+            if pageMissingTicks >= 3 {
+                restore(reason: "page disappeared")
+            }
+        } else {
+            pageMissingTicks = 0
         }
         guard isEnabled else { return false }
         guard let page = lastPage, page.window != nil else { return false }
@@ -467,6 +492,17 @@ enum NowPlayingIOS27 {
             imageView.frame = wanted
             changed = true
         }
+        // 一次性诊断：封面到底被放在哪、宿主多大。
+        // （用户报“有的歌铺开程度不对”时，看这一行就知道是宿主坐标还是帧子算错了。）
+        if !didLogArtworkFrame {
+            didLogArtworkFrame = true
+            writeDebugLog(
+                "[\(logTag)] artwork frame — \(Int(wanted.minX)),\(Int(wanted.minY))"
+                    + " \(Int(wanted.width))×\(Int(wanted.height))"
+                    + " · host \(Int(host.bounds.width))×\(Int(host.bounds.height))"
+                    + " · page \(Int(page.bounds.width))×\(Int(page.bounds.height))"
+            )
+        }
         if applyArtworkFadeMask(to: imageView) { changed = true }
         if updateTopScrim(in: host, page: page) { changed = true }
         // 我们的封面在原生那张**上面**（同一个 cell 里），原生那张必须按下去。
@@ -578,10 +614,16 @@ enum NowPlayingIOS27 {
         guard let shell = artworkShell,
               let host = fullPageAncestor(of: shell, in: page) else { return false }
 
+        // ★ 2026-10-24（用户：「有的歌封面好像超出边界、有的像被往下拉了」）：
+        //   wrapper 之前用的是 `page.bounds`——那是**页面坐标**，而它被加到 `host`（cell）里；
+        //   host 的原点不一定在页面原点（换歌转场 / 非页面高的 cell 时会偏）
+        //   ⇒ 带着彩色底与渐变线一起错位，看起来就是“封面被往下拉”。现在一律换成
+        //   `host.convert(page.bounds, from: page)`（封面本来就是这么算的，只有底层漏了）。
+        let fieldFrame = host.convert(page.bounds, from: page)
         if let existing = fieldHost, existing.superview === host {
             var changed = false
-            if existing.frame != page.bounds {
-                existing.frame = page.bounds
+            if existing.frame != fieldFrame {
+                existing.frame = fieldFrame
                 changed = true
             }
             if updateField(in: page) { changed = true }
@@ -595,11 +637,11 @@ enum NowPlayingIOS27 {
         // 新建出来的那层就停在 `solid = .black`、糊底没有图）。
         lastFieldImage = nil
 
-        let wrapper = UIView(frame: page.bounds)
+        let wrapper = UIView(frame: fieldFrame)
         wrapper.isUserInteractionEnabled = false
         wrapper.accessibilityIdentifier = "eevee-ios27-field"
 
-        let solid = UIView(frame: page.bounds)
+        let solid = UIView(frame: wrapper.bounds)
         solid.isUserInteractionEnabled = false
         solid.backgroundColor = .black
         wrapper.addSubview(solid)
@@ -611,14 +653,14 @@ enum NowPlayingIOS27 {
         //   它只是"颜色的延续"，没有可辨认的细节，所以不会糊成脏块。
         //   层级：solid（字段色，兜底）→ backdrop（模糊封面，aspectFill）→ black（渐变纱）
         //   → 我们那张锐利封面（在 wrapper 之上）。
-        let backdrop = UIImageView(frame: page.bounds)
+        let backdrop = UIImageView(frame: wrapper.bounds)
         backdrop.isUserInteractionEnabled = false
         backdrop.contentMode = .scaleAspectFill
         backdrop.clipsToBounds = true
         backdrop.accessibilityIdentifier = "eevee-ios27-field-backdrop"
         wrapper.addSubview(backdrop)
 
-        let black = UIView(frame: page.bounds)
+        let black = UIView(frame: wrapper.bounds)
         black.isUserInteractionEnabled = false
         black.accessibilityIdentifier = "eevee-ios27-black"
         let blackGradient = CAGradientLayer()
@@ -1051,6 +1093,7 @@ enum NowPlayingIOS27 {
         hiddenChrome.removeAllObjects()
         chromeAlphas.removeAll()
         didLogArtwork = false
+        didLogArtworkFrame = false
         didLogField = false
         didLogTitle = false
         didLogFrames = false

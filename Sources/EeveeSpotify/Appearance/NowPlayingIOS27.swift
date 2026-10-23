@@ -88,10 +88,29 @@ enum NowPlayingIOS27 {
     static let hiddenShells = NSHashTable<UIView>.weakObjects()
     static var shellAlphas: [ObjectIdentifier: CGFloat] = [:]
 
+    /// 被我们藏掉的顶部 chrome（歌单名 / 向下箭头）—— 同一套"记原值 + 每拍补"的做法。
+    static let hiddenChrome = NSHashTable<UIView>.weakObjects()
+    static var chromeAlphas: [ObjectIdentifier: CGFloat] = [:]
+    /// 我们自己画的那根小横条。
+    static weak var grabber: UIView?
+
     /// 我们那层"模糊带 + 渐变"（挂在同一个整页 cell 的最底层）。
     static weak var bandHost: UIView?
     static weak var bandImage: UIImageView?
     static weak var scrim: UIView?
+
+    /// 顶部导航那三件的 id（真机树：`108.log:1735-1736`）。
+    ///
+    ///   · `now-playing-minimize-button` —— 左上那颗向下箭头（48×48，`Tertiary`）；
+    ///   · `now-playing-navigation-unit-title-label` —— 中间那个歌单名（30×48 的 stack）；
+    ///   · `Context menu` —— 右上那个 ⋯（48×48，`Tertiary`）。
+    ///
+    /// AM 的播放页顶部**只有一根小横条**（下拉把手）⇒ 前两件藏起来；⋯ 要搬到标题行
+    /// 右边（紧挨 ☆）—— 那一步等 `[iOS27] frames` 给出 ☆ 的真实坐标再做（见文件头 v2 清单）。
+    static let navTitleIdentifier = "now-playing-navigation-unit-title-label"
+    static let contextMenuIdentifier = "Context menu"
+    /// 我们自己画的那根小横条。
+    static let grabberIdentifier = "eevee-ios27-grabber"
 
     /// 底部那一坨（`npv.bottomStackView`）与它的工具行（footer）。
     ///
@@ -189,6 +208,7 @@ enum NowPlayingIOS27 {
         artworkShell = shell
 
         var changed = updateArtwork(shell, in: page)
+        if placeNavChrome(in: page) { changed = true }
         if placeBottomBlock(in: page) { changed = true }
         if placeTitleRow(in: page) { changed = true }
         if mountBand(in: page) { changed = true }
@@ -265,6 +285,60 @@ enum NowPlayingIOS27 {
         // 我们的封面在原生那张**上面**（同一个 cell 里），原生那张必须按下去。
         hideShell(shell)
         return changed
+    }
+
+    /// 顶部：藏掉 Spotify 的歌单名与向下箭头，画一根 AM 那种小横条。
+    ///
+    /// 为什么不画一个"假关闭键"：AM 那根横条**本来就不是按钮**，是下拉把手的视觉提示；
+    /// 这一页的下拉关闭挂在列表自己的 pan recogniser 上，藏了箭头照样能划掉
+    /// （`NowPlayingOneScreen` 的文件头把这条链记过一遍）。
+    @discardableResult
+    private static func placeNavChrome(in page: UIView) -> Bool {
+        var changed = false
+        for identifier in [NowPlayingLyricsPlate.minimizeButtonIdentifier, navTitleIdentifier] {
+            guard let view = NowPlayingLyricsPlate.findByIdentifier(identifier, in: page) else {
+                continue
+            }
+            if hideChrome(view) { changed = true }
+        }
+
+        let width: CGFloat = 44
+        let height: CGFloat = 5
+        let frame = CGRect(
+            x: (page.bounds.width - width) / 2,
+            y: max(8, page.safeAreaInsets.top + 4),
+            width: width,
+            height: height
+        )
+        if let existing = grabber, existing.superview === page {
+            if existing.frame != frame {
+                existing.frame = frame
+                changed = true
+            }
+        } else {
+            let view = UIView(frame: frame)
+            view.backgroundColor = UIColor.white.withAlphaComponent(0.45)
+            view.layer.cornerRadius = height / 2
+            view.isUserInteractionEnabled = false
+            view.accessibilityIdentifier = grabberIdentifier
+            page.addSubview(view)
+            page.bringSubviewToFront(view)
+            grabber = view
+            changed = true
+        }
+        return changed
+    }
+
+    /// 按下去（记原值；每拍补一次 —— Spotify 会自己写回来）。
+    private static func hideChrome(_ view: UIView) -> Bool {
+        let key = ObjectIdentifier(view)
+        if chromeAlphas[key] == nil {
+            chromeAlphas[key] = view.alpha > 0.01 ? view.alpha : 1
+            hiddenChrome.add(view)
+        }
+        guard view.alpha != 0 else { return false }
+        view.alpha = 0
+        return true
     }
 
     /// 把底部那一坨往上抬、工具行留在原地（见 `bottomStack` 那段注释）。
@@ -518,7 +592,8 @@ enum NowPlayingIOS27 {
     /// 关开关 / 离开页面：把写过的每一处写回去，拆掉我们自己的视图。
     static func restore(reason: String) {
         let hadState = bandHost != nil || artworkView != nil || titleRowBase != nil
-            || bottomStackBase != nil || footerRelay != nil || !shellAlphas.isEmpty
+            || bottomStackBase != nil || footerRelay != nil || grabber != nil
+            || !shellAlphas.isEmpty || !chromeAlphas.isEmpty
         if didLogRestore || !hadState {
             clearState()
             return
@@ -530,6 +605,9 @@ enum NowPlayingIOS27 {
            recorded.0 == ObjectIdentifier(row), row.transform != recorded.1 {
             row.transform = recorded.1
         }
+        revealChrome()
+        grabber?.removeFromSuperview()
+        grabber = nil
         teardownBottomBlock()
         teardownBand()
         teardownArtwork()
@@ -550,14 +628,25 @@ enum NowPlayingIOS27 {
         footerRow = nil
         footerBase = nil
         footerRelay = nil
+        grabber = nil
         hiddenShells.removeAllObjects()
         shellAlphas.removeAll()
+        hiddenChrome.removeAllObjects()
+        chromeAlphas.removeAll()
         lastTrackId = ""
         didLogArtwork = false
         didLogTitle = false
         didLogBand = false
         didLogFrames = false
         didLogRestore = false
+    }
+
+    /// 顶部 chrome 的 `alpha` 写回原值。
+    private static func revealChrome() {
+        for view in hiddenChrome.allObjects {
+            guard let original = chromeAlphas[ObjectIdentifier(view)] else { continue }
+            if view.alpha != original { view.alpha = original }
+        }
     }
 
     private static func teardownBottomBlock() {
@@ -662,6 +751,8 @@ enum NowPlayingIOS27 {
             text("Components.UI.AddToButton"),
             text(NowPlayingLyricsPlate.bottomStackIdentifier),
             text(NowPlayingLyricsPlate.minimizeButtonIdentifier),
+            text(navTitleIdentifier),
+            text(contextMenuIdentifier),
         ]
         if let row = titleRow {
             let rect = NowPlayingLyricsPlate.untransformed(row, in: page)

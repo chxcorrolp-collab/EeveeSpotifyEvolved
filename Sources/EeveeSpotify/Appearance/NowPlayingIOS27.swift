@@ -131,6 +131,12 @@ enum NowPlayingIOS27 {
     static weak var artworkHost: UIView?
     static weak var artworkView: UIImageView?
     static weak var artworkMask: CAGradientLayer?
+    /// 上一次画上去的封面图（**跨换歌 / 跨 cell 复用都留着**）。
+    ///
+    /// 2026-10-24（用户：切歌会闪过原生大封面）：旧布局 `NowPlayingLyricsPlate+Cover`
+    /// 就是用"自己缓存上一次那张图、新图没到先顶着"解决的。这里同名同法；
+    /// 只有 `restore` / `clearState` 会清掉它（不能放进 `teardownArtwork` —— 那个是换 cell 时调的）。
+    static var lastArtworkImage: UIImage?
     /// 被我们按下 `alpha` 的原生壳（记原值，收尾按原值写回）。
     static let hiddenShells = NSHashTable<UIView>.weakObjects()
     static var shellAlphas: [ObjectIdentifier: CGFloat] = [:]
@@ -219,6 +225,12 @@ enum NowPlayingIOS27 {
         guard tilt.bounds.width >= 200, tilt.isDescendant(of: page) else { return }
         guard isOnScreen(tilt, in: page) else { return }
         guard let shell = shell(in: tilt) else { return }
+        // ★ 2026-10-24（切歌闪过原生大封面）：这个钩子比 0.3s 那拍**早** —— 新封面刚布局完
+        //   就轮到我们藏它。只要我们自己已经有一张（哪怕还是上一首那张），就先按下去，
+        //   别等 `updateArtwork`（它可能因为"新图还没到"而选择不画）。
+        if artworkView != nil || lastArtworkImage != nil {
+            hideShell(shell)
+        }
         _ = updateArtwork(shell, in: page)
         _ = updateField(in: page)
     }
@@ -228,6 +240,13 @@ enum NowPlayingIOS27 {
     @discardableResult
     private static func layout(in page: UIView) -> Bool {
         guard let shell = resolvedShell(in: page) else {
+            // ★ 2026-10-24（切歌闪过原生大封面）：这一拍没认出"要画的那张"，但原生封面
+            //   可能正露着（换歌转场里 `visibleCover` 会把它筛掉）。只要我们自己已经有一张，
+            //   就按 id 兜底找一次、按下去 —— 宁可这一拍是底色，也不闪一张别人的大封面。
+            if artworkView != nil || lastArtworkImage != nil,
+               let fallback = fallbackCoverShell(in: page) {
+                hideShell(fallback)
+            }
             if !didLogMissingCover {
                 didLogMissingCover = true
                 writeDebugLog("[\(logTag)] no on-screen artwork yet — nothing to draw this tick")
@@ -274,6 +293,34 @@ enum NowPlayingIOS27 {
         return changed
     }
 
+    /// 兜底找原生封面壳：**不要求"在屏中间"、也不看 alpha**。
+    ///
+    /// 换歌转场里，新封面恰好是这两个判据都会把它筛掉的时刻（`visibleCover` 认 `alpha > 0.01`，
+    /// 而 Spotify 的新封面对象先以 `alpha = 0` 出现）。这里只认 id + 尺寸够大。
+    private static func fallbackCoverShell(in page: UIView) -> UIView? {
+        var roots: [UIView] = [page]
+        if let list = NowPlayingLyricsPlate.findByIdentifier(
+            NowPlayingLyricsPlate.listIdentifier, in: page
+        ) {
+            roots.append(list)
+        }
+        for root in roots {
+            var queue: [UIView] = [root]
+            var visited = 0
+            while !queue.isEmpty, visited < 2000 {
+                let view = queue.removeFirst()
+                visited += 1
+                queue.append(contentsOf: view.subviews)
+                guard view.accessibilityIdentifier == NowPlayingLyricsPlate.coverImageIdentifier
+                else { continue }
+                let rect = view.convert(view.bounds, to: page)
+                guard rect.width >= 200, rect.height >= 200 else { continue }
+                return view
+            }
+        }
+        return nil
+    }
+
     /// 这一拍该用哪张封面。
     ///
     /// 1. **先认自己画过的那张**：我们把原生壳 `alpha = 0` 之后，`visibleCover` 的判据
@@ -314,17 +361,20 @@ enum NowPlayingIOS27 {
         //   而从艺人页 / 专辑页进来时，转场那一两拍封面格里可能还是**那个页面的头图** ⇒
         //   它会把那张图当成"这一首的封面"存进缓存，之后整个会话都用错图。
         //   现在：当前壳里没图就**等**（旧图继续顶着），不去缓存里拿"可能是别人的那张"。
+        //
+        // ★★ 2026-10-24（用户：「切歌的时候会闪过 Spotify 原生大封面」）：
+        //   旧布局（`NowPlayingLyricsPlate+Cover`）早就解决过同一件事，做法是**把自己那张图缓存起来**：
+        //   换歌的一两秒里 Spotify 的新封面对象还没有图 ⇒ 继续铺上一次那张（同图不同曲也看不出来），
+        //   新图一到就原地替换。这里照抄这个思路，只是缓存放在 `lastArtworkImage`（跨 cell 复用也拿得到）。
         var image: UIImage? = NowPlayingLyricsPlate.firstImage(in: shell)
         if image == nil {
+            image = lastArtworkImage
+        }
+        if image == nil {
             if trackChanged {
-                // ★ 第五轮（照片 2：切歌闪过原生大封面）：
-                //   **换歌时不要把自己那张收起来** —— 旧图继续顶着，
-                //   新图一到就原地替换；只有"这一次进来还没有任何图"才让原生露出来。
-                if artworkView != nil {
-                    hideShell(shell)
-                } else {
-                    revealShells()
-                }
+                // 连上次那张都没有（这次是**第一次**进页面）：让原生封面先露着 ——
+                // 没有东西可铺的时候藏起来只会得到一块黑。
+                revealShells()
                 return false
             }
             // 刚进页面的头几拍：允许缓存兜底（那时还没有"上一首"的问题）。
@@ -332,7 +382,12 @@ enum NowPlayingIOS27 {
         }
 
         guard let image, let host = fullPageAncestor(of: shell, in: page) else {
-            revealShells()
+            // 有图但量不到宿主：**别把原生封面放出来**（那正是"闪一下"），先等下一拍。
+            if artworkView != nil || lastArtworkImage != nil {
+                hideShell(shell)
+            } else {
+                revealShells()
+            }
             if let view = artworkView { view.isHidden = true }
             return false
         }
@@ -361,6 +416,8 @@ enum NowPlayingIOS27 {
         }
         if trackId != lastTrackId || imageView.image !== image {
             imageView.image = image
+            // 缓存"上一次画上去的那张"：换歌时新图没到，就靠它顶着（见上面 `lastArtworkImage` 的说明）。
+            lastArtworkImage = image
             lastTrackId = trackId
             changed = true
             if !didLogArtwork {
@@ -882,6 +939,7 @@ enum NowPlayingIOS27 {
         artworkHost = nil
         artworkView = nil
         artworkMask = nil
+        lastArtworkImage = nil
         titleRow = nil
         titleRowBase = nil
         titleRowBaseRect = nil

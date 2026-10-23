@@ -94,6 +94,15 @@ enum NowPlayingIOS27 {
     /// 我们自己画的那根小横条。
     static weak var grabber: UIView?
 
+    /// 被搬到工具行正中间的 ⋯（`Context menu`）+ 它的触摸替身。
+    static weak var menuView: UIView?
+    static var menuBase: (ObjectIdentifier, CGAffineTransform)?
+    static weak var menuRelay: NowPlayingTitleRelayView?
+    /// 为了把 ⋯ 搬出导航条而放开裁剪的那几层（记原值，收尾写回）。
+    static let unclippedViews = NSHashTable<UIView>.weakObjects()
+    static var unclippedOriginals: [ObjectIdentifier: Bool] = [:]
+    static var didLogMenu = false
+
     /// 我们那层"模糊带 + 渐变"（挂在同一个整页 cell 的最底层）。
     static weak var bandHost: UIView?
     static weak var bandImage: UIImageView?
@@ -208,8 +217,9 @@ enum NowPlayingIOS27 {
         artworkShell = shell
 
         var changed = updateArtwork(shell, in: page)
-        if placeNavChrome(in: page) { changed = true }
+        // 顺序：先摆底部那一坨（⋯ 要落到工具行正中间，得先有它的坐标），再摆顶部。
         if placeBottomBlock(in: page) { changed = true }
+        if placeNavChrome(in: page) { changed = true }
         if placeTitleRow(in: page) { changed = true }
         if mountBand(in: page) { changed = true }
         if !didLogFrames {
@@ -310,6 +320,7 @@ enum NowPlayingIOS27 {
             width: width,
             height: height
         )
+        if placeContextMenu(in: page) { changed = true }
         if let existing = grabber, existing.superview === page {
             if existing.frame != frame {
                 existing.frame = frame
@@ -327,6 +338,100 @@ enum NowPlayingIOS27 {
             changed = true
         }
         return changed
+    }
+
+    /// 把 ⋯（`Context menu`）搬到**工具行正中间** —— 也就是 AM 那颗雷达标的落点。
+    ///
+    /// 为什么不是搬到标题行右侧跟 ☆ 排：那个位置要先知道 ☆ 的真实坐标、还要把标题行收窄，
+    /// 而工具行正中间天然空着（原生 footer 只有左/右几颗），一眼就是个"功能位"。
+    ///
+    /// 风险与做法：
+    ///   · 它现在住在导航条里，往下搬 700+pt ⇒ 链上只要有 `clipsToBounds` 就会被切掉，
+    ///     所以先把链上的裁剪**放开**（记原值、收尾写回）；
+    ///   · 移出原来的 superview 之后命中测试够不到它 ⇒ 用 `NowPlayingTitleRelayView` 转发
+    ///     （与工具行那一颗同一个套路）。
+    @discardableResult
+    private static func placeContextMenu(in page: UIView) -> Bool {
+        guard let menu = NowPlayingLyricsPlate.findByIdentifier(contextMenuIdentifier, in: page) else {
+            return false
+        }
+        guard let footer = footerRow, footer.window != nil else { return false }
+
+        let footerFrame = footer.convert(footer.bounds, to: page)
+        let target = CGPoint(x: page.bounds.width / 2, y: footerFrame.midY)
+        let current = menu.convert(menu.bounds, to: page)
+        let dx = (target.x - current.midX).rounded()
+        let dy = (target.y - current.midY).rounded()
+
+        menuView = menu
+        let key = ObjectIdentifier(menu)
+        let base: CGAffineTransform
+        if let recorded = menuBase, recorded.0 == key {
+            base = recorded.1
+        } else {
+            base = menu.transform
+            menuBase = (key, base)
+            openClips(from: menu, upTo: page)
+        }
+        let wanted = base.concatenating(CGAffineTransform(translationX: dx, y: dy))
+        var changed = false
+        if menu.transform != wanted {
+            menu.transform = wanted
+            changed = true
+        }
+
+        let relay: NowPlayingTitleRelayView
+        if let existing = menuRelay, existing.superview === page {
+            relay = existing
+        } else {
+            menuRelay?.removeFromSuperview()
+            let view = NowPlayingTitleRelayView(frame: page.bounds)
+            view.backgroundColor = .clear
+            view.accessibilityIdentifier = "eevee-ios27-menu-relay"
+            page.addSubview(view)
+            page.bringSubviewToFront(view)
+            menuRelay = view
+            relay = view
+            changed = true
+        }
+        relay.row = menu
+        if relay.frame != page.bounds { relay.frame = page.bounds; changed = true }
+
+        if !didLogMenu {
+            didLogMenu = true
+            writeDebugLog(
+                "[\(logTag)] context menu moved to the footer centre — "
+                    + "\(Int(dx)),\(Int(dy)) (AM's radar slot); tap relay armed"
+            )
+        }
+        return changed
+    }
+
+    /// 放开从 `view` 到 `page` 之间的裁剪（记原值；收尾 `restoreClips()` 写回）。
+    private static func openClips(from view: UIView, upTo page: UIView) {
+        var current = view.superview
+        var visited = 0
+        while let candidate = current, candidate !== page, visited < 8 {
+            visited += 1
+            if candidate.clipsToBounds {
+                let key = ObjectIdentifier(candidate)
+                if unclippedOriginals[key] == nil {
+                    unclippedOriginals[key] = true
+                    unclippedViews.add(candidate)
+                }
+                candidate.clipsToBounds = false
+            }
+            current = candidate.superview
+        }
+    }
+
+    private static func restoreClips() {
+        for view in unclippedViews.allObjects {
+            guard let original = unclippedOriginals[ObjectIdentifier(view)] else { continue }
+            if view.clipsToBounds != original { view.clipsToBounds = original }
+        }
+        unclippedViews.removeAllObjects()
+        unclippedOriginals.removeAll()
     }
 
     /// 按下去（记原值；每拍补一次 —— Spotify 会自己写回来）。
@@ -593,6 +698,7 @@ enum NowPlayingIOS27 {
     static func restore(reason: String) {
         let hadState = bandHost != nil || artworkView != nil || titleRowBase != nil
             || bottomStackBase != nil || footerRelay != nil || grabber != nil
+            || menuBase != nil || menuRelay != nil || !unclippedOriginals.isEmpty
             || !shellAlphas.isEmpty || !chromeAlphas.isEmpty
         if didLogRestore || !hadState {
             clearState()
@@ -606,6 +712,7 @@ enum NowPlayingIOS27 {
             row.transform = recorded.1
         }
         revealChrome()
+        teardownContextMenu()
         grabber?.removeFromSuperview()
         grabber = nil
         teardownBottomBlock()
@@ -629,6 +736,9 @@ enum NowPlayingIOS27 {
         footerBase = nil
         footerRelay = nil
         grabber = nil
+        menuView = nil
+        menuBase = nil
+        menuRelay = nil
         hiddenShells.removeAllObjects()
         shellAlphas.removeAll()
         hiddenChrome.removeAllObjects()
@@ -639,6 +749,17 @@ enum NowPlayingIOS27 {
         didLogBand = false
         didLogFrames = false
         didLogRestore = false
+    }
+
+    /// ⋯ 的位移撤销 + 裁剪写回 + 替身摘掉。
+    private static func teardownContextMenu() {
+        if let view = menuView, let recorded = menuBase,
+           recorded.0 == ObjectIdentifier(view), view.transform != recorded.1 {
+            view.transform = recorded.1
+        }
+        menuRelay?.removeFromSuperview()
+        menuRelay = nil
+        restoreClips()
     }
 
     /// 顶部 chrome 的 `alpha` 写回原值。

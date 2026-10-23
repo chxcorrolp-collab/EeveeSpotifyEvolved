@@ -81,6 +81,16 @@ enum NowPlayingIOS27 {
     static let artworkHeightRatio: CGFloat = 0.58
     /// 封面高宽比上限：方图裁成竖图最多裁到 1.30；再大会把封面两边裁掉太多。
     static let artworkMaxAspect: CGFloat = 1.30
+    /// 顶部压暗带：**封面仍然满血到顶**，只在状态栏/灵动岛那一带再压一层黑。
+    ///
+    /// ★ 2026-10-24（用户：「封面直接顶到头，但刘海屏会挡住，保持现状？下移一点再做渐变？」）：
+    ///   照 AM（`C:\dsh\am\1.jpg`）**不下移** —— 那张图封面也是顶到屏幕最上沿的，
+    ///   在灵动岛下面继续铺。移下来反而会在最上面留一条黑边、破坏沉浸感。
+    ///   要解决的是"亮度"：浅色封面（照片 2 那张黄字红底）会让状态栏时间和下拉把手糊掉，
+    ///   所以在最上层再叠一层"上重下无"的黑色渐变，只压这一带、不碰封面构图。
+    ///   高度 = 安全区顶 + 64（刘海/灵动岛 + 把手 + 状态栏文字），下限 96。
+    static let topScrimExtraHeight: CGFloat = 64
+    static let topScrimMinHeight: CGFloat = 96
     /// 底部那一坨（`npv.bottomStackView`：曲名 / 进度 / 时间 / 传输行 / 工具行）整体上移多少。
     ///
     /// ★ 2026-10-24（用户：「`C:\dsh\am` 里不是有图片 1 么，这个先做得像吧起码」）：
@@ -124,6 +134,10 @@ enum NowPlayingIOS27 {
     /// 被我们按下 `alpha` 的原生壳（记原值，收尾按原值写回）。
     static let hiddenShells = NSHashTable<UIView>.weakObjects()
     static var shellAlphas: [ObjectIdentifier: CGFloat] = [:]
+
+    /// 顶部压暗带（盖在封面之上、状态栏那一带；见 `topScrimExtraHeight`）。
+    static weak var topScrim: UIView?
+    static var didLogTopScrim = false
 
     /// 被我们藏掉的顶部 chrome（歌单名 / 向下箭头）。
     static let hiddenChrome = NSHashTable<UIView>.weakObjects()
@@ -379,8 +393,69 @@ enum NowPlayingIOS27 {
             changed = true
         }
         if applyArtworkFadeMask(to: imageView) { changed = true }
+        if updateTopScrim(in: host, page: page) { changed = true }
         // 我们的封面在原生那张**上面**（同一个 cell 里），原生那张必须按下去。
         hideShell(shell)
+        return changed
+    }
+
+    /// 状态栏那一带的压暗（封面**不下移**，只压亮度；见 `topScrimExtraHeight`）。
+    ///
+    /// 盖在封面之上、同一个 cell 里：0…(safeArea.top + 64)，黑 0.34 → 0.12 → 透明。
+    /// 曲名在 545、离这一带很远，所以不会把标题压暗。
+    @discardableResult
+    private static func updateTopScrim(in host: UIView, page: UIView) -> Bool {
+        let height = max(page.safeAreaInsets.top + topScrimExtraHeight, topScrimMinHeight)
+        let frame = host.convert(
+            CGRect(x: 0, y: 0, width: page.bounds.width, height: height),
+            from: page
+        )
+
+        var changed = false
+        let scrim: UIView
+        if let existing = topScrim, existing.superview === host {
+            scrim = existing
+        } else {
+            teardownTopScrim()
+            let fresh = UIView(frame: frame)
+            fresh.isUserInteractionEnabled = false
+            fresh.accessibilityIdentifier = "eevee-ios27-top-scrim"
+            let gradient = CAGradientLayer()
+            gradient.name = "eevee-ios27-top-scrim-gradient"
+            gradient.colors = [
+                UIColor.black.withAlphaComponent(0.34).cgColor,
+                UIColor.black.withAlphaComponent(0.12).cgColor,
+                UIColor.clear.cgColor,
+            ]
+            gradient.locations = [0, 0.55, 1]
+            gradient.startPoint = CGPoint(x: 0.5, y: 0)
+            gradient.endPoint = CGPoint(x: 0.5, y: 1)
+            fresh.layer.addSublayer(gradient)
+            if let art = artworkView, art.superview === host {
+                host.insertSubview(fresh, aboveSubview: art)
+            } else {
+                host.addSubview(fresh)
+            }
+            topScrim = fresh
+            scrim = fresh
+            changed = true
+        }
+        if scrim.frame != frame {
+            scrim.frame = frame
+            changed = true
+        }
+        if let gradient = scrim.layer.sublayers?.first as? CAGradientLayer,
+           gradient.frame != scrim.bounds {
+            gradient.frame = scrim.bounds
+            changed = true
+        }
+        if !didLogTopScrim {
+            didLogTopScrim = true
+            writeDebugLog(
+                "[\(logTag)] top scrim — 0…\(Int(height))pt, black 0.34 → 0.12 → clear"
+                    + " (the artwork still runs full-bleed under the island)"
+            )
+        }
         return changed
     }
 
@@ -813,6 +888,8 @@ enum NowPlayingIOS27 {
         bottomStack = nil
         bottomStackBase = nil
         didLogBottomStack = false
+        topScrim = nil
+        didLogTopScrim = false
         grabber = nil
         fieldHost = nil
         fieldSolid = nil
@@ -850,11 +927,17 @@ enum NowPlayingIOS27 {
     }
 
     private static func teardownArtwork() {
+        teardownTopScrim()
         artworkView?.layer.mask = nil
         artworkView?.removeFromSuperview()
         artworkView = nil
         artworkHost = nil
         artworkMask = nil
+    }
+
+    private static func teardownTopScrim() {
+        topScrim?.removeFromSuperview()
+        topScrim = nil
     }
 
     // MARK: - 小工具

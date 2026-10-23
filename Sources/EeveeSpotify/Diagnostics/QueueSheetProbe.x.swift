@@ -10,6 +10,11 @@
 //   · 底部那三颗（随机播放 / 循环播放 / 定时器）挂在哪个容器上、有没有 id；
 //   · 列表是 UITableView 还是 collection view、cell 的类名。
 //
+// ⚠️ 2026-10-24（日志 13）：上一版把类名写成“…Impl18QueueViewController”，而 9.1.88 的
+//   真实名字是 **19**（`_TtC14Queue_ViewImpl19QueueViewController`，19 = "QueueViewController"
+//   的长度）⇒ 每次都打一行 `[QueueProbe] missing … — no queue tree this build`，
+//   队列卡片因此**从来没被转储过**。已修正。
+//
 // 这个文件**只做一件事**：把 `Queue_ViewImpl.QueueViewController` 的 view 登记给
 // `ViewTreeDumper`（与听歌页 `NPVScrollViewControllerHook` 用同一条路）。于是——
 //   · 「调试 → 转储视图树」打开时，**弹开队列卡片**就会在日志里出现一份 `[NPVTree]` 的队列页树
@@ -28,7 +33,7 @@ struct QueueSheetProbeGroup: HookGroup {}
 
 class QueueViewControllerProbeHook: ClassHook<UIViewController> {
     typealias Group = QueueSheetProbeGroup
-    static let targetName = "_TtC14Queue_ViewImpl18QueueViewController"
+    static let targetName = "_TtC14Queue_ViewImpl19QueueViewController"
 
     func viewDidAppear(_ animated: Bool) {
         orig.viewDidAppear(animated)

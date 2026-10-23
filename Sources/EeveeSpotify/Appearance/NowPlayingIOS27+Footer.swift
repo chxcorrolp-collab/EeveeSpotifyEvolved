@@ -52,8 +52,16 @@ extension NowPlayingIOS27 {
     static let connectButtonIdentifier = "Components.ConnectButtonOutputSwitcher"
     /// Spotify 的歌词卡片（日志 8 的 `[Tree]`：`CardView@0,0,374,320,id=lyrics-card-view`）。
     static let lyricsCardIdentifier = "lyrics-card-view"
-    /// 卡片里那颗"打开全屏歌词"的键（dump：`Lyrics_CardElementImpl.ShowLyricsButtonElementUI`）。
+    /// 卡片里那颗"打开全屏歌词"的键（旧版本 dump：`Lyrics_CardElementImpl.ShowLyricsButtonElementUI`）。
     static let lyricsButtonClassFragment = "ShowLyricsButton"
+    /// ★ 2026-10-24（日志 13 的真机树）：9.1.88 上那颗键的**类名不含** `ShowLyricsButton`：
+    ///
+    ///     [NPVTree] 5.CardView@0,0,374,0,id=lyrics-card-view
+    ///     [NPVTree] 11.EncoreButton@0,0,44,44,id=lyrics-expand-button
+    ///
+    /// 旧判据找不到它 ⇒ 底排左边那颗气泡一直“找不到入口”（`lyrics entry missing`）。
+    /// 现在两种判据都认：类名片段（老版本）+ 无障碍 id（9.1.88）。
+    static let lyricsButtonIdentifier = "lyrics-expand-button"
 
     /// 我们画的三颗字形：id 前缀 + 名字（从左到右）。
     static let footerGlyphIdentifierPrefix = "eevee-ios27-footer-"
@@ -375,7 +383,13 @@ extension NowPlayingIOS27 {
         return nil
     }
 
-    /// 子树里第一颗类名含 `ShowLyricsButton` 的 `UIControl`（预算 2000 个视图）。
+    /// 子树里第一颗“打开全屏歌词”的键（预算 2000 个视图）。
+    ///
+    /// 两条判据：类名含 `ShowLyricsButton`（老版本，要求是 `UIControl`）或者
+    /// 无障碍 id 是 `lyrics-expand-button`（9.1.88 上它是一颗 `EncoreButton`，
+    /// **不能**先要求 `is UIControl` —— 它是 SwiftUI 托管的控件，类型不一定是 UIControl）。
+    /// 靠近位置/可见性不做判据：卡片在真机上被挤成 0 高（`CardView … 374,0`），
+    /// 但那颗键自己仍然是 44×44、alpha 1、可命中。
     private static func firstLyricsButton(in root: UIView) -> UIView? {
         var visited = 0
         var queue: [UIView] = [root]
@@ -383,7 +397,12 @@ extension NowPlayingIOS27 {
             let view = queue.removeFirst()
             visited += 1
             queue.append(contentsOf: view.subviews)
-            guard view is UIControl, view.alpha > 0.01, !view.isHidden else { continue }
+            guard view.alpha > 0.01, !view.isHidden else { continue }
+
+            if view.accessibilityIdentifier == lyricsButtonIdentifier {
+                return view
+            }
+            guard view is UIControl else { continue }
             if NSStringFromClass(type(of: view)).contains(lyricsButtonClassFragment) {
                 return view
             }

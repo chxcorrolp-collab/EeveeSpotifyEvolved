@@ -443,6 +443,12 @@ struct EeveeSpotify: Tweak {
         //   那条每 0.3s 的复查节拍永远追不上"新封面刚建好"的那一帧（见 `CoverFlashGuard.x.swift`）。
         activateCoverFlashGuard()
 
+        // ★ 2026-10-23：队列卡片（Spotify 自己的「队列」弹窗）的**只读**探针 ——
+        //   把它的 view 登记给 `ViewTreeDumper`，于是「转储视图树」打开时、弹开队列卡片
+        //   就会在日志里出现一份 `[NPVTree]` 的队列页树（下一步改「随机/循环/自动播放/定时器」
+        //   那一排要靠它）。只登记指针，不改任何视图。
+        activateQueueSheetProbe()
+
         // ★★ 2026-10-22（日志 5）：艺人页「最新发布」卡片的数据改由 Spotify 自己的 Web API 提供时，
         //   卡片手里只有一个 `spotify:album:…`（页面里"那一格"还是懒加载骨架，没法转发点击）——
         //   打开它只能走 App **自己的**链接分发器。这条 hook 只把那个单例记成弱引用，

@@ -170,6 +170,9 @@ enum NowPlayingIOS27 {
     static var lastTrackId = ""
     /// 上一次给 field 上色的曲目（`lastTrackId` 在 `updateArtwork` 里先写了，这里要单独一笔）。
     static var lastFieldTrackId = ""
+    /// 上一次给 field 上色用的**那张图** —— 真正的判据（见 `updateField` 顶部那段：
+    /// 按曲目 id 判会在换歌时把上一首的颜色锁死一整首）。
+    static var lastFieldImage: UIImage?
 
     static var didLogArtwork = false
     static var didLogField = false
@@ -640,16 +643,27 @@ enum NowPlayingIOS27 {
         return changed
     }
 
-    /// 字段色：按曲目 id 只做一次；换歌交叉淡入。
+    /// 字段色：**按图的身份**重算（同一张图只算一次）；换歌交叉淡入。
+    ///
+    /// ★ 2026-10-24（用户：「为什么会有渐变色是黑色的情况」）：
+    ///   原来这里按**曲目 id** 提前返回。换歌第一拍 `firstImage(shell)` 里还是**上一首**那张图，
+    ///   我们拿它算了色、又记下**新**的 `trackId` ⇒ 之后每一拍都在第一行提前返回
+    ///   ⇒ 这一整首都顶着上一首的底色；上一首算出来偏黑（或取色失败得到 `.black`）时，
+    ///   屏幕上就是"明明换了歌、渐变还是黑的"。现在按 `image !== lastFieldImage` 判：
+    ///   图换了才重算，所以新封面一到，底色跟着换。
     @discardableResult
     private static func updateField(in page: UIView) -> Bool {
-        let trackId = NowPlayingLyricsPlate.currentTrackId() ?? ""
-        if trackId == lastFieldTrackId, fieldSolid != nil { return false }
+        // 图也可能是我们缓存的那张（换歌那一两拍壳里还没图）—— 用**屏幕上那张**算色，
+        // 封面和底色才是同一首。
         guard let shell = artworkShell,
-              let image = NowPlayingLyricsPlate.firstImage(in: shell) else { return false }
+              let image = NowPlayingLyricsPlate.firstImage(in: shell) ?? lastArtworkImage
+        else { return false }
+
+        if lastFieldImage === image, fieldSolid != nil { return false }
 
         let colour = fieldColour(from: image)
-        lastFieldTrackId = trackId
+        lastFieldImage = image
+        lastFieldTrackId = NowPlayingLyricsPlate.currentTrackId() ?? ""
         // ⚠️ 必须**显式**标成 `() -> Void`。
         //
         // `fieldSolid?.backgroundColor = colour` 是**可选链赋值**，它的值类型是 `Void?`
@@ -954,6 +968,7 @@ enum NowPlayingIOS27 {
         fieldBlack = nil
         lastTrackId = ""
         lastFieldTrackId = ""
+        lastFieldImage = nil
         hiddenShells.removeAllObjects()
         shellAlphas.removeAll()
         hiddenChrome.removeAllObjects()

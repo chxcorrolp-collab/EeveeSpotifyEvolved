@@ -54,9 +54,14 @@ struct LyricsStageTiltLayout: View {
     /// 上下文行的 3D 倾角（度）与透视系数。
     private static let contextTiltDegrees: Double = 18
     private static let perspective: CGFloat = 0.55
-    /// 音节脉冲时长（秒）与幅度。
-    private static let pulseWindow: TimeInterval = 0.22
-    private static let pulseAmount: CGFloat = 0.035
+    /// 音节脉冲时长（秒）、幅度，以及"算作乐句起点"的最小间隔。
+    ///
+    /// ★ 2026-10-24（用户：「逐词歌词看起来在抖动」）：第一版每个字都触发整行缩放 ⇒
+    ///   逐词数据每秒 3~5 个 onset，整行一直在放大缩小 = 抖。现在只有**间隔够久**的 onset
+    ///   才发力（连续咬字不发力），幅度也收小。
+    private static let pulseWindow: TimeInterval = 0.18
+    private static let pulseAmount: CGFloat = 0.022
+    private static let pulseMinGap: TimeInterval = 0.34
 
     /// 一屏里的三行（带它在 `lines` 里的下标，用来算"离焦点多远"）。
     private struct Row: Identifiable {
@@ -182,14 +187,24 @@ struct LyricsStageTiltLayout: View {
 
     // MARK: - 数据
 
-    /// 4 伪节拍：这一个字起音之后 `pulseWindow` 内给一个衰减的放大。
+    /// 4 伪节拍：**只在"乐句起点"**给焦点行一个衰减的放大。
     ///
     /// 为什么用音节、不用音频：我们是注入式 tweak，拿不到 Spotify 的 PCM（做音频分析得先做
-    /// Core Audio 重绑）。而逐词时间轴里每个字的 onset 就是**歌声音头**，与拍点的相关性很高 ——
-    /// 用它能拿到 Folia 那种"随唱顶一下"的节奏感。
+    /// Core Audio 重绑）。而逐词时间轴里每个字的 onset 就是**歌声音头**，与拍点的相关性很高。
+    ///
+    /// ★ 2026-10-24（用户：「逐词歌词看起来在抖动」）：第一版是**每个字都触发**整行缩放 ——
+    ///   逐词/逐音节数据里每秒有 3~5 个 onset ⇒ 整行一直在放大缩小，看起来就是"抖"，
+    ///   而且和渲染器自己的逐字缩放叠成双重弹簧。现在加两个闸门：
+    ///     · **前一个 onset 距今 ≥ `pulseMinGap`** 才算"乐句起点"（连续咬字不发力）；
+    ///     · 幅度 3.5% → **2.2%**、窗口 0.22s → **0.18s**。
+    ///   真机若仍觉得抖，直接把这个函数返回 0（整行不再缩放，逐字运动仍在渲染器里）。
     private func syllablePulse(for line: LyricLine) -> CGFloat {
         guard let onset = line.syllables.last(where: { $0.startTime <= playbackTime + 0.001 })
         else { return 0 }
+        let previous = line.syllables.last(where: { $0.startTime < onset.startTime - 0.001 })
+        if let previous, onset.startTime - previous.startTime < Self.pulseMinGap {
+            return 0
+        }
         let age = playbackTime - onset.startTime
         guard age >= 0, age < Self.pulseWindow else { return 0 }
         return Self.pulseAmount * CGFloat(1 - age / Self.pulseWindow)

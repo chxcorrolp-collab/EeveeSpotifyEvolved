@@ -67,7 +67,7 @@ enum DeclutterChrome {
     /// 实际生效值 = `nowPlayingLayout && hideSingalongLine`（总开关拨动时会把下面那颗键
     /// 一起写成同一个值；这道 `&&` 是给外部写回兜底的）。
     static var hideSingalongLine: Bool {
-        UserDefaults.nowPlayingLayout && UserDefaults.hideSingalongLine
+        UserDefaults.nowPlayingAnyLayout && UserDefaults.hideSingalongLine
     }
 
     // MARK: - 首页 / 播放器那一批（2026-09-30 真机树实证）
@@ -203,7 +203,7 @@ enum DeclutterChrome {
     /// ★ 2026-10-22（用户）：它已并入「修改Spotify听歌页布局」总开关 ⇒
     /// 实际生效值 = `nowPlayingLayout && hideNowPlayingPills`（理由同上面那颗）。
     static var hideNowPlayingPills: Bool {
-        UserDefaults.nowPlayingLayout && UserDefaults.hideNowPlayingPills
+        UserDefaults.nowPlayingAnyLayout && UserDefaults.hideNowPlayingPills
     }
 
     /// 事件 hook 用：这颗 `Primary` 按钮带着我们关心的 id 吗？
@@ -550,6 +550,9 @@ enum DeclutterChrome {
         //   （约 0.3s 一拍，不新开 CADisplayLink —— 行间移动本身带 SwiftUI 动画，
         //   肉眼与每帧没差别）。没开开关时成本 = 一次 bool 读。
         onMainThreadSync { _ = NowPlayingLyricsPlate.reconcile() }
+
+        // ★ 2026-10-23：「iOS 27 听歌页」的重算节拍。开关关着时成本 = 一次 bool 读。
+        onMainThreadSync { _ = NowPlayingIOS27.reconcile() }
 
         // ★ 2026-10-04：「控制键换成本地字形」的保活（Spotify 换帧会重排那一排的 subviews）。
         //   没开开关时成本 = 一次 bool 读。

@@ -658,6 +658,8 @@ now_playing_section = "Now-playing page";
 // five names below, so those translations stay the single source of truth.
 now_playing_layout = "Modify the Spotify now-playing layout";
 now_playing_layout_description = "Includes: %@.";
+now_playing_ios27 = "iOS 27 now-playing page (full-bleed artwork)";
+now_playing_ios27_description = "The Apple Music 27 layout: the artwork fills the top half of the screen and the title sits on the fade band under it. The old \"lyrics in the player\" layer steps aside while this is on.";
 now_playing_layout_footer = "Turning the master switch off restores everything; the hidden official one-line lyrics return after a restart.";
 now_playing_backdrop = "Cover-coloured background";
 // One screen: every card under the player is folded away and the list is pinned to its top,
@@ -667,7 +669,6 @@ now_playing_one_screen = "Hide Spotify's now-playing modules";
 now_playing_volume = "Volume slider at the bottom";
 now_playing_volume_description = "This one is still in testing — not recommended.";
 now_playing_lyrics_in_player = "Lyrics in the player";
-now_playing_single_lyric = "Show our own one-line lyrics";
 show_romanized_lyrics = "Show romanized lyrics";
 show_lyrics_translation = "Show lyric translation";
 now_playing_blur_unplayed_lyrics = "Blur the lines that are not playing";

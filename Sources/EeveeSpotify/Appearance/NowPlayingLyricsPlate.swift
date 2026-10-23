@@ -101,7 +101,6 @@ enum NowPlayingLyricsPlate {
     ///
     /// 两个地方要用同一个口径，所以抽出来（原来 22 只写在 `applyContainerPassThrough` 里）：
     ///   · 歌词容器从这一条起**放行触摸**（容器底边压在控件条上，不撞的话收藏/分享键点不到）；
-    ///   · 单行歌词摆在这条上沿与封面底边的**中点**（见 `layoutSingleLyric`）。
     static let controlBandHalfHeight: CGFloat = 22
 
     /// 下面那一排里某一颗按钮的**中线 x**（页面坐标）—— 控件条要和它**同一条竖线**。
@@ -289,7 +288,13 @@ enum NowPlayingLyricsPlate {
     /// ★ 2026-10-22：这颗键由「修改Spotify听歌页布局」总开关统一写
     /// （`UserDefaults.nowPlayingLayout` 关掉时它也会被写成 `false`）；再叠一道总开关的门，
     /// 保证"总开关关掉 ⇒ 这一套一律不生效"（外部写回 / 导入备份也挡得住）。
-    static var isEnabled: Bool { UserDefaults.nowPlayingLayout && UserDefaults.nowPlayingLyricsInPlayer }
+    ///
+    /// ★ 2026-10-23：**新的「iOS 27 听歌页」开着时这一层自动让位**（两版布局互斥）——
+    /// 它自己会把封面 / 标题行 / 理论上的歌词都拿走，两层同时生效就会打架。
+    static var isEnabled: Bool {
+        UserDefaults.nowPlayingLayout && UserDefaults.nowPlayingLyricsInPlayer
+            && !UserDefaults.nowPlayingIOS27
+    }
 
 
     // MARK: - 实现分布

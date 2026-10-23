@@ -424,7 +424,7 @@ extension NowPlayingLyricsPlate {
 
     /// ★ 2026-10-22：这份行模型**属于当前这一首**吗？
     ///
-    /// 与 `AppleMusicLyricsOverlayHost` / `WordByWordHost` / 单行歌词（`singleLyricStateNow`）
+    /// 与 `AppleMusicLyricsOverlayHost` / `WordByWordHost`
     /// **同一口径**：`currentLyricsDtoTrackId` 与播放器实时曲目 id 都非空、且不相等 ⇒ 外来模型。
     ///
     /// 为什么听歌页这一层需要它：切歌后到新歌词到达之间，`currentLyricsDto` 还挂着**上一首**的行；

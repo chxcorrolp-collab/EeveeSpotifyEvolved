@@ -52,7 +52,12 @@ class CoverArtTiltLayoutHook: ClassHook<UIView> {
         //    Orion 生成的那个属性挂在 hook 实例上，闭包是 `@escaping`，直接写 `self.target`
         //    会把 hook 实例一起捕获住。
         let tilt = self.target
-        onMainThreadSync { NowPlayingLyricsPlate.coverDidLayOut(from: tilt) }
+        onMainThreadSync {
+            NowPlayingLyricsPlate.coverDidLayOut(from: tilt)
+            // ★ 2026-10-23：iOS 27 版：换歌换了一个**新的**封面对象，当场把它摆到
+            //   满屏那个位置（不等下一拍，否则会闪一下 366pt 的原生封面）。
+            NowPlayingIOS27.coverDidLayOut(from: tilt)
+        }
     }
 }
 

@@ -59,7 +59,9 @@ enum NowPlayingOneScreen {
     /// ★ 2026-10-22：这颗开关由「修改Spotify听歌页布局」总开关统一写；
     /// 再叠一道 `nowPlayingLayout` 的门，是为了"总开关关掉 ⇒ 这一套一律不生效"
     /// （哪怕有外部写回 / 导入备份把那颗键写成了 true）。
-    static var isEnabled: Bool { UserDefaults.nowPlayingLayout && UserDefaults.nowPlayingOneScreen }
+    static var isEnabled: Bool {
+        UserDefaults.nowPlayingAnyLayout && UserDefaults.nowPlayingOneScreen
+    }
 
     // MARK: - 对外入口
 

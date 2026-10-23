@@ -430,6 +430,8 @@ class NPVScrollViewControllerHook: ClassHook<NSObject> {
                 // 「歌词进播放器」：那一刻列表/底部那一坨常常还没建好，`apply` 里的
                 // `reconcile` 对"没位置"是安静的，真正的重算交给 `DeclutterChrome` 的复查节拍。
                 NowPlayingLyricsPlate.apply(in: pageView)
+                // ★ 2026-10-23：新的「iOS 27 听歌页」（满屏封面）—— 开着时上面那层会自己让位。
+                NowPlayingIOS27.apply(in: pageView)
                 // 「控制键换成本地字形」的兜底落点：万一 `PlaybackControlsElementsUnit`
                 // 那个 hook 被 Orion 拒了，这条路照样能装（判据都是 id，与类名无关）。
                 NowPlayingControlsPlate.apply(to: pageView)
@@ -455,6 +457,7 @@ class NPVScrollViewControllerHook: ClassHook<NSObject> {
             ViewTreeDumper.setPage(pageView)
             onMainThreadSync {
                 NowPlayingLyricsPlate.apply(in: pageView)
+                NowPlayingIOS27.apply(in: pageView)
                 NowPlayingControlsPlate.apply(to: pageView)
             }
         }

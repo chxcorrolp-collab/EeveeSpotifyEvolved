@@ -43,12 +43,14 @@ extension UserDefaults {
     private static let playlistSingleCoverKey = "playlistSingleCover"
     /// ★ 2026-10-22：「修改Spotify听歌页布局」总开关（见 `nowPlayingLayout`）。
     private static let nowPlayingLayoutKey = "nowPlayingLayout"
+    /// ★ 2026-10-23：新的「iOS 27 听歌页」（满屏封面，`NowPlayingIOS27`）。
+    private static let nowPlayingIOS27Key = "nowPlayingIOS27"
+    /// ★ 2026-10-23：新的「iOS 27 听歌页」（满屏封面，`NowPlayingIOS27`）。
     private static let nowPlayingBackdropKey = "nowPlayingBackdrop"
     private static let nowPlayingOneScreenKey = "nowPlayingOneScreen"
     private static let nowPlayingVolumeKey = "nowPlayingVolume"
     private static let nowPlayingLyricsInPlayerKey = "nowPlayingLyricsInPlayer"
     private static let nowPlayingLyricsExpandedKey = "nowPlayingLyricsExpanded"
-    private static let nowPlayingSingleLyricKey = "nowPlayingSingleLyric"
     private static let nowPlayingBlurUnplayedLyricsKey = "nowPlayingBlurUnplayedLyrics"
     private static let lyricsSearchPlaceholderEasterEggKey = "lyricsSearchPlaceholderEasterEgg"
     private static let nowPlayingControlGlyphsKey = "nowPlayingControlGlyphs"
@@ -112,12 +114,12 @@ extension UserDefaults {
         miniBarGlassKey,
         playlistSingleCoverKey,
         nowPlayingLayoutKey,
+        nowPlayingIOS27Key,
         nowPlayingBackdropKey,
         nowPlayingOneScreenKey,
         nowPlayingVolumeKey,
         nowPlayingLyricsInPlayerKey,
         nowPlayingLyricsExpandedKey,
-        nowPlayingSingleLyricKey,
         nowPlayingBlurUnplayedLyricsKey,
         lyricsSearchPlaceholderEasterEggKey,
         nowPlayingControlGlyphsKey,
@@ -912,6 +914,31 @@ extension UserDefaults {
         }
     }
 
+    /// ★ 2026-10-23（用户）：「iOS 27 听歌页」—— Apple Music（iOS 27）那一版的播放页（满屏封面）。**默认关**。
+    ///
+    /// 用户原话（2026-10-23，对 `C:\dsh\am\1.jpg`）：「和现在的 修改spotify布局 这个按钮，
+    /// 直接做新的就好了。」⇒ 它是一颗**独立的开关**，不并入上面那颗总开关。
+    ///
+    /// 两者是**互斥**的两版布局：这颗开着时，旧那套「歌词进播放器」自动让位
+    /// （`NowPlayingLyricsPlate.isEnabled` 里那道 `!nowPlayingIOS27` 的门）。
+    /// 结构类开关（取色底 / 一屏 / 隐藏官方单行歌词 / 两颗胶囊）两版**共用**，
+    /// 统一看 `nowPlayingAnyLayout`。
+    static var nowPlayingIOS27: Bool {
+        get {
+            container.object(forKey: nowPlayingIOS27Key) as? Bool ?? false
+        }
+        set {
+            container.set(newValue, forKey: nowPlayingIOS27Key)
+        }
+    }
+
+    /// 「听歌页任一 AM 布局」= 旧总开关 **或** iOS 27 版。
+    ///
+    /// 取色底 / 一屏 / 隐藏官方单行歌词 / 两颗胶囊这四件是**两版布局都需要**的，
+    /// 所以它们的门写成 `nowPlayingAnyLayout && <子键>` —— 以后再加第三版布局时只需要改这一处。
+    static var nowPlayingAnyLayout: Bool { nowPlayingLayout || nowPlayingIOS27 }
+
+
     /// 把五件结构改动的键统一成**总开关的值** —— 总开关是唯一真相。
     ///
     /// 为什么需要"每次启动都做"，而不是只做一次迁移：
@@ -928,7 +955,8 @@ extension UserDefaults {
     ///   —— 备份导入把单键写歪之后，用户再回到这一页时界面和听歌页才会一起收正。
     @discardableResult
     static func normalizeNowPlayingLayoutKeys() -> Int {
-        let enabled = nowPlayingLayout
+        // ★ 2026-10-23：两版布局共用这四颗结构键 ⇒ 归一到「任一布局开着」。
+        let enabled = nowPlayingAnyLayout
         let keys = [
             nowPlayingBackdropKey,
             nowPlayingOneScreenKey,
@@ -1064,28 +1092,6 @@ extension UserDefaults {
         }
         set {
             container.set(newValue, forKey: nowPlayingLyricsExpandedKey)
-        }
-    }
-
-    /// 听歌页「**封面与歌词键之间那一行居中歌词**」。**默认开**。
-    ///
-    /// ★ 2026-10-04（用户建议的第二条，原话）：
-    /// > 把现在的大封面做小，不需要那么大（图片 41 的大小差不多）。然后，在封面和歌词按钮中间
-    /// > 做一行居中的歌词（类似于 Spotify 的单行歌词，但这行歌词现在是我们自己做）
-    ///
-    /// 它只在**收起歌词那一屏**出现（展开时整页歌词都在，再来一行就是重复），
-    /// 摆在封面底边与控件条上沿的**中点**。做法与判据见
-    /// `NowPlayingLyricsPlate.applySingleLyric`（行模型 / "唱到哪一行"都用现成的，
-    /// 一处判据都不新写）。
-    ///
-    /// ⚠️ 默认开：用户是**主动点名要**这个功能的，默认开才看得到效果；
-    ///    觉得多余就在 设置 → 扩展功能 里关掉（关掉当场拿走那一行，不用重启）。
-    static var nowPlayingSingleLyric: Bool {
-        get {
-            container.object(forKey: nowPlayingSingleLyricKey) as? Bool ?? true
-        }
-        set {
-            container.set(newValue, forKey: nowPlayingSingleLyricKey)
         }
     }
 

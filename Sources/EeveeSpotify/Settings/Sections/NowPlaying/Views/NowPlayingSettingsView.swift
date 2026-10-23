@@ -23,7 +23,9 @@ import UIKit
 ///
 /// 于是本页三节：
 ///   · `now_playing_section` —— **一颗总开关**（五件结构改动，默认开）+
-///     它下面那行**二级菜单**（音量条 / 单行歌词 / 罗马化 / 译文 / 未播放行模糊 / 控制键字形）；
+///     它下面那行**二级菜单**（音量条 / 罗马化 / 译文 / 未播放行模糊 / 控制键字形）；
+///     ⚠️ 2026-10-23：原来还有「展示（自画）单行歌词」一颗，用户点名整条功能删掉
+///     （代码 / 文案 / 键一起删）。
 ///   · `declutter_description` —— 按类名藏 Spotify 自己的 chrome（迷你条、
 ///     以及 ★ 2026-10-17 从「首页与音乐库」搬来的**传输条两颗按钮**：设备/输出切换、加号）。
 ///     ⚠️ 原来这一节还有「隐藏官方单行歌词」「隐藏两颗胶囊」两颗 —— 2026-10-22 起
@@ -39,11 +41,12 @@ struct NowPlayingSettingsView: View {
     @State private var shadow = Shadow()
 
     private struct Shadow {
+        /// ★ 2026-10-23：「iOS 27 听歌页」—— 新的一版布局（满屏封面），独立的一颗开关。
+        var nowPlayingIOS27 = UserDefaults.nowPlayingIOS27
         /// ★ 2026-10-22：「修改Spotify听歌页布局」总开关。
         var nowPlayingLayout = UserDefaults.nowPlayingLayout
         // ── 总开关的二级菜单（这六颗只在总开关打开时显示） ──
         var nowPlayingVolume = UserDefaults.nowPlayingVolume
-        var nowPlayingSingleLyric = UserDefaults.nowPlayingSingleLyric
         var nowPlayingBlurUnplayedLyrics = UserDefaults.nowPlayingBlurUnplayedLyrics
         var nowPlayingControlGlyphs = UserDefaults.nowPlayingControlGlyphs
         // 与「设置 → 歌词」那两颗**同一批键**（不是新造的一套）。
@@ -70,6 +73,29 @@ struct NowPlayingSettingsView: View {
                 // 行为，挂在标题下面会把第一行撑得过高（五条名字已经够长了）。
                 footer: Text("now_playing_layout_footer".localized)
             ) {
+                // ★★ 2026-10-23（用户）：**新的「iOS 27 听歌页」放在本页最上面**。
+                //
+                // 用户原话（对 `C:\dsh\am\1.jpg` 那张 Apple Music 的播放页）：
+                // > 和现在的 修改spotify布局 这个按钮，直接做新的就好了。
+                // 所以它是一颗**独立**的开关（不并进下面那颗总开关）：
+                // 两版布局**互斥** —— 这颗开着时，旧的「歌词进播放器」自动让位
+                // （`NowPlayingLyricsPlate.isEnabled` 里那道 `!nowPlayingIOS27` 的门）。
+                //
+                // v1 只做四件（见 `NowPlayingIOS27` 文件头）：满屏封面 / 下沿模糊过渡 /
+                // 标题叠在过渡带上 / 底部音量条。进度条细化、底部工具行、☆ 与 ⋯ 留在 v2。
+                Toggle(
+                    isOn: settingsShadowBinding($shadow.nowPlayingIOS27) { value in
+                        applyIOS27Change(value)
+                    }
+                ) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("now_playing_ios27".localized)
+                        Text("now_playing_ios27_description".localized)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
                 // ★★ 2026-10-22（用户）：总开关在**本页最上面、默认开启**。
                 //
                 // 它把五件结构改动收成一颗（`UserDefaults.nowPlayingLayout`）：
@@ -95,7 +121,10 @@ struct NowPlayingSettingsView: View {
 
                 // 二级菜单：只改各自的键；总开关关着时整段收起
                 // （音量条与控制键的 `isEnabled` 里还各带一道总开关的门，见两处注释）。
-                if shadow.nowPlayingLayout {
+                //
+                // ★ 2026-10-23：「iOS 27 听歌页」开着时这段也收起 —— 它们全是旧那套
+                // 「歌词进播放器」的子项（新版布局里旧层已经让位）；而音量条在新版里是**自带**的。
+                if shadow.nowPlayingLayout && !shadow.nowPlayingIOS27 {
                     // 底部音量条：kumone 播放页下半屏的那一条（Apple Music 没有）。
                     // 落在**我们自己的透明覆盖层**上（`NowPlayingPageOverlay`），不碰 Spotify 属性。
                     // ★ 2026-10-22：它现在是二级菜单里**唯一默认关**的一项，并在标签下面
@@ -119,19 +148,6 @@ struct NowPlayingSettingsView: View {
                                 .foregroundColor(.secondary)
                         }
                         .padding(.leading, Self.submenuIndent)
-                    }
-
-                    // ★ 2026-10-04（用户建议的第二条）：收起歌词那一屏，在**大封面与歌词键之间**
-                    // 画一行居中的当前歌词（"类似 Spotify 的单行歌词，但这行歌词我们自己画"）。
-                    // 落点是封面底边与控件条上沿的中点，做法见 `NowPlayingLyricsPlate.applySingleLyric`。
-                    Toggle(
-                        isOn: settingsShadowBinding($shadow.nowPlayingSingleLyric) { value in
-                            UserDefaults.nowPlayingSingleLyric = value
-                            // 开/关都当场生效（页面还挂着的话）：关掉就是当场把它收起来。
-                            NowPlayingLyricsPlate.reapply()
-                        }
-                    ) {
-                        submenuLabel("now_playing_single_lyric".localized)
                     }
 
                     // ★ 2026-10-12（用户）：「我觉得有人不会用这个东西，去用正常的去了」——
@@ -285,6 +301,8 @@ struct NowPlayingSettingsView: View {
                     // 先重同步影子值（否则开关还显示旧状态），再按**重置后**的总开关落地。
                     shadow = Shadow()
                     applyLayoutChange(UserDefaults.nowPlayingLayout)
+                    // ★ 2026-10-23：新版布局那颗也在本页，一起按重置后的值落地。
+                    applyIOS27Change(UserDefaults.nowPlayingIOS27)
                     // 卡片那批：让听歌页那列 cell 重新问一次尺寸（开关值已经删回默认了）。
                     PlayerCardsDeclutter.refresh()
                 }
@@ -299,6 +317,7 @@ struct NowPlayingSettingsView: View {
             //   真的改到了东西（例如刚导入完旧备份）就当场重放一遍，别让听歌页停在旧状态。
             if UserDefaults.normalizeNowPlayingLayoutKeys() > 0 {
                 applyLayoutChange(UserDefaults.nowPlayingLayout)
+                applyIOS27Change(UserDefaults.nowPlayingIOS27)
             }
             shadow = Shadow()
         }
@@ -341,19 +360,58 @@ struct NowPlayingSettingsView: View {
     /// 音量条与控制键这两颗二级菜单项也在其中：它们的 `isEnabled` 带着总开关的门。
     private func applyLayoutChange(_ enabled: Bool) {
         UserDefaults.nowPlayingLayout = enabled
-        UserDefaults.nowPlayingBackdrop = enabled
-        UserDefaults.nowPlayingOneScreen = enabled
+        // ★ 2026-10-23：这四颗结构键是两版布局**共用**的 ⇒ 写「任一布局开着」。
+        //   （当年那五颗里的第五颗 `nowPlayingLyricsInPlayer` 仍只跟总开关 ——
+        //    它是旧层的开关，新版布局不用它。）
+        let structural = UserDefaults.nowPlayingAnyLayout
+        UserDefaults.nowPlayingBackdrop = structural
+        UserDefaults.nowPlayingOneScreen = structural
         UserDefaults.nowPlayingLyricsInPlayer = enabled
-        UserDefaults.hideSingalongLine = enabled
-        UserDefaults.hideNowPlayingPills = enabled
+        UserDefaults.hideSingalongLine = structural
+        UserDefaults.hideNowPlayingPills = structural
 
         refreshNowPlayingBackdrop()
         NowPlayingOneScreen.reapply()
         NowPlayingPageOverlay.reapply()
         NowPlayingControlsPlate.reapply()
-        // 歌词进播放器 / 单行歌词：`reapply()` 自己按总开关与子开关重建或回滚。
+        NowPlayingIOS27.reapply()
+        // 歌词进播放器：`reapply()` 自己按总开关与子开关重建或回滚。
         NowPlayingLyricsPlate.reapply()
         // 官方单行歌词 + 两颗胶囊：藏过的 chrome 不一定再有 layout 回合 ⇒ 当场复查。
+        DeclutterChrome.reconcileNow()
+    }
+
+    /// ★ 2026-10-23：「iOS 27 听歌页」这颗开关的「当场落地 / 还原」。
+    ///
+    /// 两件事：
+    ///   ① 把四颗**两版共用**的结构键按 `nowPlayingAnyLayout` 写一遍
+    ///      （新版单开时，取色底 / 一屏 / 隐藏官方单行歌词 / 两颗胶囊 也要生效）；
+    ///   ② 逐个叫重放入口：开着时新层上、旧层让位；关掉时新层自己还原、
+    ///      旧层按它自己的总开关回来。
+    private func applyIOS27Change(_ enabled: Bool) {
+        UserDefaults.nowPlayingIOS27 = enabled
+
+        let structural = UserDefaults.nowPlayingAnyLayout
+        UserDefaults.nowPlayingBackdrop = structural
+        UserDefaults.nowPlayingOneScreen = structural
+        UserDefaults.hideSingalongLine = structural
+        UserDefaults.hideNowPlayingPills = structural
+
+        refreshNowPlayingBackdrop()
+        NowPlayingOneScreen.reapply()
+        NowPlayingPageOverlay.reapply()
+        NowPlayingControlsPlate.reapply()
+
+        // ⚠️ 这两层的顺序**开着与关着不一样**（写反了会互相覆盖 transform）：
+        //   · 开：先让旧那层回滚（它会把封面缩回/写回 alpha），再让新层接管；
+        //   · 关：先让新层还原（把封面 transform 写回原值），再让旧那层照它自己的开关铺上。
+        if enabled {
+            NowPlayingLyricsPlate.reapply()
+            NowPlayingIOS27.reapply()
+        } else {
+            NowPlayingIOS27.reapply()
+            NowPlayingLyricsPlate.reapply()
+        }
         DeclutterChrome.reconcileNow()
     }
 
@@ -362,13 +420,14 @@ struct NowPlayingSettingsView: View {
     /// ⚠️ 故意**不含** `showRomanizedLyrics` / `showLyricsTranslation` 背后的那几个歌词页键：
     /// 那两颗开关是"同一批键的另一个入口"，在听歌页重置它们等于偷偷改掉歌词页的设置。
     private static let ownedKeys = [
+        // ★ 2026-10-23：新的「iOS 27 听歌页」。
+        "nowPlayingIOS27",
         // ★ 2026-10-22：总开关 + 它写的那五颗旧键（总开关关掉时五颗一起写 false）。
         "nowPlayingLayout",
         "nowPlayingBackdrop",
         "nowPlayingOneScreen",
         "nowPlayingVolume",
         "nowPlayingLyricsInPlayer",
-        "nowPlayingSingleLyric",
         "nowPlayingBlurUnplayedLyrics",
         "nowPlayingControlGlyphs",
         "hideMiniPlayerBar",

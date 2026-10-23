@@ -645,6 +645,8 @@ now_playing_section = "歌曲播放页";
 // 所以那五条文案只有这一份。
 now_playing_layout = "修改Spotify听歌页布局";
 now_playing_layout_description = "包含：%@。";
+now_playing_ios27 = "iOS 27 听歌页（满屏封面）";
+now_playing_ios27_description = "Apple Music 27 那一版：封面铺满上半屏，歌名叠在封面下沿的过渡带上。开着这一版时，旧那套「歌词进播放器」自动让位。";
 now_playing_layout_footer = "关掉总开关即逐项还原；隐藏官方单行歌词要重启Spotify。";
 now_playing_backdrop = "整页封面取色底";
 // ── 听歌页「一屏」（2026-10-03）────────────────────────────────────────────
@@ -655,7 +657,6 @@ now_playing_one_screen = "隐藏Spotify歌曲播放页模块";
 now_playing_volume = "展示音量条";
 now_playing_volume_description = "该功能测试中，不推荐开启。";
 now_playing_lyrics_in_player = "歌词进播放器";
-now_playing_single_lyric = "展示单行歌词(非Spotify官方)";
 show_romanized_lyrics = "展示罗马化歌词";
 show_lyrics_translation = "展示歌词翻译";
 now_playing_blur_unplayed_lyrics = "未播放歌词行模糊化";

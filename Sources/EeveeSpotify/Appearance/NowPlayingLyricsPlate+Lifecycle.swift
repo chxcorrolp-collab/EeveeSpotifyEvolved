@@ -64,9 +64,6 @@ extension NowPlayingLyricsPlate {
             // ★ 2026-10-04：收起态也要有 `歌手（提供商）`（见 `reconcile` 里同一处）。
             applyProviderToArtistLine(in: pageView)
         }
-        // ★ 2026-10-04：封面与歌词键之间那一行居中歌词（用户建议的第二条）。
-        //   `applySingleLyric` 自己会在"展开着 / 没词"时把它收起来。
-        applySingleLyric(in: pageView)
         // ★ 2026-10-12：被移走的标题行**还能点**（点歌名/歌手跳专辑/歌手页）。
         applyTitleRelay(in: pageView)
         ensureToggleZone(in: pageView)
@@ -141,14 +138,13 @@ extension NowPlayingLyricsPlate {
         guard let leavingPage = lastPage else { return false }
         if leavingPage.window == nil {
             // ⚠️ **这一段的条件必须把"我们写过的每一处"都算上** —— 包括写在**别人的视图或页面上**
-            //   的那几处（封面缩放、歌手行的提供商、单行歌词、标题替身）。
+            //   的那几处（封面缩放、歌手行的提供商、标题替身）。
             //   漏掉它们的后果很具体：页面走掉时该跑的那次收尾**整段被跳过** ⇒ 封面缩着不回、
-            //   歌手行永远挂着「（NetEase）」、我们的标签留在树上（`singleLyric` 若还是强引用，
-            //   连那一页的标签都一起钉住）。
+            //   歌手行永远挂着「（NetEase）」、我们的替身留在那一页上。
             // 判据的**等价**写法见 `LyricsDoorRules.needsPageTeardown`
             // （`.closing` 覆盖 `pageLeaving`，`.open` / `.opening` 覆盖 `isLive || wantsOpen`）。
             let hasPendingEdits = bandShareButton != nil || closedTitleRow != nil
-                || !scaledCoverBase.isEmpty || lastArtistSuffix != nil || singleLyric != nil
+                || !scaledCoverBase.isEmpty || lastArtistSuffix != nil
                 || titleRelay != nil
             guard LyricsDoorRules.needsPageTeardown(
                 phase: doorPhase,
@@ -184,8 +180,6 @@ extension NowPlayingLyricsPlate {
             //   （换歌会换一个新的封面对象，见 `keepNativeCoverHidden`）。
             keepNativeCoverHidden(in: page)
             ensureToggleZone(in: page)
-            // ★ 2026-10-04：整页歌词就在眼前，封面那一行居中的单行歌词要收起来（不然是重复的）。
-            hideSingleLyric()
             // ★ 2026-10-12：展开态那一行也被移走了（缩略图右边）⇒ 同样点不到，替身一样要摆。
             applyTitleRelay(in: page)
             return door.isOpen
@@ -199,10 +193,6 @@ extension NowPlayingLyricsPlate {
         //   而用户平时看的就是收起这一屏。
         applyProviderToArtistLine(in: page)
 
-        // ★ 2026-10-04：封面与歌词键之间那一行**居中歌词**（用户建议的第二条）——
-        //   它的 y 是"封面底边与控件条上沿的中点"，所以必须排在 `applyCoverRestingScale`
-        //   （封面缩到 242pt）**之后**，否则量到的还是 366pt 那张的底边。
-        applySingleLyric(in: page)
         // ★ 2026-10-12：被移走的标题行**还能点**（点歌名/歌手跳专辑/歌手页）。
         applyTitleRelay(in: page)
 
@@ -276,7 +266,6 @@ extension NowPlayingLyricsPlate {
         clearClosedTitleTransform()
         restoreCoverScale()
         // 我们自己的层与控件（续）
-        removeSingleLyric()
         removeTitleRelay()
         removeCreditLabel()
     }
@@ -522,10 +511,6 @@ extension NowPlayingLyricsPlate {
     /// 只有 `toggle()` 那一条路会因为**一次**失败而永久认死。
     @discardableResult
     static func openAndMount(in page: UIView) -> Bool {
-        // ⚠️ 共享 CADisplayLink 只有一个槽：收起态那一行歌词可能正占着它（见
-        //    `NowPlayingSingleLyricHost.startClockIfAvailable`）⇒ **铺展开页之前必须先还**，
-        //    否则展开页会掉回 0.5s 的复查节拍（逐词一格一格跳）。
-        releaseSingleLyricClock()
         // ★ 「屏幕上已经有我们的东西」时，这次量不到**不许改意图**。
         //   否则会出现独立只读复核点出来的那个死角：歌词明明还开着、而 `isOpen` 已经是
         //   `false` ⇒ 用户再点走的是"展开"那一支 ⇒ **关不掉**。

@@ -277,6 +277,14 @@ extension NowPlayingIOS27 {
             page.addSubview(fresh)
             repeatPill = fresh
             repeatGlyph = glyph
+            // ⚠️ 2026-10-24：这一句**必须有**。
+            //
+            // `pill` 是"先声明、后赋值"的常量，上面那个分支赋了（`existing`），这里
+            // 原来只写了 `repeatPill = fresh`（那是**另一张表**里的弱引用），于是
+            // 下面 `pill.frame` 那几行报 4 条
+            //   constant 'pill' used before being initialized
+            // 同一个函数里那两颗 `relay` 是两条分支各赋一次、所以没事 —— 别照那颗的写法漏这一行。
+            pill = fresh
             changed = true
         }
         if pill.frame != frame {

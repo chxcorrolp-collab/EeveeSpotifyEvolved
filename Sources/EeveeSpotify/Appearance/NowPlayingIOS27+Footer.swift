@@ -220,27 +220,20 @@ extension NowPlayingIOS27 {
         share: UIView?,
         queue: UIView?
     ) -> Bool {
-        // ★ 2026-10-24：开了「歌词舞台」（设置 → 实验）就**不再需要**原生那颗键 ——
-        //   左边这颗气泡直接开我们自己的全屏歌词窗口（`LyricsStageEntry`）。
-        //   这也顺手修掉了"找不到 `ShowLyricsButton` 就变暗"那一档：舞台键不依赖它。
-        //
-        // ⚠️ 顺序很重要：舞台开着时**连找都不要去找**。`lyricsEntryTarget` 在找不到时
-        //   会做一次 ≤2000 节点的 BFS（每 ~3s 一次），而这份结果在舞台这一档**永远用不上**。
+        // ★★ 2026-10-24（用户：「歌词这部分，不能直接复用吗，iOS 27 这边只需要改动画就好了」）：
+        //   左边这颗气泡**永远**开我们自己的歌词页（正文复用 `AppleMusicLyricsPage`，
+        //   实验开关只决定观感）；iOS 26+ **根本不转发** Spotify 那颗键，所以连找都不用找
+        //   —— 省掉每 ~3 秒一次的 2000 节点 BFS。只有 iOS 26 以下才需要它。
         let stageEnabled = LyricsStageEntry.isEnabled
         // ⚠️ 要认**缓存**：`lyricsEntryTarget` 是节流的，被节流的那一拍返回 nil，
         // 但上一拍已经找到的那颗还在（`lyricsEntryView`）—— 否则那颗键会每 3 秒"失灵 9 拍"、
         // 左边那颗也会跟着一闪一闪。
-        let lyricsTarget: UIView? = stageEnabled
+        let lyricsTarget: UIView? = canOpenOwnLyricsPage
             ? nil
             : (lyricsEntryTarget(in: page) ?? lyricsEntryView)
-        // ★★ 2026-10-24（用户：「不开启实验性 fo 的情况下，歌词功能是点不了的」）：
-        //   **这颗键永远可点**。三条路，按优先级：
-        //     ① 舞台开着 → 我们的窗口；
-        //     ② 找到原生 `lyrics-expand-button` → `sendActions` 转发，**0.8s 后核对**
-        //        Spotify 的全屏歌词页有没有起来，没起来就退到 ①；
-        //     ③ 连原生那颗都没找到（9.1.88 的卡片会被挤成 0 高）→ 直接走 ①。
-        //   ⇒ 再也不会出现"按下去没反应"或"变暗的死键"。
-        footerLyricsAvailable = stageEnabled || lyricsTarget != nil || canOpenOwnLyricsPage
+        // 那颗键**永远可点**：
+        //   iOS 26+ ⇒ 我们自己的歌词页；iOS 26 以下 ⇒ 退回 Spotify 那颗 `lyrics-expand-button`。
+        footerLyricsAvailable = canOpenOwnLyricsPage || stageEnabled || lyricsTarget != nil
 
         // 页面换了（或上一份的宿主没了）⇒ 先把旧字形拆干净，别留在上一页上。
         if footerRelay == nil || footerRelay?.superview !== page {
@@ -331,16 +324,19 @@ extension NowPlayingIOS27 {
                 zones.append((tapRect(frame), target))
             }
         }
-        if stageEnabled {
-            actionZones.append((tapRect(frames[0]), { LyricsStageEntry.present() }))
-        } else if let target = lyricsTarget {
-            actionZones.append((tapRect(frames[0]), lyricsAction(target: target)))
-        } else if canOpenOwnLyricsPage {
-            // 原生那颗根本没找出来（卡片 0 高时很常见）⇒ 直接开我们自己的歌词页。
+        if canOpenOwnLyricsPage {
+            // ★★ 2026-10-24（用户：「歌词这部分，不能直接复用吗，iOS 27 这边只需要改动画就好了」）：
+            //   **歌词键永远开我们自己的页**（里面直接复用 `AppleMusicLyricsPage`，见
+            //   `LyricsStageView.appleMusicPage`）；实验开关只决定页内"Folia 3D / 普通滚动"。
+            //   不再转发 Spotify 那颗 `lyrics-expand-button` —— 它在 9.1.88 上经常是空壳，
+            //   而"点得开"比"转发成功"重要。
             actionZones.append((tapRect(frames[0]), {
-                writeDebugLog("[\(logTag)] lyrics: no native button — opening our own lyrics page")
-                LyricsStageEntry.presentAsFallback()
+                writeDebugLog("[\(logTag)] lyrics: opening our lyrics page")
+                LyricsStageEntry.present()
             }))
+        } else if let target = lyricsTarget, let action = tapAction(for: target, label: "lyrics") {
+            // iOS 26 以下没有我们自己的歌词页：退回 Spotify 那颗键。
+            actionZones.append((tapRect(frames[0]), action))
         }
         addZone(frames[1], target: connect, label: "connect")
         addZone(frames[2], target: queue, label: "queue")
@@ -369,11 +365,12 @@ extension NowPlayingIOS27 {
                     + " queue \(name(queue)); three glyphs at"
                     + " \(Int(frames[0].midX))/\(Int(frames[1].midX))/\(Int(frames[2].midX))"
                     + " (y \(Int(midY))); lyrics entry"
-                    + (stageEnabled
-                        ? " = our lyrics stage (LyricsStageEntry)"
+                    + (canOpenOwnLyricsPage
+                        ? (stageEnabled
+                            ? " = our lyrics page (Folia tilt look)"
+                            : " = our lyrics page (reusing AppleMusicLyricsPage)")
                         : (footerLyricsAvailable
                             ? " = \(name(lyricsTarget))"
-                                + (lyricsTarget == nil ? " (or our own page)" : "")
                             : " missing (left glyph hidden)"))
             )
         }
@@ -437,60 +434,6 @@ extension NowPlayingIOS27 {
     /// 我们自己的歌词页能不能开（`LyricsStage` 是 iOS 26+ 的门）。
     static var canOpenOwnLyricsPage: Bool {
         if #available(iOS 26.0, *) { return true }
-        return false
-    }
-
-    /// 点歌词气泡：先转发给 Spotify 那颗 `lyrics-expand-button`，**再核对**它到底起没起来。
-    ///
-    /// 为什么必须核对：那颗键住在被挤成 0 高的歌词卡片里（日志 13：`CardView … 374,0`），
-    /// 它到底还有没有绑动作，我们只能试。0.8s 后如果没看到任何全屏歌词页，就退到我们自己的
-    /// 歌词窗口 —— 用户要的是"点得开"，不是"转发成功"。
-    @MainActor
-    private static func lyricsAction(target: UIView) -> () -> Void {
-        let targetClass = NSStringFromClass(type(of: target))
-        return {
-            writeDebugLog("[\(logTag)] lyrics: sendActions → \(targetClass)")
-            // ⚠️ 这个闭包是**非隔离**类型（`() -> Void`，替身存的就是它），里面调 `@MainActor`
-            //    的静态函数要显式用 `onMainThreadSync` 包一层 —— 不靠"闭包继承外围隔离"那条
-            //    推断，免得某个调用点被判成非隔离就编译不过。
-            onMainThreadSync {
-                guard let control = NowPlayingIOS27.nearestControl(target) else { return }
-                control.sendActions(for: .touchDown)
-                control.sendActions(for: .touchUpInside)
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                onMainThreadSync {
-                    guard !NowPlayingIOS27.spotifyLyricsPageIsOpen() else { return }
-                    writeDebugLog(
-                        "[\(logTag)] lyrics: the native expand button did nothing"
-                            + " — opening our own lyrics page instead"
-                    )
-                    LyricsStageEntry.presentAsFallback()
-                }
-            }
-        }
-    }
-
-    /// 屏幕上有没有 Spotify 自己的全屏歌词页（`Lyrics_FullscreenElementPageImpl.FullscreenElementViewController`）。
-    @MainActor
-    static func spotifyLyricsPageIsOpen() -> Bool {
-        var roots: [UIViewController] = []
-        for scene in UIApplication.shared.connectedScenes {
-            guard let windowScene = scene as? UIWindowScene else { continue }
-            for window in windowScene.windows {
-                if let root = window.rootViewController { roots.append(root) }
-            }
-        }
-        var queue = roots
-        var visited = 0
-        while !queue.isEmpty, visited < 200 {
-            let controller = queue.removeFirst()
-            visited += 1
-            let name = NSStringFromClass(type(of: controller))
-            if name.contains("Lyrics"), name.lowercased().contains("fullscreen") { return true }
-            if let presented = controller.presentedViewController { queue.append(presented) }
-            queue.append(contentsOf: controller.children)
-        }
         return false
     }
 

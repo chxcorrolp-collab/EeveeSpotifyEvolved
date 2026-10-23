@@ -45,7 +45,8 @@ import SwiftUI
 ///   就不会因为"某个调用点被推断成非隔离"而编译不过。
 enum LyricsStageEntry {
 
-    /// 用户在「设置 → 实验」里打开了舞台，**且**系统是 iOS 26+。
+    /// 实验开关：**只决定观感**（Folia 3D / 复用 `AppleMusicLyricsPage`），
+    /// **不再决定"能不能打开"**。
     ///
     /// 纯读一个 `UserDefaults`（`Codable` 解一份短 JSON），不碰 UI、不碰播放器，
     /// 所以 `NowPlayingIOS27` 每 0.3s 那拍叫它一次是安全的。
@@ -54,7 +55,7 @@ enum LyricsStageEntry {
         return UserDefaults.experimentsOptions.lyricsStage
     }
 
-    /// 打开舞台。已打开时什么都不做（幂等）。
+    /// 打开我们自己的全屏歌词页。已打开时什么都不做（幂等）。
     static func present() {
         guard #available(iOS 26.0, *) else { return }
         Task { @MainActor in
@@ -62,24 +63,11 @@ enum LyricsStageEntry {
         }
     }
 
-    /// 关掉舞台（没开着就什么都不做）。
+    /// 关掉歌词页（没开着就什么都不做）。
     static func dismissIfPresented() {
         guard #available(iOS 26.0, *) else { return }
         Task { @MainActor in
             LyricsStage.shared.dismiss()
-        }
-    }
-
-    /// 兜底入口：**不看实验开关**，直接开我们自己的歌词页。
-    ///
-    /// 用途只有一个：iOS 27 听歌页左下那颗歌词气泡在"实验关着"时先转发 Spotify 的
-    /// `lyrics-expand-button`，那颗键要是不动（卡片被挤成 0 高时很常见），就退到这儿 ——
-    /// 用户要的是"点得开"，不是"转发成功"。见 `NowPlayingIOS27+Footer.lyricsAction`。
-    static func presentAsFallback() {
-        guard #available(iOS 26.0, *) else { return }
-        Task { @MainActor in
-            writeDebugLog("[LyricsStage] opening as the lyrics fallback (experiment switch is off)")
-            LyricsStage.shared.present(ignoringSwitch: true)
         }
     }
 }
@@ -149,17 +137,12 @@ final class LyricsStage {
 
     // MARK: - 打开 / 关闭
 
-    func present(ignoringSwitch: Bool = false) {
+    func present() {
         guard !isPresented else { return }
-        // ★ 2026-10-24（用户：「不开启实验性 fo 的情况下，歌词功能是点不了的」）：
-        //   实验开关现在**只决定"歌词气泡优先开哪个"**（见 `NowPlayingIOS27+Footer`）：
-        //   开着 ⇒ 直接来这扇窗口；关着 ⇒ 先试 Spotify 自己的全屏歌词页，
-        //   那颗键不动（9.1.88 的卡片被挤成 0 高时就这样）再退到这儿 ⇒ `ignoringSwitch: true`。
-        //   ⚠️ 别把这个口子用来"绕过实验开关"做别的事：它只服务"歌词点得开"这一条。
-        if !ignoringSwitch, !LyricsStageEntry.isEnabled {
-            writeDebugLog("[\(Self.logTag)] present ignored — the experiment switch is off")
-            return
-        }
+        // ★★ 2026-10-24（用户：「歌词这部分，不能直接复用吗，iOS 27 这边只需要改动画就好了」）：
+        //   **开关不再挡"打开"** —— 这颗歌词键就是"看歌词"，任何时候都该点得开。
+        //   实验开关只决定里面用哪种观感（见 `makeRootView` 的 `usesStageTilt`）：
+        //   关 ⇒ 复用 `AppleMusicLyricsPage`（老布局那条线一直在用的那一页）；开 ⇒ Folia 3D。
         guard let scene = Self.activeWindowScene() else {
             writeDebugLog("[\(Self.logTag)] present failed — no UIWindowScene in the foreground")
             return
@@ -207,6 +190,8 @@ final class LyricsStage {
         stageWindow.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.statusBar.rawValue + 1)
         stageWindow.backgroundColor = .clear
         stageWindow.rootViewController = controller
+        // 进场：淡入 + 从下方 28pt 升上来（iOS 27 听歌页那边看起来是"这一页浮起来"）。
+        controller.view.transform = CGAffineTransform(translationX: 0, y: 28)
         stageWindow.alpha = 0
         stageWindow.isHidden = false
 
@@ -217,12 +202,14 @@ final class LyricsStage {
         isPresented = true
         installObservers()
 
-        UIView.animate(withDuration: 0.22) {
+        UIView.animate(withDuration: 0.34, delay: 0, options: [.curveEaseOut]) {
             stageWindow.alpha = 1
+            controller.view.transform = .identity
         }
 
         writeDebugLog(
-            "[\(Self.logTag)] present — crazy word-by-word stage"
+            "[\(Self.logTag)] present — lyrics page"
+                + " look=\(LyricsStageEntry.isEnabled ? "folia-tilt" : "reused-apple-music-page")"
                 + " lines=\(lines.count)"
                 + " scene=\(NSStringFromClass(type(of: scene)))"
                 + " level=\(Int(stageWindow.windowLevel.rawValue))"
@@ -256,9 +243,13 @@ final class LyricsStage {
             writeDebugLog("[\(Self.logTag)] dismiss — no window (already gone)")
             return
         }
-        UIView.animate(withDuration: 0.2, animations: {
+        // 退场与进场同一套（淡出 + 稍微下坠），iOS 27 听歌页那边看起来是"这一页收下去"。
+        let content = stageWindow.rootViewController?.view
+        UIView.animate(withDuration: 0.24, delay: 0, options: [.curveEaseIn], animations: {
             stageWindow.alpha = 0
+            content?.transform = CGAffineTransform(translationX: 0, y: 28)
         }, completion: { _ in
+            content?.transform = .identity
             stageWindow.isHidden = true
             stageWindow.rootViewController = nil
         })
@@ -394,6 +385,11 @@ final class LyricsStage {
             provider: providerName,
             providerCredit: providerCredit,
             showsTranslation: showsTranslationNow,
+            // ★ 2026-10-24（用户：「歌词这部分，不能直接复用吗，iOS 27 这边只需要改动画就好了」）：
+            //   实验开关**只决定观感**，不再决定"能不能打开歌词"：
+            //     开 ⇒ 仿 Folia 的 3D 层叠（`LyricsStageTiltLayout`）；
+            //     关 ⇒ **直接复用** `AppleMusicLyricsPage`（就是老布局那条线一直在用的那一页）。
+            usesStageTilt: LyricsStageEntry.isEnabled,
             statusText: statusText,
             onClose: { LyricsStage.shared.dismiss() }
         )

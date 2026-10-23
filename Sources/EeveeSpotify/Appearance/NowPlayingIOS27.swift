@@ -6,47 +6,43 @@
 //    和旧那套（`NowPlayingLyricsPlate` 的"歌词进播放器"）**互斥**：新的开着时旧的自动让位
 //    （`NowPlayingLyricsPlate.isEnabled` 的 `!nowPlayingIOS27` 那道门）。
 //
-// ## 2026-10-23 第二轮（日志 777 / 照片 160·161 之后）
+// ## 第四轮（用户："太丑了、bug 很多"之后的**方向修正**）
 //
-// 第一版是"把 Spotify 那个 `Encore.ImageView` 用 `transform` 放大到满屏"。真机发现两件事：
+// 前三轮我一直在**搬 Spotify 的原生控件**：放大封面、挪标题、把底部那一坨整抬 130pt、
+// 工具行单独挪回去、再用替身转发点击…… 每一次都要"每拍补写 + 记原值 + 撤干净"，
+// 而 Spotify 会回收 cell、重写 transform、写回 alpha ⇒ 修一个冒一个（照片 160/162），
+// 自制的那条"模糊带"在浅色封面上糊成一块灰（照片 163）。
 //
-//   ① **它会弹回去**：`[NPVLyrics] artwork picked … at 24,159,366,366` 与 `… at 0,0,414,414`
-//      在日志里交替出现 ⇒ 封面层自己会**重写 transform**（倾斜/视差那套），
-//      我们 0.3s 一拍地覆盖 ⇒ 屏幕上就是照片 160（原大小）⇄ 161（满屏）来回跳；
-//   ② 放大后它自己那层圆角/裁剪还得靠 `clipsToBounds` 硬掰，副作用大。
+// 用户提示 pw v0.21.1 / 专辑歌单艺人页早就把"取色 + 模糊底"做过了。查证：
+//   · `spotipw-v0.21.1/tweak/Sources/Redesigned/Player/PlayerField.x`：
+//     播放页背景 = `SGRArtworkField`，**封面的模糊图 + 深色底 + 从窗口 55% 压到纯黑**
+//     （`SGRField.m` 的 `kBlackFrom = 0.55` / `kBlackTo = 1`）；
+//   · 我们仓库 `EntityPageAppearance` 已经移植了它的 `_solid + _black` 两半，
+//     文件头逐字写着"`_backdrop` 那一层只有播放器用" ⇒ 缺的就是这一块。
+// ⇒ 这一轮：**背景换成这套 field**，并且**不再搬底部那一坨**（上抬 / 工具行替身全部撤掉）。
 //
-// ⇒ 改成**自己画一张**（与 `NowPlayingLyricsPlate` 同一思路），原生那张只负责供图：
-//
-//   · 我们的封面 `eevee-ios27-artwork` 挂在**封面所在那个整页 cell** 里（contentlayer），
-//     所以天然在标题/进度/控件**下面**，不需要跟任何人的 z-order 打架；
-//   · 原生那张壳写 `alpha = 0`（记原值、收尾写回、每拍补一次 —— Spotify 会自己写回来）；
-//   · 图从 `rememberArtworkIfNeeded`（按曲目 id 缓存、>=128pt 才算数）拿，
-//     拿不到就先让原生那张露着（**绝不出现空白封面**），下一拍再换；
-//   · 换歌：`CoverArtTiltLayoutHook` 转发过来的 `coverDidLayOut` 立刻重算一次。
-//
-// ## 这一版（v1）做什么
+// ## 这一版做什么
 //
 //   ① **封面满血**：`(0, 0, W, W)` 的方图（`scaleAspectFill`、无圆角），从屏幕最顶上开始画；
-//   ② 封面**下沿柔和过渡**（无硬边）：封面自己下沿一条渐变 mask 淡出 → 底下垫同图的
-//      高斯模糊（0.50W…1.35W，它自己也用 mask 淡出）→ 再压一条透明→黑的 scrim；
-//   ③ **标题叠在过渡带上**（原生标题行挪到 `W + 56`、左缩进 16pt）；
-//   ④ 底部细音量条（两端小喇叭）—— 复用 `NowPlayingPageOverlay`；
-//   ⑤ 极细进度条 / 底部工具行 / ☆ 与 ⋯ —— 留 v2（见 `HANDOFF_2026-10-23_…`）。
+//   ② **背景 = pw 的 field**：字段色（封面下沿的平均色，压到 pw 的两条上限）→
+//      窗口 55% 起渐到纯黑 → 封面下沿那一条**模糊拷贝**（同一条边界的裁切，1:1 接得上）；
+//   ③ 封面自己下沿再用一条 mask 淡进那条模糊里 ⇒ 没有接缝；
+//   ④ **标题行只收左边距**（16pt），**纵向留在 Spotify 原生位置** —— 不抬它就不会和进度条
+//      之间空出一大块（照片 161 的老问题）；
+//   ⑤ 顶部 chrome：藏歌单名与向下箭头、画 AM 那根小横条、⋯ 搬到工具行正中间；
+//   ⑥ **底部一点不动**（进度条 / 三个键 / 工具行都是 Spotify 的原生位置），
+//      pw 那套"裸字形 + 三颗工具行"留到下一轮（它不搬东西，可以安全叠加）。
 //
-// ## 几何（按页宽推，不写死像素）
+// ## 纪律（前三轮踩出来的）
 //
-//   封面方块：`(0, 0, W, W)`；模糊底：`(0, 0.50W, W, 0.85W)`（两条 mask 淡出，无硬边）；
-//   标题行  ：顶边 = `W + 56`（≈470 on 414×896），左边 = 16pt；先夹在进度条之上。
+//   · **不移动**任何会被 Spotify 重排的行（stack / 工具行）——移出去就点不到，替身是 bug 源；
+//   · 只对**封面壳**写 `alpha`（记原值、每拍补、收尾写回），其余原生属性一律不碰；
+//   · 自己的视图全部挂在**封面所在的那个整页 cell** 里（contentlayer 在 UI 栈下面），
+//     z-order 天然正确；
+//   · 每 0.3s 蹭 `DeclutterChrome` 的既有节拍（不新开定时器）。
 //
-// ## 时序
-//
-//   · 进页面：`NPVScrollViewControllerHook.viewWillAppear/.viewDidAppear` → `apply(in:)`；
-//   · 每 0.3s：蹭 `DeclutterChrome` 既有的复查节拍 → `reconcile()`（不新开定时器）；
-//   · 换歌：`CoverArtTiltLayoutHook` → `coverDidLayOut(from:)`（新封面对象当场接管）；
-//   · 关开关 / 页面消失：`restore()`（原生壳 alpha 写回、标题行 transform 写回、拆掉我们的视图）。
-//
-// 日志 tag：`[iOS27]`。排查先看：`artwork up` / `title row moved` / `band mounted` /
-// `frames`（一次性把各行的真实坐标打出来，v2 排版靠它）/ `restored`。
+// 日志 tag：`[iOS27]`。排查先看：`artwork up` / `field mounted` / `context menu moved` /
+// `frames`（各行的真实坐标）/ `restored`。
 import Foundation
 import UIKit
 import CoreImage
@@ -57,33 +53,20 @@ enum NowPlayingIOS27 {
 
     static let logTag = "iOS27"
 
-    // MARK: - 几何
+    // MARK: - 几何 / 配色
 
-    /// 标题行顶边离封面底边的距离（pt）。AM 截图里 ≈ 64；取 56（W + 56 ≈ 470）。
-    static let titleTopGap: CGFloat = 56
-    /// 标题行左边距（AM 16pt；Spotify 原生 28pt）。
+    /// 标题行左边距（AM 16pt；Spotify 原生 28pt）。**只改横向**。
     static let titleLeadInset: CGFloat = 16
-    /// 模糊背景的上下沿（占页宽）：0.50W 起、1.35W 止（414pt 上 ≈ 207…559）。
-    ///
-    /// 为什么不是原来那条"从封面底边往下 149pt 的硬边带子"（照片 163 里那条一眼能看出
-    /// 接缝的灰带）：专辑/歌单/艺人页的封面过渡是**模糊底 + 渐变压暗**，没有硬边
-    /// （`EntityPageAppearance` 那一套是这个观感）。这里照同一个观感重做：
-    ///   · 封面**自己的下沿**用一条渐变 mask 淡出（0.86W 之后），
-    ///   · 底下垫一张同图的模糊拷贝（从 0.50W 起），它又被一条 mask 淡出到页面的取色底，
-    ///   · 上面再压一条"透明 → 黑"的 scrim（AM 的封面下半段是越来越沉的）。
-    /// 三层叠起来就没有硬边了。
-    static let blurTopRatio: CGFloat = 0.50
-    static let blurBottomRatio: CGFloat = 1.35
-    /// 封面自己下沿淡出的起点（占封面高度）。
-    static let artworkFadeStart: CGFloat = 0.86
-    /// **底部那一坨整体上移**多少（占页高）。AM：进度条 550 / 控件 623 / 工具行 802；
-    /// 我们原生 703 / 752 / 840 ⇒ 上移 130（896×0.145）后是 573 / 622 ⇒ 控件那一档正好对上，
-    /// 而工具行得**单独留在原地**（否则页面底下空一大块）。
-    static let bottomLiftRatio: CGFloat = 0.145
-    /// 高斯模糊半径**按原图宽度的比例**算（专辑/歌单/艺人页那条实测规矩：3.5%）。
-    ///
-    /// 固定 24pt 在 366pt 的封面上会把细节糊成一片纯色（`EntityPageAppearance` 的
-    /// 文件头记过同一件事）；按比例算才能"看得出是哪张图"。
+    /// 封面自己下沿从哪一档开始淡出（占封面高度）。
+    static let artworkFadeStart: CGFloat = 0.90
+    /// 封面下沿那条模糊拷贝的高度（占封面边长）；裁的是原图**同样比例**的下沿 ⇒ 1:1 接得上。
+    static let stripFraction: CGFloat = 0.45
+    /// 压黑渐变：pw 的 `kBlackFrom = 0.55` / `kBlackTo = 1`（按**窗口高度**算）。
+    static let blackFromRatio: CGFloat = 0.55
+    /// 字段颜色：pw 的 `SGRPalette` 两条上限（饱和度 0.55、线性亮度 0.07 ⇒ sRGB ≈ 0.29）。
+    static let maxFieldSaturation: CGFloat = 0.55
+    static let maxFieldBrightness: CGFloat = 0.30
+    /// 高斯模糊半径**按原图宽度比例**（专辑/歌单/艺人页实测的 3.5%）。
     static let blurRadiusRatio: CGFloat = 0.035
 
     /// 这颗开关自己就是全部条件（旧的"歌词进播放器"在它那边让位，见文件头）。
@@ -98,68 +81,41 @@ enum NowPlayingIOS27 {
     /// 我们自己画的那张封面 + 它的宿主（整页 cell）。
     static weak var artworkHost: UIView?
     static weak var artworkView: UIImageView?
+    static weak var artworkMask: CAGradientLayer?
     /// 被我们按下 `alpha` 的原生壳（记原值，收尾按原值写回）。
     static let hiddenShells = NSHashTable<UIView>.weakObjects()
     static var shellAlphas: [ObjectIdentifier: CGFloat] = [:]
 
-    /// 被我们藏掉的顶部 chrome（歌单名 / 向下箭头）—— 同一套"记原值 + 每拍补"的做法。
+    /// 被我们藏掉的顶部 chrome（歌单名 / 向下箭头）。
     static let hiddenChrome = NSHashTable<UIView>.weakObjects()
     static var chromeAlphas: [ObjectIdentifier: CGFloat] = [:]
-    /// 我们自己画的那根小横条。
     static weak var grabber: UIView?
 
-    /// 被搬到工具行正中间的 ⋯（`Context menu`）+ 它的触摸替身。
+    /// ⋯（`Context menu`）：搬到工具行正中间，配一个触摸替身。
     static weak var menuView: UIView?
     static var menuBase: (ObjectIdentifier, CGAffineTransform)?
     static weak var menuRelay: NowPlayingTitleRelayView?
-    /// 为了把 ⋯ 搬出导航条而放开裁剪的那几层（记原值，收尾写回）。
     static let unclippedViews = NSHashTable<UIView>.weakObjects()
     static var unclippedOriginals: [ObjectIdentifier: Bool] = [:]
     static var didLogMenu = false
 
-    /// 我们那层"模糊背景 + 渐变"（挂在同一个整页 cell 的最底层）。
-    static weak var bandHost: UIView?
-    static weak var bandImage: UIImageView?
-    static weak var scrim: UIView?
-    /// 封面自己下沿的渐变 mask（让它淡进下面的模糊层）。
-    static weak var artworkMask: CAGradientLayer?
+    /// 背景 field（挂在封面那个整页 cell 里、我们封面下面）。
+    static weak var fieldHost: UIView?
+    static weak var fieldSolid: UIView?
+    static weak var fieldBlur: UIImageView?
+    static weak var fieldBlack: UIView?
 
-    /// 顶部导航那三件的 id（真机树：`108.log:1735-1736`）。
-    ///
-    ///   · `now-playing-minimize-button` —— 左上那颗向下箭头（48×48，`Tertiary`）；
-    ///   · `now-playing-navigation-unit-title-label` —— 中间那个歌单名（30×48 的 stack）；
-    ///   · `Context menu` —— 右上那个 ⋯（48×48，`Tertiary`）。
-    ///
-    /// AM 的播放页顶部**只有一根小横条**（下拉把手）⇒ 前两件藏起来；⋯ 要搬到标题行
-    /// 右边（紧挨 ☆）—— 那一步等 `[iOS27] frames` 给出 ☆ 的真实坐标再做（见文件头 v2 清单）。
-    static let navTitleIdentifier = "now-playing-navigation-unit-title-label"
-    static let contextMenuIdentifier = "Context menu"
-    /// 我们自己画的那根小横条。
-    static let grabberIdentifier = "eevee-ios27-grabber"
-
-    /// 底部那一坨（`npv.bottomStackView`）与它的工具行（footer）。
-    ///
-    /// 做法：整坨往上抬 `bottomLiftRatio×页高`，再把工具行**单独往下平移同样多** ⇒
-    /// 视觉上只有"进度条/控件"上来了、工具行留在底部（AM 的比例）。
-    /// ⚠️ 工具行移出去之后**不在那一坨的 bounds 里**了 ⇒ 点击必须靠一个替身转发
-    /// （与 `NowPlayingTitleRelayView` 同一套做法）。
-    static weak var bottomStack: UIView?
-    static var bottomStackBase: (ObjectIdentifier, CGAffineTransform)?
-    static weak var footerRow: UIView?
-    static var footerBase: (ObjectIdentifier, CGAffineTransform)?
-    static weak var footerRelay: NowPlayingTitleRelayView?
-
-    /// 被我们挪下去的标题行，以及它原来的 `transform` 与**原生位置**。
+    /// 被我们改了左边距的标题行，以及它原来的 `transform` 与原生位置。
     static weak var titleRow: UIView?
     static var titleRowBase: (ObjectIdentifier, CGAffineTransform)?
     static var titleRowBaseRect: (ObjectIdentifier, CGRect)?
 
-    /// 上一次画上去的是哪一首（同一首不重复取图/模糊）。
+    /// 上一次画上去的是哪一首。
     static var lastTrackId = ""
 
     static var didLogArtwork = false
+    static var didLogField = false
     static var didLogTitle = false
-    static var didLogBand = false
     static var didLogFrames = false
     static var didLogMissingCover = false
     static var didLogRestore = false
@@ -193,8 +149,6 @@ enum NowPlayingIOS27 {
     }
 
     /// 蹭 `DeclutterChrome` 既有的 0.3s 复查节拍（**不新开定时器**，本仓库纪律）。
-    ///
-    /// - Returns: 这一拍真的改了东西吗（给排查用）。
     @discardableResult
     static func reconcile() -> Bool {
         // 页面真的不在窗口里了 ⇒ 把写过的每一处还回去（cell 会被复用）。
@@ -214,6 +168,7 @@ enum NowPlayingIOS27 {
         guard isOnScreen(tilt, in: page) else { return }
         guard let shell = shell(in: tilt) else { return }
         _ = updateArtwork(shell, in: page)
+        _ = updateField(in: page)
     }
 
     // MARK: - 布局
@@ -231,11 +186,9 @@ enum NowPlayingIOS27 {
         artworkShell = shell
 
         var changed = updateArtwork(shell, in: page)
-        // 顺序：先摆底部那一坨（⋯ 要落到工具行正中间，得先有它的坐标），再摆顶部。
-        if placeBottomBlock(in: page) { changed = true }
-        if placeNavChrome(in: page) { changed = true }
+        if mountField(in: page) { changed = true }
         if placeTitleRow(in: page) { changed = true }
-        if mountBand(in: page) { changed = true }
+        if placeNavChrome(in: page) { changed = true }
         if !didLogFrames {
             didLogFrames = true
             logFrames(in: page)
@@ -245,14 +198,10 @@ enum NowPlayingIOS27 {
 
     /// 这一拍该用哪张封面。
     ///
-    /// **为什么不能每拍只靠 `visibleCover`**（日志 888 的一次实证）：我们自己把原生壳
-    /// `alpha = 0` 之后，`visibleCover` 的判据（`alpha > 0.01 || isHiddenByUs`）不再认它
-    /// —— 于是**每一拍都报 "no visible artwork"、整页的复查全部早退**。
-    /// 所以：先认**上一次画过的那张**（它还在窗口里、还在屏幕中间就用它），
-    /// 只有它没了才重新去树里挑。
-    ///
-    /// 另外还要**挡住"挑到离屏那张"**：日志 888 里出现过 `at 399,161` 和 `at -138252,161`
-    /// （横向翻页转场中途），画进那种格子里 = 屏幕上什么都没有（照片 162 就是）。
+    /// 1. **先认自己画过的那张**：我们把原生壳 `alpha = 0` 之后，`visibleCover` 的判据
+    ///    （`alpha > 0.01 || isHiddenByUs`）不再认它 —— 只靠它每拍都会早退。
+    /// 2. **挡住"挑到离屏那张"**：日志 888 里出现过 `at 399,161` 和 `at -138252,161`
+    ///    （横向翻页转场中途），画进那种格子 = 屏幕上什么都没有（照片 162）。
     private static func resolvedShell(in page: UIView) -> UIView? {
         if let shell = artworkShell, shell.window != nil, isOnScreen(shell, in: page) {
             return shell
@@ -265,7 +214,7 @@ enum NowPlayingIOS27 {
         return picked
     }
 
-    /// 这张封面的横向中线落在页面中间那一半里吗（转场中途的离屏格子会被挡掉）。
+    /// 这张视图的横向中线落在页面中间那一半里吗。
     private static func isOnScreen(_ view: UIView, in page: UIView) -> Bool {
         let rect = view.convert(view.bounds, to: page)
         guard rect.width > 1, rect.height > 1 else { return false }
@@ -283,9 +232,8 @@ enum NowPlayingIOS27 {
         // 图：缓存优先（按曲目 id），再退回树里真实那张。
         var image: UIImage? = NowPlayingLyricsPlate.rememberArtworkIfNeeded(in: page)
         if image == nil {
-            // ★ 换歌那一两拍，`rememberArtworkIfNeeded` 会**故意**返回 nil（树里还是上一首的图）。
-            //   这一拍就**不要**退回 `firstImage` —— 那会拿上一首的封面画到新壳的位置上
-            //   （闪一下别人的专辑）。让原生那张先露着，等图的下一拍。
+            // 换歌那一两拍，`rememberArtworkIfNeeded` 会**故意**返回 nil（树里还是上一首的图）。
+            // 这一拍**不要**退回 `firstImage` —— 那会把上一首的封面画到新壳的位置上。
             if trackChanged {
                 revealShells()
                 if let view = artworkView { view.isHidden = true }
@@ -295,7 +243,6 @@ enum NowPlayingIOS27 {
         }
 
         guard let image, let host = fullPageAncestor(of: shell, in: page) else {
-            // 还没有可用图（换歌那一两拍）：原生壳先露着、我们那张藏起来。
             revealShells()
             if let view = artworkView { view.isHidden = true }
             return false
@@ -312,8 +259,6 @@ enum NowPlayingIOS27 {
             view.clipsToBounds = true
             view.isUserInteractionEnabled = false
             view.accessibilityIdentifier = "eevee-ios27-artwork"
-            // 贴在 cell 的**最上层**：contentlayer 在 UI 栈下面，所以我们盖住的是原生封面那几层，
-            // 不会压到标题/进度/控件；而把原生那张（已 alpha=0）留在下面不影响任何事。
             host.addSubview(view)
             artworkHost = host
             artworkView = view
@@ -353,7 +298,7 @@ enum NowPlayingIOS27 {
         return changed
     }
 
-    /// 封面自己下沿的淡出：一条"白 → 白 → 透明"的渐变 mask（无硬边）。
+    /// 封面自己下沿的淡出：一条"白 → 白 → 透明"的渐变 mask（淡进下面的模糊拷贝，无硬边）。
     @discardableResult
     private static func applyArtworkFadeMask(to imageView: UIImageView) -> Bool {
         let mask: CAGradientLayer
@@ -381,11 +326,239 @@ enum NowPlayingIOS27 {
         return changed
     }
 
-    /// 顶部：藏掉 Spotify 的歌单名与向下箭头，画一根 AM 那种小横条。
+    // MARK: - 背景 field（pw 的配方）
+
+    /// 字段色底 + 压黑渐变 + 封面下沿的模糊拷贝。
+    ///
+    /// 层次（从下往上）：`solid`（字段色，整页）→ `black`（55% 起渐到纯黑，整页）→
+    /// `blur`（封面下沿那条模糊拷贝，落在方图底边之下）→ 我们那张封面（`updateArtwork` 加的）。
+    @discardableResult
+    private static func mountField(in page: UIView) -> Bool {
+        guard let shell = artworkShell,
+              let host = fullPageAncestor(of: shell, in: page) else { return false }
+
+        if let existing = fieldHost, existing.superview === host {
+            var changed = false
+            if existing.frame != page.bounds {
+                existing.frame = page.bounds
+                changed = true
+            }
+            if updateField(in: page) { changed = true }
+            if layoutField(in: existing) { changed = true }
+            return changed
+        }
+
+        teardownField()
+
+        let wrapper = UIView(frame: page.bounds)
+        wrapper.isUserInteractionEnabled = false
+        wrapper.accessibilityIdentifier = "eevee-ios27-field"
+
+        let solid = UIView(frame: page.bounds)
+        solid.isUserInteractionEnabled = false
+        solid.backgroundColor = .black
+        wrapper.addSubview(solid)
+
+        let black = UIView(frame: page.bounds)
+        black.isUserInteractionEnabled = false
+        black.accessibilityIdentifier = "eevee-ios27-black"
+        let blackGradient = CAGradientLayer()
+        blackGradient.name = "eevee-ios27-black-gradient"
+        blackGradient.colors = [UIColor.clear.cgColor, UIColor.black.cgColor]
+        black.layer.addSublayer(blackGradient)
+        wrapper.addSubview(black)
+
+        let blur = UIImageView(frame: .zero)
+        blur.contentMode = .scaleToFill
+        blur.clipsToBounds = true
+        blur.isUserInteractionEnabled = false
+        blur.accessibilityIdentifier = "eevee-ios27-field-blur"
+        let blurMask = CAGradientLayer()
+        blurMask.name = "eevee-ios27-blur-mask"
+        blurMask.colors = [
+            UIColor.white.cgColor,
+            UIColor.white.cgColor,
+            UIColor.clear.cgColor,
+        ]
+        blurMask.locations = [0, 0.45, 1]
+        blurMask.startPoint = CGPoint(x: 0.5, y: 0)
+        blurMask.endPoint = CGPoint(x: 0.5, y: 1)
+        blur.layer.mask = blurMask
+        wrapper.addSubview(blur)
+
+        // 插在**我们那张封面下面**（cell 里其它原生视图仍在更下面）。
+        if let art = artworkView, art.superview === host {
+            host.insertSubview(wrapper, belowSubview: art)
+        } else {
+            host.insertSubview(wrapper, at: 0)
+        }
+
+        fieldHost = wrapper
+        fieldSolid = solid
+        fieldBlur = blur
+        fieldBlack = black
+        _ = layoutField(in: wrapper)
+        _ = updateField(in: page)
+
+        if !didLogField {
+            didLogField = true
+            writeDebugLog(
+                "[\(logTag)] field mounted in \(NSStringFromClass(type(of: host)))"
+                    + " — pw's artwork field: black from \(Int(blackFromRatio * 100))% of the page"
+            )
+        }
+        return true
+    }
+
+    /// 子层的框（wrapper 是整页坐标）。
+    @discardableResult
+    private static func layoutField(in wrapper: UIView) -> Bool {
+        let bounds = wrapper.bounds
+        var changed = false
+        if let solid = fieldSolid, solid.frame != bounds {
+            solid.frame = bounds
+            changed = true
+        }
+        if let black = fieldBlack, black.frame != bounds {
+            black.frame = bounds
+            changed = true
+        }
+        if let black = fieldBlack,
+           let gradient = black.layer.sublayers?.first as? CAGradientLayer {
+            if gradient.frame != black.bounds {
+                gradient.frame = black.bounds
+                changed = true
+            }
+            let locations = [NSNumber(value: Double(blackFromRatio)), NSNumber(value: 1)]
+            if (gradient.locations as? [NSNumber]) != locations {
+                gradient.locations = locations
+                changed = true
+            }
+        }
+
+        let side = bounds.width
+        let strip = CGRect(
+            x: 0,
+            y: side,
+            width: side,
+            height: (side * stripFraction).rounded()
+        )
+        if let blur = fieldBlur {
+            if blur.frame != strip {
+                blur.frame = strip
+                changed = true
+            }
+            if let mask = blur.layer.mask as? CAGradientLayer, mask.frame != blur.bounds {
+                mask.frame = blur.bounds
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    /// 字段色 / 模糊拷贝：按曲目 id 只做一次；换歌交叉淡入。
+    @discardableResult
+    private static func updateField(in page: UIView) -> Bool {
+        let trackId = NowPlayingLyricsPlate.currentTrackId() ?? ""
+        if trackId == lastTrackId, fieldBlur?.image != nil { return false }
+        guard let shell = artworkShell,
+              let image = NowPlayingLyricsPlate.firstImage(in: shell)
+                  ?? NowPlayingLyricsPlate.rememberArtworkIfNeeded(in: page) else { return false }
+
+        let colour = fieldColour(from: image)
+        let strip = bottomStrip(of: image).flatMap { blurredImage($0) }
+
+        let apply = {
+            fieldSolid?.backgroundColor = colour
+            if let strip { fieldBlur?.image = strip }
+        }
+        // 只对我们自己的 wrapper 做交叉淡入（对外层 cell 做 transition 会连 Spotify 的内容一起快照）。
+        if let wrapper = fieldHost, wrapper.window != nil {
+            UIView.transition(with: wrapper, duration: 0.35, options: .transitionCrossDissolve, animations: apply)
+        } else {
+            apply()
+        }
+        return true
+    }
+
+    /// 封面**下沿**那一块（与原图同一比例）—— 放在方图底边之下 1:1 接上，所以没有接缝。
+    private static func bottomStrip(of image: UIImage) -> UIImage? {
+        guard let cgImage = image.cgImage else { return nil }
+        let height = CGFloat(cgImage.height)
+        let width = CGFloat(cgImage.width)
+        let cropHeight = max(1, height * stripFraction)
+        let rect = CGRect(x: 0, y: height - cropHeight, width: width, height: cropHeight)
+        guard let cropped = cgImage.cropping(to: rect) else { return nil }
+        return UIImage(cgImage: cropped, scale: image.scale, orientation: image.imageOrientation)
+    }
+
+    /// 从封面取"字段色"：封面**下沿**的平均色，再压到 pw 的两条上限（白字一定读得清）。
+    private static func fieldColour(from image: UIImage) -> UIColor {
+        let strip = bottomStrip(of: image) ?? image
+        let size = CGSize(width: 1, height: 1)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let flat = renderer.image { _ in
+            strip.draw(in: CGRect(origin: .zero, size: size))
+        }
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        flat.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0
+        UIColor(red: red, green: green, blue: blue, alpha: 1)
+            .getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
+        return UIColor(
+            hue: hue,
+            saturation: min(saturation, maxFieldSaturation),
+            brightness: min(max(brightness, 0.08), maxFieldBrightness),
+            alpha: 1
+        )
+    }
+
+    // MARK: - 标题行
+
+    /// 只把标题行的**左边距**收到 16pt（纵向留在原生位置）。
+    ///
+    /// 为什么不抬上去：前三轮把它抬到 `W+56`，而进度条在原生那一档 —— 中间就空出一大块
+    /// （照片 161）。不搬底部的前提下，唯一自洽的做法是"纵向不动"。
+    @discardableResult
+    private static func placeTitleRow(in page: UIView) -> Bool {
+        guard let row = titleRowView(in: page) else { return false }
+        titleRow = row
+
+        let key = ObjectIdentifier(row)
+        let base: CGAffineTransform
+        let natural: CGRect
+        if let recorded = titleRowBase, recorded.0 == key,
+           let rect = titleRowBaseRect, rect.0 == key {
+            base = recorded.1
+            natural = rect.1
+        } else {
+            base = row.transform
+            natural = NowPlayingLyricsPlate.untransformed(row, in: page)
+            titleRowBase = (key, base)
+            titleRowBaseRect = (key, natural)
+        }
+        guard natural.width > 1, natural.height > 1 else { return false }
+
+        let dx = (titleLeadInset - natural.minX).rounded()
+        let wanted = base.concatenating(CGAffineTransform(translationX: dx, y: 0))
+        guard row.transform != wanted else { return false }
+        row.transform = wanted
+        if !didLogTitle {
+            didLogTitle = true
+            writeDebugLog(
+                "[\(logTag)] title row inset to \(Int(titleLeadInset))pt"
+                    + " (kept at its native y \(Int(natural.minY)))"
+            )
+        }
+        return true
+    }
+
+    // MARK: - 顶部 chrome
+
+    /// 顶部：藏掉 Spotify 的歌单名与向下箭头，画一根 AM 那种小横条，⋯ 搬到工具行正中。
     ///
     /// 为什么不画一个"假关闭键"：AM 那根横条**本来就不是按钮**，是下拉把手的视觉提示；
-    /// 这一页的下拉关闭挂在列表自己的 pan recogniser 上，藏了箭头照样能划掉
-    /// （`NowPlayingOneScreen` 的文件头把这条链记过一遍）。
+    /// 这一页的下拉关闭挂在列表自己的 pan recogniser 上，藏了箭头照样能划掉。
     @discardableResult
     private static func placeNavChrome(in page: UIView) -> Bool {
         var changed = false
@@ -395,7 +568,13 @@ enum NowPlayingIOS27 {
             }
             if hideChrome(view) { changed = true }
         }
+        if placeContextMenu(in: page) { changed = true }
+        if placeGrabber(in: page) { changed = true }
+        return changed
+    }
 
+    @discardableResult
+    private static func placeGrabber(in page: UIView) -> Bool {
         let width: CGFloat = 44
         let height: CGFloat = 5
         let frame = CGRect(
@@ -404,42 +583,33 @@ enum NowPlayingIOS27 {
             width: width,
             height: height
         )
-        if placeContextMenu(in: page) { changed = true }
         if let existing = grabber, existing.superview === page {
-            if existing.frame != frame {
-                existing.frame = frame
-                changed = true
-            }
-        } else {
-            let view = UIView(frame: frame)
-            view.backgroundColor = UIColor.white.withAlphaComponent(0.45)
-            view.layer.cornerRadius = height / 2
-            view.isUserInteractionEnabled = false
-            view.accessibilityIdentifier = grabberIdentifier
-            page.addSubview(view)
-            page.bringSubviewToFront(view)
-            grabber = view
-            changed = true
+            guard existing.frame != frame else { return false }
+            existing.frame = frame
+            return true
         }
-        return changed
+        let view = UIView(frame: frame)
+        view.backgroundColor = UIColor.white.withAlphaComponent(0.45)
+        view.layer.cornerRadius = height / 2
+        view.isUserInteractionEnabled = false
+        view.accessibilityIdentifier = grabberIdentifier
+        page.addSubview(view)
+        page.bringSubviewToFront(view)
+        grabber = view
+        return true
     }
 
     /// 把 ⋯（`Context menu`）搬到**工具行正中间** —— 也就是 AM 那颗雷达标的落点。
     ///
-    /// 为什么不是搬到标题行右侧跟 ☆ 排：那个位置要先知道 ☆ 的真实坐标、还要把标题行收窄，
-    /// 而工具行正中间天然空着（原生 footer 只有左/右几颗），一眼就是个"功能位"。
-    ///
-    /// 风险与做法：
-    ///   · 它现在住在导航条里，往下搬 700+pt ⇒ 链上只要有 `clipsToBounds` 就会被切掉，
-    ///     所以先把链上的裁剪**放开**（记原值、收尾写回）；
-    ///   · 移出原来的 superview 之后命中测试够不到它 ⇒ 用 `NowPlayingTitleRelayView` 转发
-    ///     （与工具行那一颗同一个套路）。
+    /// 风险与做法：它住在导航条里，往下搬 700+pt ⇒ 链上只要有 `clipsToBounds` 就会被切掉，
+    /// 所以先把链上的裁剪**放开**（记原值、收尾写回）；移出原来的 superview 之后命中测试
+    /// 够不到它 ⇒ 用 `NowPlayingTitleRelayView` 转发（只覆盖它那一块，别处照常穿透）。
     @discardableResult
     private static func placeContextMenu(in page: UIView) -> Bool {
         guard let menu = NowPlayingLyricsPlate.findByIdentifier(contextMenuIdentifier, in: page) else {
             return false
         }
-        guard let footer = footerRow, footer.window != nil else { return false }
+        guard let footer = footerRowView(in: page), footer.window != nil else { return false }
 
         let footerFrame = footer.convert(footer.bounds, to: page)
         let target = CGPoint(x: page.bounds.width / 2, y: footerFrame.midY)
@@ -518,7 +688,6 @@ enum NowPlayingIOS27 {
         unclippedOriginals.removeAll()
     }
 
-    /// 按下去（记原值；每拍补一次 —— Spotify 会自己写回来）。
     private static func hideChrome(_ view: UIView) -> Bool {
         let key = ObjectIdentifier(view)
         if chromeAlphas[key] == nil {
@@ -530,251 +699,11 @@ enum NowPlayingIOS27 {
         return true
     }
 
-    /// 把底部那一坨往上抬、工具行留在原地（见 `bottomStack` 那段注释）。
-    ///
-    /// 为什么值得动它：AM 的进度条/控件在 550/623，而我们原生在 703/752 —— 标题挪到 470 之后，
-    /// 中间会空出一大片（照片 161 那块空就是这么来的）。整坨上移 130 之后，控件正好落到 622，
-    /// 标题行也一起上来（≈465，正好是我们想要的位置，`placeTitleRow` 只再补几 pt 的 x/微调）。
-    ///
-    /// 风险与兜底：工具行找不到（量不到 `ShareButtonNowPlayingView` 的祖先）就**不动任何东西**
-    /// —— 宁可还是旧比例，也不要出现"工具行飘在半空、又点不到"的页面。
-    @discardableResult
-    private static func placeBottomBlock(in page: UIView) -> Bool {
-        guard let stack = NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingLyricsPlate.bottomStackIdentifier,
-            in: page
-        ) else { return false }
-
-        // 工具行 = 分享键在 stack 里的那一层祖先。
-        let share = NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingLyricsPlate.shareButtonIdentifier,
-            in: page
-        )
-        var footer: UIView?
-        if let share {
-            var current: UIView? = share
-            while let view = current, view !== stack, view.superview !== nil {
-                if view.superview === stack { footer = view; break }
-                current = view.superview
-            }
-        }
-        guard let footer else { return false }
-
-        let lift = (page.bounds.height * bottomLiftRatio).rounded()
-        guard lift > 1 else { return false }
-
-        bottomStack = stack
-        var changed = applyLift(to: stack, lift: -lift, record: &bottomStackBase, key: "stack")
-        footerRow = footer
-        if applyLift(to: footer, lift: lift, record: &footerBase, key: "footer") { changed = true }
-
-        // 工具行现在在那一坨外面 ⇒ 点击靠替身（只覆盖工具行那一块，别处照常穿透）。
-        let relay: NowPlayingTitleRelayView
-        if let existing = footerRelay, existing.superview === page {
-            relay = existing
-        } else {
-            footerRelay?.removeFromSuperview()
-            let view = NowPlayingTitleRelayView(frame: page.bounds)
-            view.backgroundColor = .clear
-            view.accessibilityIdentifier = "eevee-ios27-footer-relay"
-            page.addSubview(view)
-            page.bringSubviewToFront(view)
-            footerRelay = view
-            relay = view
-        }
-        relay.row = footer
-        if relay.frame != page.bounds { relay.frame = page.bounds; changed = true }
-        return changed
-    }
-
-    /// 只对"第一次接管"记原 `transform`，之后每拍按同一笔账重写（幂等）。
-    private static func applyLift(
-        to view: UIView,
-        lift: CGFloat,
-        record: inout (ObjectIdentifier, CGAffineTransform)?,
-        key: String
-    ) -> Bool {
-        let identifier = ObjectIdentifier(view)
-        let base: CGAffineTransform
-        if let recorded = record, recorded.0 == identifier {
-            base = recorded.1
-        } else {
-            base = view.transform
-            record = (identifier, base)
-        }
-        let wanted = base.concatenating(CGAffineTransform(translationX: 0, y: lift))
-        guard view.transform != wanted else { return false }
-        view.transform = wanted
-        if !didLogTitle {
-            writeDebugLog(
-                "[\(logTag)] bottom block \(key) shifted \(Int(lift))pt (v2 spacing)"
-            )
-        }
-        return true
-    }
-
-    /// 把标题行挪到封面下沿那条带上。
-    @discardableResult
-    private static func placeTitleRow(in page: UIView) -> Bool {
-        guard let row = titleRowView(in: page) else { return false }
-        titleRow = row
-
-        let key = ObjectIdentifier(row)
-        let base: CGAffineTransform
-        let natural: CGRect
-        if let recorded = titleRowBase, recorded.0 == key,
-           let rect = titleRowBaseRect, rect.0 == key {
-            base = recorded.1
-            natural = rect.1
-        } else {
-            base = row.transform
-            natural = NowPlayingLyricsPlate.untransformed(row, in: page)
-            titleRowBase = (key, base)
-            titleRowBaseRect = (key, natural)
-        }
-        guard natural.width > 1, natural.height > 1 else { return false }
-
-        let coverSide = page.bounds.width
-        var top = coverSide + titleTopGap
-        if let progressTop = progressTop(in: page) {
-            top = min(top, progressTop - natural.height - 8)
-        }
-        top = max(top, coverSide * 0.55)
-
-        let dx = (titleLeadInset - natural.minX).rounded()
-        let dy = (top - natural.minY).rounded()
-        let wanted = base.concatenating(CGAffineTransform(translationX: dx, y: dy))
-
-        guard row.transform != wanted else { return false }
-        row.transform = wanted
-        if !didLogTitle {
-            didLogTitle = true
-            writeDebugLog(
-                "[\(logTag)] title row moved — \(Int(natural.minX)),\(Int(natural.minY))"
-                    + " → \(Int(titleLeadInset)),\(Int(top)) (over the artwork's fade band)"
-            )
-        }
-        return true
-    }
-
-    /// 模糊带 + 压黑渐变（挂在封面那个整页 cell 的最底层，靠 page 坐标一次算好）。
-    @discardableResult
-    private static func mountBand(in page: UIView) -> Bool {
-        guard let shell = artworkShell, let host = fullPageAncestor(of: shell, in: page) else {
-            return false
-        }
-
-        let width = page.bounds.width
-        let height = page.bounds.height
-
-        if let existing = bandHost, existing.superview === host {
-            var changed = false
-            if existing.frame != CGRect(x: 0, y: 0, width: width, height: height) {
-                existing.frame = CGRect(x: 0, y: 0, width: width, height: height)
-                changed = true
-            }
-            if let image = bandImage, updateBandImage(image, shell: shell) { changed = true }
-            if let scrim { layoutBandLayers(in: existing, scrim: scrim) }
-            return changed
-        }
-
-        teardownBand()
-
-        let wrapper = UIView(frame: CGRect(x: 0, y: 0, width: width, height: height))
-        wrapper.isUserInteractionEnabled = false
-        wrapper.accessibilityIdentifier = "eevee-ios27-band"
-
-        let imageView = UIImageView(frame: .zero)
-        imageView.contentMode = .scaleAspectFill
-        imageView.clipsToBounds = true
-        imageView.isUserInteractionEnabled = false
-        imageView.accessibilityIdentifier = "eevee-ios27-band-image"
-        wrapper.addSubview(imageView)
-
-        // 模糊底自己的淡出（上不透明、下透明）—— 这是"没有硬边"的关键。
-        let blurMask = CAGradientLayer()
-        blurMask.name = "eevee-ios27-blur-mask"
-        blurMask.colors = [
-            UIColor.white.cgColor,
-            UIColor.white.cgColor,
-            UIColor.clear.cgColor,
-        ]
-        blurMask.locations = [0, 0.55, 1]
-        blurMask.startPoint = CGPoint(x: 0.5, y: 0)
-        blurMask.endPoint = CGPoint(x: 0.5, y: 1)
-        imageView.layer.mask = blurMask
-
-        let scrimView = UIView(frame: .zero)
-        scrimView.isUserInteractionEnabled = false
-        scrimView.accessibilityIdentifier = "eevee-ios27-scrim"
-        let gradient = CAGradientLayer()
-        gradient.name = "eevee-ios27-scrim-gradient"
-        gradient.colors = [
-            UIColor.black.withAlphaComponent(0.10).cgColor,
-            UIColor.black.withAlphaComponent(0.45).cgColor,
-            UIColor.black.withAlphaComponent(0.92).cgColor,
-        ]
-        gradient.locations = [0, 0.55, 1]
-        scrimView.layer.addSublayer(gradient)
-        wrapper.addSubview(scrimView)
-
-        // 同一条：整页 cell 的最上层（它在 UI 栈下面，见文件头）。
-        host.addSubview(wrapper)
-        bandHost = wrapper
-        bandImage = imageView
-        scrim = scrimView
-        layoutBandLayers(in: wrapper, scrim: scrimView)
-        _ = updateBandImage(imageView, shell: shell)
-
-        if !didLogBand {
-            didLogBand = true
-            writeDebugLog(
-                "[\(logTag)] blurred backdrop mounted in \(NSStringFromClass(type(of: host)))"
-                    + " — masked blur from \(Int(width * blurTopRatio))"
-                    + " to \(Int(width * blurBottomRatio))"
-            )
-        }
-        return true
-    }
-
-    /// 模糊底与 scrim 的框（同一个矩形：0.50W…1.35W），以及它俩自己那条 mask 的尺寸。
-    private static func layoutBandLayers(in wrapper: UIView, scrim scrimView: UIView) {
-        let width = wrapper.bounds.width
-        let top = (width * blurTopRatio).rounded()
-        let bottom = (width * blurBottomRatio).rounded()
-        let rect = CGRect(x: 0, y: top, width: width, height: max(40, bottom - top))
-
-        if let image = bandImage {
-            if image.frame != rect { image.frame = rect }
-            if let mask = image.layer.mask as? CAGradientLayer, mask.frame != image.bounds {
-                mask.frame = image.bounds
-            }
-        }
-        if scrimView.frame != rect { scrimView.frame = rect }
-        if let gradient = scrimView.layer.sublayers?.first as? CAGradientLayer,
-           gradient.frame != scrimView.bounds {
-            gradient.frame = scrimView.bounds
-        }
-    }
-
-    /// 模糊带那张图：与封面同一张，按曲目 id 只做一次。
-    @discardableResult
-    private static func updateBandImage(_ imageView: UIImageView, shell: UIView) -> Bool {
-        let trackId = NowPlayingLyricsPlate.currentTrackId() ?? ""
-        if trackId == lastTrackId, imageView.image != nil { return false }
-        guard let image = NowPlayingLyricsPlate.firstImage(in: shell),
-              let blurred = blurredImage(image) else { return false }
-        imageView.image = blurred
-        return true
-    }
-
     // MARK: - 原生壳的显隐
 
-    /// 把原生那张壳按下去（记原值；每拍补一次 —— Spotify 会自己把 `alpha` 写回来）。
     private static func hideShell(_ shell: UIView) {
         let key = ObjectIdentifier(shell)
         if shellAlphas[key] == nil {
-            // 换歌转场里新壳可能先以 0 出现 ⇒ 原值不可信时按 1 记（关开关要能看见）。
             let original = shell.alpha
             shellAlphas[key] = original > 0.01 ? original : 1
             hiddenShells.add(shell)
@@ -782,7 +711,6 @@ enum NowPlayingIOS27 {
         if shell.alpha != 0 { shell.alpha = 0 }
     }
 
-    /// 让原生壳露回来（还没有可用图时 / 收尾时）。
     private static func revealShells() {
         for shell in hiddenShells.allObjects {
             guard let original = shellAlphas[ObjectIdentifier(shell)] else { continue }
@@ -794,10 +722,9 @@ enum NowPlayingIOS27 {
 
     /// 关开关 / 离开页面：把写过的每一处写回去，拆掉我们自己的视图。
     static func restore(reason: String) {
-        let hadState = bandHost != nil || artworkView != nil || titleRowBase != nil
-            || bottomStackBase != nil || footerRelay != nil || grabber != nil
-            || menuBase != nil || menuRelay != nil || !unclippedOriginals.isEmpty
-            || !shellAlphas.isEmpty || !chromeAlphas.isEmpty
+        let hadState = fieldHost != nil || artworkView != nil || titleRowBase != nil
+            || grabber != nil || menuBase != nil || menuRelay != nil
+            || !unclippedOriginals.isEmpty || !shellAlphas.isEmpty || !chromeAlphas.isEmpty
         if didLogRestore || !hadState {
             clearState()
             return
@@ -805,16 +732,15 @@ enum NowPlayingIOS27 {
         didLogRestore = true
 
         revealShells()
-        if let row = titleRow, let recorded = titleRowBase,
-           recorded.0 == ObjectIdentifier(row), row.transform != recorded.1 {
-            row.transform = recorded.1
-        }
         revealChrome()
         teardownContextMenu()
         grabber?.removeFromSuperview()
         grabber = nil
-        teardownBottomBlock()
-        teardownBand()
+        if let row = titleRow, let recorded = titleRowBase,
+           recorded.0 == ObjectIdentifier(row), row.transform != recorded.1 {
+            row.transform = recorded.1
+        }
+        teardownField()
         teardownArtwork()
 
         writeDebugLog("[\(logTag)] restored (\(reason)) — native cover, title row and our views are back")
@@ -825,31 +751,32 @@ enum NowPlayingIOS27 {
         artworkShell = nil
         artworkHost = nil
         artworkView = nil
+        artworkMask = nil
         titleRow = nil
         titleRowBase = nil
         titleRowBaseRect = nil
-        bottomStack = nil
-        bottomStackBase = nil
-        footerRow = nil
-        footerBase = nil
-        footerRelay = nil
         grabber = nil
         menuView = nil
         menuBase = nil
         menuRelay = nil
+        fieldHost = nil
+        fieldSolid = nil
+        fieldBlur = nil
+        fieldBlack = nil
+        lastTrackId = ""
         hiddenShells.removeAllObjects()
         shellAlphas.removeAll()
         hiddenChrome.removeAllObjects()
         chromeAlphas.removeAll()
-        lastTrackId = ""
         didLogArtwork = false
+        didLogField = false
         didLogTitle = false
-        didLogBand = false
         didLogFrames = false
+        didLogMissingCover = false
         didLogRestore = false
+        didLogMenu = false
     }
 
-    /// ⋯ 的位移撤销 + 裁剪写回 + 替身摘掉。
     private static func teardownContextMenu() {
         if let view = menuView, let recorded = menuBase,
            recorded.0 == ObjectIdentifier(view), view.transform != recorded.1 {
@@ -860,7 +787,6 @@ enum NowPlayingIOS27 {
         restoreClips()
     }
 
-    /// 顶部 chrome 的 `alpha` 写回原值。
     private static func revealChrome() {
         for view in hiddenChrome.allObjects {
             guard let original = chromeAlphas[ObjectIdentifier(view)] else { continue }
@@ -868,24 +794,12 @@ enum NowPlayingIOS27 {
         }
     }
 
-    private static func teardownBottomBlock() {
-        if let stack = bottomStack, let recorded = bottomStackBase,
-           recorded.0 == ObjectIdentifier(stack), stack.transform != recorded.1 {
-            stack.transform = recorded.1
-        }
-        if let footer = footerRow, let recorded = footerBase,
-           recorded.0 == ObjectIdentifier(footer), footer.transform != recorded.1 {
-            footer.transform = recorded.1
-        }
-        footerRelay?.removeFromSuperview()
-        footerRelay = nil
-    }
-
-    private static func teardownBand() {
-        bandHost?.removeFromSuperview()
-        bandHost = nil
-        bandImage = nil
-        scrim = nil
+    private static func teardownField() {
+        fieldHost?.removeFromSuperview()
+        fieldHost = nil
+        fieldSolid = nil
+        fieldBlur = nil
+        fieldBlack = nil
     }
 
     private static func teardownArtwork() {
@@ -929,14 +843,21 @@ enum NowPlayingIOS27 {
         return label.superview?.superview
     }
 
-    private static func progressTop(in page: UIView) -> CGFloat? {
-        guard let unit = NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingLyricsPlate.progressUnitIdentifier,
+    /// 工具行：分享键在 `npv.bottomStackView` 里的那一层祖先。
+    private static func footerRowView(in page: UIView) -> UIView? {
+        guard let stack = NowPlayingLyricsPlate.findByIdentifier(
+            NowPlayingLyricsPlate.bottomStackIdentifier,
+            in: page
+        ), let share = NowPlayingLyricsPlate.findByIdentifier(
+            NowPlayingLyricsPlate.shareButtonIdentifier,
             in: page
         ) else { return nil }
-        let frame = NowPlayingLyricsPlate.untransformed(unit, in: page)
-        guard frame.minY > 0, frame.minY < page.bounds.height else { return nil }
-        return frame.minY
+        var current: UIView? = share
+        while let view = current, view !== stack {
+            if view.superview === stack { return view }
+            current = view.superview
+        }
+        return nil
     }
 
     /// 封面所在的**整页**祖先（contentlayer 的 cell，414×896）。
@@ -954,7 +875,7 @@ enum NowPlayingIOS27 {
         return nil
     }
 
-    /// 一次性把各行的真实坐标打出来 —— v2 排版（进度条/控件/工具行）靠这几个数，不靠猜。
+    /// 一次性把各行的真实坐标打出来（排查 / 下一轮排版靠它）。
     private static func logFrames(in page: UIView) {
         func text(_ identifier: String) -> String {
             guard let view = NowPlayingLyricsPlate.findByIdentifier(identifier, in: page) else {
@@ -984,7 +905,7 @@ enum NowPlayingIOS27 {
         writeDebugLog("[\(logTag)] frames — " + parts.joined(separator: " · "))
     }
 
-    /// 高斯模糊（只给小带子用；一换歌才一次，不缓存 `CIContext`）。
+    /// 高斯模糊（按原图宽度的 3.5%；一换歌才一次，不缓存 `CIContext`）。
     private static func blurredImage(_ image: UIImage) -> UIImage? {
         guard let cgImage = image.cgImage else { return nil }
         let input = CIImage(cgImage: cgImage)

@@ -95,11 +95,10 @@ enum NowPlayingPageOverlay {
     /// ★ 2026-10-22：音量条是「修改Spotify听歌页布局」的**二级菜单**项 ⇒
     /// 总开关关着时它也不该出现（`nowPlayingLayout && nowPlayingVolume`）。
     /// 关总开关会把音量条一起撤掉，但**不动**这颗子开关存的值（再打开时还是用户上次的选择）。
-    /// ★ 2026-10-23：新的「iOS 27 听歌页」**自带**这一行（AM 那张图里就有）——
-    /// 不再受那颗「展示音量条」子开关管；位置也换到「控件行与 footer 之间」。
-    static var isEnabled: Bool {
-        (UserDefaults.nowPlayingLayout && UserDefaults.nowPlayingVolume) || UserDefaults.nowPlayingIOS27
-    }
+    /// ★ 2026-10-23 四轮：iOS 27 版**不再**自带这一行了 —— 底部那一坨不再上挪，
+    /// 控件行与工具行之间根本没有 28pt 的空隙；强行塞进去只会压在播放键上。
+    /// 等下一轮用 pw 那套“裸字形 + 三颗工具行”重排底部时，再把它按 AM 的位置放回去。
+    static var isEnabled: Bool { UserDefaults.nowPlayingLayout && UserDefaults.nowPlayingVolume }
 
     // MARK: - 对外入口
 
@@ -401,10 +400,7 @@ enum NowPlayingPageOverlay {
         let bottomLimit = page.bounds.height - page.safeAreaInsets.bottom - 4
 
         var y: CGFloat
-        if let ios27Top = ios27VolumeTop(in: page) {
-            // iOS 27 版：夹在传输键与 footer 中间（AM 的音量条就在那一挡）。
-            y = ios27Top
-        } else if let anchor = locateBottomAnchor(in: page) {
+        if let anchor = locateBottomAnchor(in: page) {
             let frame = anchor.convert(anchor.bounds, to: overlay)
             y = frame.maxY + gapBelowAnchor
         } else {
@@ -416,51 +412,6 @@ enum NowPlayingPageOverlay {
             y = max(0, bottomLimit - volumeRowHeight)
         }
         return CGRect(x: x, y: y, width: width, height: volumeRowHeight)
-    }
-
-    /// iOS 27 版音量条的顶边：播放键下沿与 footer 上沿之间那一小段空白。
-    ///
-    /// 两个锤都是 id（`SPTNowPlayingPlayButton` / `ShareButtonNowPlayingView`），
-    /// 且都用 `untransformed` 量——老版布局会把分享键摆到控件条上，
-    /// 但新版布局里它还在原位（那才是 footer）。
-    /// 量不到就返回 nil（退回原来那条“锚点下面”的落点）。
-    private static func ios27VolumeTop(in page: UIView) -> CGFloat? {
-        guard UserDefaults.nowPlayingIOS27 else { return nil }
-
-        // 两个 id 写在这里（与 `bottomAnchorIdentifier` 同一条纪律：这一层按"有 id 的锚点"定位，
-        // 不跨模块借 `NowPlayingLyricsPlate` 的静态成员 —— 那个 enum 是 `@MainActor`，
-        // 而这一层不是，借一次就是一条 actor 隔离的编译错）。
-        guard let play = findById("SPTNowPlayingPlayButton", in: page),
-              let share = findById("ShareButtonNowPlayingView", in: page) else { return nil }
-
-        let playFrame = untransformed(play, in: page)
-        let shareFrame = untransformed(share, in: page)
-        guard playFrame.maxY > 0, shareFrame.minY > playFrame.maxY else { return nil }
-        // 摆在那段空隙的**正中**（AM：控件 623 / 音量 742 / 工具行 802；我们新版把这坨抬上去、
-        // 工具行留在原地之后，空隙是 686…789 ⇒ 这一行落在 ≈723，正好在两者之间）。
-        let top = (playFrame.maxY + shareFrame.minY) / 2 - volumeRowHeight / 2
-        return max(0, top)
-    }
-
-    /// 按 `accessibilityIdentifier` 的有界广度优先（不缓存：这条一拍只跑一次、只找两颗）。
-    private static func findById(_ identifier: String, in root: UIView) -> UIView? {
-        var visited = 0
-        var queue: [UIView] = [root]
-        while !queue.isEmpty, visited < maxNodes {
-            let view = queue.removeFirst()
-            visited += 1
-            if view.accessibilityIdentifier == identifier { return view }
-            queue.append(contentsOf: view.subviews)
-        }
-        return nil
-    }
-
-    /// 去掉我们自己写上去的位移之后的 frame（老版布局会把分享键搬到控件条上，
-    /// 新版布局里它还在原位 —— 两个版本共用这一条）。
-    private static func untransformed(_ view: UIView, in host: UIView) -> CGRect {
-        let frame = view.convert(view.bounds, to: host)
-        let t = view.transform
-        return frame.offsetBy(dx: -t.tx, dy: -t.ty)
     }
 
     /// `npv.bottomStackView` 在哪：**页面 → 播放器列表 → 窗口**，三跳。

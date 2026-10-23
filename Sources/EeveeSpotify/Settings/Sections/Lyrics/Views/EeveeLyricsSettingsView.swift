@@ -301,23 +301,28 @@ struct EeveeLyricsSettingsView: View {
                     Button("+0.1s") { adjustCurrentSong(by: 100) }
                     Spacer()
                     if currentSongHasOverride {
-                        Button("netease_offset_clear_song".localized) {
+                        // ★★ 2026-10-23（用户：「没看到保存/删除按键」）：单曲偏移一直是
+                        // 「一按 ± 就立刻存」的，但之前只有左滑删除 —— 看不见就等于没有。
+                        // 这里给一颗**明摆着的**删除键。
+                        Button {
                             NeteaseTimingOffset.clearOverride(forTrackId: currentSongTrackId)
                             reapplyNeteaseTimingOffset()
                             refreshCurrentSongOffset()
+                        } label: {
+                            Image(systemName: "trash")
                         }
+                        .foregroundColor(.red)
+                        .accessibilityLabel(Text("netease_offset_delete_song".localized))
+                    } else {
+                        // 没有覆盖时给一颗显式「保存」：按一下就为这一首建一条（存当前生效值）。
+                        Button("netease_offset_save_song".localized) { saveCurrentSong() }
+                            .font(.caption)
+                        Text("netease_offset_autosave_hint".localized)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
                 .buttonStyle(.borderless)
-            }
-
-            if !NeteaseTimingOffset.trackOffsets.isEmpty {
-                Button("netease_offset_clear_all".localized) {
-                    NeteaseTimingOffset.clearAllOverrides()
-                    reapplyNeteaseTimingOffset()
-                    refreshCurrentSongOffset()
-                }
-                .foregroundColor(.red)
             }
         } footer: {
             Text("netease_offset_description".localized)
@@ -327,8 +332,18 @@ struct EeveeLyricsSettingsView: View {
             refreshCurrentSongOffset()
         }
 
-        if !savedSongOffsets.isEmpty {
-            Section(header: Text("netease_offset_saved".localized)) {
+        // ★★ 2026-10-23：这一节**永远显示**（以前只有存在条目时才出现 ⇒ 用户以为"没有保存"）。
+        // 空的时候给一句"怎么才能存进去"，有数据时每首一行（当前播放那首在上面单独一行）。
+        Section(header: Text("netease_offset_saved".localized)) {
+            if savedSongOffsets.isEmpty {
+                // 当前播放这首是**单独一行**放在上一节的（列表里不重复它）⇒ 刚保存完当前歌时
+                // 这里看起来还是"空"的。用一句不同的话说明，免得用户以为没存上。
+                Text(currentSongHasOverride
+                     ? "netease_offset_saved_only_current".localized
+                     : "netease_offset_saved_empty".localized)
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            } else {
                 ForEach(savedSongOffsets) { song in
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -343,11 +358,31 @@ struct EeveeLyricsSettingsView: View {
                         Spacer()
                         Button("-0.1s") { adjustSavedSong(song, by: -100) }
                         Button("+0.1s") { adjustSavedSong(song, by: 100) }
+                        Button {
+                            NeteaseTimingOffset.clearOverride(forTrackId: song.id)
+                            reapplyNeteaseTimingOffset()
+                            refreshCurrentSongOffset()
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .foregroundColor(.red)
+                        .accessibilityLabel(Text("netease_offset_delete_song".localized))
                     }
                     .buttonStyle(.borderless)
                 }
                 .onDelete(perform: deleteSavedSongs)
             }
+
+            if !NeteaseTimingOffset.trackOffsets.isEmpty {
+                Button("netease_offset_clear_all".localized) {
+                    NeteaseTimingOffset.clearAllOverrides()
+                    reapplyNeteaseTimingOffset()
+                    refreshCurrentSongOffset()
+                }
+                .foregroundColor(.red)
+            }
+        } footer: {
+            Text("netease_offset_saved_description".localized)
         }
     }
 
@@ -409,6 +444,22 @@ struct EeveeLyricsSettingsView: View {
         let base = NeteaseTimingOffset.offsetMs(forTrackId: currentSongTrackId)
         NeteaseTimingOffset.setOffset(
             base + deltaMs,
+            forTrackId: currentSongTrackId,
+            trackTitle: currentSongDisplayName
+        )
+        reapplyNeteaseTimingOffset()
+        refreshCurrentSongOffset()
+    }
+
+    /// 显式的「保存」：为当前这首建一条单曲覆盖（值 = 当前生效值）。
+    ///
+    /// 有它是因为 ±0.1s 虽然**当场就存**，但用户看不到"保存"这个动作，以为没存上。
+    /// 存完 `currentSongHasOverride` 变真 ⇒ 这颗键换成删除键，列表里也多一行。
+    private func saveCurrentSong() {
+        guard !currentSongTrackId.isEmpty else { return }
+        let value = NeteaseTimingOffset.offsetMs(forTrackId: currentSongTrackId)
+        NeteaseTimingOffset.setOffset(
+            value,
             forTrackId: currentSongTrackId,
             trackTitle: currentSongDisplayName
         )

@@ -889,6 +889,11 @@ enum NowPlayingIOS27 {
         )
         guard stack.transform != wanted else { return false }
         stack.transform = wanted
+        // ★ 2026-10-24（真机照片 1：底部挤在一起）：音量行是按
+        //   「传输行下沿 + 工具行上沿」中点算的（`NowPlayingPageOverlay.ios27VolumeY`）。
+        //   这一坨上移 55pt 之后它必须跟着重算，否则会停在**上移前**的
+        //   785…813 —— 正压在工具行字形（790）上。只在 transform 变化那一拍调一次。
+        NowPlayingPageOverlay.reapply()
 
         if !didLogBottomStack {
             didLogBottomStack = true

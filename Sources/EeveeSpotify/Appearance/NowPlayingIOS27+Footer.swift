@@ -72,7 +72,13 @@ extension NowPlayingIOS27 {
     /// 字形颜色（AM 是隐约的浅白）。
     static let footerGlyphTint = UIColor(white: 1, alpha: 0.92)
     /// 没有歌词入口时左边那颗的暗度。
-    static let footerGlyphDisabledAlpha: CGFloat = 0.35
+    ///
+    /// ★ 2026-10-24（用户：「不开实验性 fo 的情况下，这个歌词点不动」）：
+    ///   舞台关着时这颗键是**转发给 Spotify 的 `ShowLyricsButton`**，而 iOS 27 这一页
+    ///   根本没有那颗按钮（日志：`lyrics entry missing`）⇒ 按下去没反应。
+    ///   留着一颗死键只会让人以为坏了，所以改成 ⇒ **完全隐藏**（alpha 0）。
+    ///   打开舞台（这颗开关）它就回来。
+    static let footerGlyphDisabledAlpha: CGFloat = 0
 
     /// 工具行三颗字形**相对原生那一行**下移多少。
     ///
@@ -263,6 +269,8 @@ extension NowPlayingIOS27 {
                 glyph.frame = frame
                 changed = true
             }
+            // ★ 2026-10-24：舞台关着 + 找不到原生键 ⇒ **不画**（见 `footerGlyphDisabledAlpha`）。
+            //   这一档叫不上“变暗”了，就是真的没有歌词入口。
             let wantedAlpha: CGFloat = (name == "lyrics" && !footerLyricsAvailable)
                 ? footerGlyphDisabledAlpha : 1
             if glyph.alpha != wantedAlpha {
@@ -334,7 +342,7 @@ extension NowPlayingIOS27 {
                         ? " = our lyrics stage (LyricsStageEntry)"
                         : (footerLyricsAvailable
                             ? " = \(name(lyricsTarget))"
-                            : " missing (left glyph dimmed)"))
+                            : " missing (left glyph hidden)"))
             )
         }
         return changed

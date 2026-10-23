@@ -458,7 +458,7 @@ extension NowPlayingIOS27 {
                 control.sendActions(for: .touchDown)
                 control.sendActions(for: .touchUpInside)
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                 onMainThreadSync {
                     guard !NowPlayingIOS27.spotifyLyricsPageIsOpen() else { return }
                     writeDebugLog(

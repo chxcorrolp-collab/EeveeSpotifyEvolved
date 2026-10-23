@@ -38,11 +38,15 @@ struct LyricsStageRootView: View {
 
     /// 正文顶部让出的高度（壳：把手 + 曲名 + 歌手）。
     ///
+    /// 132 是按最坏情况倒推的：刘海机上 `safeArea.top ≈ 59`，把手在 +4、曲名从 +18 起、
+    /// 两行文字 ≈ 40 ⇒ 壳的下沿到 117；再留 15 呼吸才是正文的起点。
+    ///
     /// ⚠️ 给 `AppleMusicLyricsPage` 的 `contentInsets.top` 要**减半**再传：
     ///   它内部把 `contentInsets.top` 加了**两次**（`headerContent == nil` 那条分支），
-    ///   见 `AppleMusicLyricsPage.body` 里 `scrollInsets` 的算法。传 52 ⇒ 实际 104。
-    private let headerBand: CGFloat = 104
-    private let footerBand: CGFloat = 64
+    ///   见 `AppleMusicLyricsPage.body` 里 `scrollInsets` 的算法。传 66 ⇒ 实际 132。
+    private let headerBand: CGFloat = 132
+    /// 底部让出的高度（歌词署名那一行 + 安全区）。
+    private let footerBand: CGFloat = 72
 
     var body: some View {
         GeometryReader { geometry in

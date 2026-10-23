@@ -163,7 +163,11 @@ final class LyricsStage {
             WordByWordPositionResolver.shared.currentPositionSeconds()
         }
         tick.onTick = { [weak self] seconds in
-            self?.handleTick(seconds)
+            // ⚠️ 写成"单表达式 `self?…`"也能编（返回值被丢弃），但那个返回类型是 `Void?`，
+            //    容易在严格并发那一轮被当成 `Task<Void?, Never>` 之类的推断问题；
+            //    这里显式展开，读起来也清楚：拿不到 self 就直接走。
+            guard let self else { return }
+            self.handleTick(seconds)
         }
         controller.view.addSubview(tick)
         tick.start()
@@ -336,8 +340,8 @@ final class LyricsStage {
             }
         }
 
-        guard changed, rebuild, let hostingController else { return }
-        hostingController.rootView = makeRootView()
+        guard changed, rebuild, let controller = hostingController else { return }
+        controller.rootView = makeRootView()
     }
 
     private func makeRootView() -> LyricsStageRootView {
@@ -393,14 +397,20 @@ final class LyricsStage {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.suspendForBackground() }
+            Task { @MainActor in
+                guard let self else { return }
+                self.suspendForBackground()
+            }
         })
         observers.append(center.addObserver(
             forName: UIApplication.didBecomeActiveNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.resumeFromBackground() }
+            Task { @MainActor in
+                guard let self else { return }
+                self.resumeFromBackground()
+            }
         })
     }
 

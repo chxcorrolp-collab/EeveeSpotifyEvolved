@@ -467,10 +467,15 @@ extension NowPlayingIOS27 {
         let controlClass = NSStringFromClass(type(of: control))
         return {
             writeDebugLog("[\(logTag)] \(label): sendActions → \(controlClass)")
-            // 先 `.touchDown` 再 `.touchUpInside`：有些控件只在"按下过"之后才认抬手
-            // （`UIControl.sendActions` 只是逐个事件派发 target/action，发两个是安全的）。
-            control.sendActions(for: .touchDown)
-            control.sendActions(for: .touchUpInside)
+            // ⚠️ 这个闭包存进的是**非隔离**的 `() -> Void`（替身的 `actionZones`）——
+            //    这里用 `onMainThreadSync` 把 `@MainActor` 的操作显式包住，不靠
+            //    "闭包继承外围隔离"那条推断（上一轮就是这类推断让包白跑）。
+            onMainThreadSync {
+                // 先 `.touchDown` 再 `.touchUpInside`：有些控件只在"按下过"之后才认抬手
+                // （`UIControl.sendActions` 只是逐个事件派发 target/action，发两个是安全的）。
+                control.sendActions(for: .touchDown)
+                control.sendActions(for: .touchUpInside)
+            }
         }
     }
 

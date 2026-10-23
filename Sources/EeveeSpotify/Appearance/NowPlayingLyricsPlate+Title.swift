@@ -370,29 +370,39 @@ extension NowPlayingLyricsPlate {
         //    已经写着后缀的那一行要**重新按新宽度裁一次**，否则用户会在窄版式里继续看到截断。
         guard !base.isEmpty else { return }
 
-        // ★★ 2026-10-23：宽度**缓存**（见 `artistFitWidth` 的说明）—— 每拍重算会被我们自己
-        //    写短的文本反馈回来，越算越小。只有换曲 / 换展开状态 / 换标签 / 文本被 binder
-        //    写回原样时才重算一次；重算时标签上写的是 Spotify 给的**原歌手名**（没有被我们裁过）。
+        // ★★ 2026-10-23（用户：「不能靠滚动来全展示么」）：歌手那一行**本来就是 MarqueeLabel**
+        //    （`now-playing-subtitle-label`）。所以这里**不裁**：写完整的 `歌手（提供商）`，
+        //    让它自己的 marquee 把后半段（提供商）滚出来 —— 裁掉才是"永远看不到"。
+        //    普通 `UILabel` 没有滚动能力，仍然按可见宽度裁（见 `fittedArtistLine`）。
+        let isMarqueeLabel = NSStringFromClass(type(of: label)).contains("Marquee")
         let trackId = currentTrackId() ?? ""
-        let stateKey = door.isOpen ? "open" : "closed"
-        let labelKey = "\(trackId)|\(stateKey)|\(String(describing: ObjectIdentifier(label)))"
-        let alreadyHasOurs = lastArtistSuffix.map { current.hasSuffix($0) } ?? false
-        var maxWidth = artistFitWidth
-        if labelKey != artistFitWidthKey || maxWidth <= 20 || !alreadyHasOurs {
-            let measured = visibleArtistLineWidth(label, in: page)
-            if measured > 20 {
-                maxWidth = measured
-                artistFitWidth = measured
-                artistFitWidthKey = labelKey
-            } else {
-                maxWidth = measured
+        let wanted: String
+        if isMarqueeLabel {
+            wanted = base + suffix
+        } else {
+            // ★★ 2026-10-23：宽度**缓存**（见 `artistFitWidth` 的说明）—— 每拍重算会被我们自己
+            //    写短的文本反馈回来，越算越小。只有换曲 / 换展开状态 / 换标签 / 文本被 binder
+            //    写回原样时才重算一次；重算时标签上写的是 Spotify 给的**原歌手名**（没有被我们裁过）。
+            let stateKey = door.isOpen ? "open" : "closed"
+            let labelKey = "\(trackId)|\(stateKey)|\(String(describing: ObjectIdentifier(label)))"
+            let alreadyHasOurs = lastArtistSuffix.map { current.hasSuffix($0) } ?? false
+            var maxWidth = artistFitWidth
+            if labelKey != artistFitWidthKey || maxWidth <= 20 || !alreadyHasOurs {
+                let measured = visibleArtistLineWidth(label, in: page)
+                if measured > 20 {
+                    maxWidth = measured
+                    artistFitWidth = measured
+                    artistFitWidthKey = labelKey
+                } else {
+                    maxWidth = measured
+                }
             }
+            wanted = fittedArtistLine(base: base, suffix: suffix, maxWidth: maxWidth, label: label)
         }
-        let wanted = fittedArtistLine(base: base, suffix: suffix, maxWidth: maxWidth, label: label)
         if current != wanted {
             setLabelText(wanted, on: label)
 
-            if wanted != base + suffix {
+            if !isMarqueeLabel, wanted != base + suffix {
                 if loggedArtistTruncationTrack != trackId {
                     loggedArtistTruncationTrack = trackId
                     let note = wanted == base

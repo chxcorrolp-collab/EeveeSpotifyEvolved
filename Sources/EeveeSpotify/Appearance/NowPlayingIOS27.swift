@@ -23,7 +23,8 @@
 //
 // ## 这一版做什么
 //
-//   ① **封面满血**：`(0, 0, W, W)` 的方图（`scaleAspectFill`、无圆角），从屏幕最顶上开始画；
+//   ① **封面满血**：`(0, 0, W, 0.58H)` 的竖长裁切（`scaleAspectFill`、无圆角），从屏幕最顶上开始画；
+//      ⚠️ 2026-10-24 之前这里写的是 `W×W` 方图 —— 照片 2 显示那会在封面与标题之间留 186pt 的黑。
 //   ② **背景 = pw 的 field**：字段色（封面下沿的平均色，压到 pw 的两条上限）→
 //      窗口 55% 起渐到纯黑 → 封面下沿那一条**模糊拷贝**（同一条边界的裁切，1:1 接得上）；
 //   ③ 封面自己下沿再用一条 mask 淡进那条模糊里 ⇒ 没有接缝；
@@ -69,6 +70,14 @@ enum NowPlayingIOS27 {
     static let artworkFadeStart: CGFloat = 0.45
     /// 取"字段色"时裁封面下沿多少（占封面边长）。
     static let stripFraction: CGFloat = 0.30
+    /// 封面**高度**占页高的比例。
+    ///
+    /// ★ 2026-10-24（照片 2 的"上下两大块空"）：AM 参考图里封面是**竖长**裁切，
+    ///   一直铺到屏幕约 57% 高、标题压在它下沿；我们原来是 414×414 的方图，
+    ///   于是封面下方到标题之间空出 186pt。取 0.58（896 × 0.58 ≈ 520）对上参考图。
+    static let artworkHeightRatio: CGFloat = 0.58
+    /// 封面高宽比上限：方图裁成竖图最多裁到 1.30；再大会把封面两边裁掉太多。
+    static let artworkMaxAspect: CGFloat = 1.30
     /// 压黑渐变：从页面 60% 起渐到纯黑（pw 的 `kBlackFrom` 是 0.55；这里推后一点，
     /// 让封面淡出来的那块颜色多留一会儿，过渡更长）。
     static let blackFromRatio: CGFloat = 0.60
@@ -314,9 +323,20 @@ enum NowPlayingIOS27 {
             }
         }
 
-        let coverSide = page.bounds.width
+        // 封面画多大：**宽 = 页宽，高 = 页高的 58%**（不是方图）。
+        //
+        // ★ 2026-10-24（真机照片 2）：原来是 414×414 的方图，而 AM 参考图
+        //   （`C:\dsh\am\1.jpg`）里那块封面是"铺到屏幕 57% 左右的**竖长**裁切"，
+        //   标题正好压在它下沿的淡出区上。方图会在封面下面留出一大块黑（照片 2 里
+        //   从 y≈414 到标题 y≈600 那 186pt 的空白），看起来就是"排版散了"。
+        //   这里只改**我们自己那张图**的框（`scaleAspectFill` 会自己裁），不动任何原生视图。
+        let coverWidth = page.bounds.width
+        let coverHeight = max(
+            coverWidth,
+            min(page.bounds.height * Self.artworkHeightRatio, coverWidth * Self.artworkMaxAspect)
+        )
         let wanted = host.convert(
-            CGRect(x: 0, y: 0, width: coverSide, height: coverSide),
+            CGRect(x: 0, y: 0, width: coverWidth, height: coverHeight),
             from: page
         )
         if imageView.frame != wanted {

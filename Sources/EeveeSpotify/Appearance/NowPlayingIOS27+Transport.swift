@@ -123,18 +123,25 @@ extension NowPlayingIOS27 {
     /// 工具行里"队列"那颗（AM 的循环就摆在它右上方）。
     static let queueButtonIdentifier = "QueueButtonNowPlaying"
 
-    /// 我们自己画的那颗循环圆钮。
+    /// 我们自己画的那颗循环钮。
     static let repeatPillIdentifier = "eevee-ios27-repeat"
     static let repeatRelayIdentifier = "eevee-ios27-repeat-relay"
-    /// 圆钮直径（AM 那颗小玻璃圆 ≈ 30pt）。
-    static let repeatPillSide: CGFloat = 30
-    /// 圆钮中心相对**队列那颗中心**的偏移（AM：右 8、上 20）。
-    static let repeatPillOffsetX: CGFloat = 8
-    static let repeatPillOffsetY: CGFloat = -20
-    /// 字形大小（SF Symbol pointSize）。
-    static let repeatGlyphSize: CGFloat = 15
-    /// 圆钮底色（AM 是极淡的一层玻璃；不敢用真玻璃，这里只是 10% 白）。
-    static let repeatPillFill = UIColor(white: 1, alpha: 0.10)
+    /// 可点方框边长。
+    ///
+    /// ★ 2026-10-24（真机照片 2）：30pt **带底色**的圆钮在 414pt 宽的机器上正好压在
+    ///   队列字形（26pt、中心 328,811）的右肩上 —— 那颗绿圆盘看起来像"把队列键盖住了"。
+    ///   AM 参考图（`C:\dsh\am\1.jpg`）里那里**没有圆盘**，只有一颗裸图标，位置是
+    ///   队列中心**右上 ~13 / ~18pt**。所以：方框收到 26（只为触摸面积），**底色去掉**，
+    ///   偏移改成 +13 / −18。视觉上回到 AM 那种"两颗图标错开叠着"的样子。
+    static let repeatPillSide: CGFloat = 26
+    /// 中心相对**队列那颗中心**的偏移（AM 参考图量的：右 ≈13、上 ≈18）。
+    static let repeatPillOffsetX: CGFloat = 13
+    static let repeatPillOffsetY: CGFloat = -18
+    /// 字形大小（SF Symbol pointSize）。AM 那颗 ≈14。
+    static let repeatGlyphSize: CGFloat = 14
+    /// 底色：**透明**（见 `repeatPillSide` 那段；AM 那里没有盘子）。
+    /// 留这个常量是为了不让 `mountRepeatPill` 里多一条"为什么没有底色"的谜。
+    static let repeatPillFill = UIColor.clear
     /// 「循环开着」时字形用的 Spotify 绿。
     static let repeatActiveTint = UIColor(red: 0.11, green: 0.73, blue: 0.33, alpha: 1)
     /// 循环关着时的字形颜色。

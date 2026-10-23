@@ -3,9 +3,9 @@ import SwiftUI
 // 歌词舞台的「大字错落」排版（样式：`tilt`）。
 //
 // 设计**参考** Folia 的 `tilt`（`folia-major/src/components/visualizer/tilt/`）：
-//   · 一屏只留 3~4 行 —— 不是"歌词列表"，是"舞台上的一句话"；
-//   · 焦点行明显更大，上下两行按距离缩下去、变淡；
-//   · 每一行按距离轻微斜排、左右错开一点，避免整块像一份文档；
+//   · 一屏只留 3 行 —— 不是"歌词列表"，是"舞台上的一句话"；
+//   · 焦点行明显更大，上下两行缩下去、变淡；
+//   · 上下文两行统一往里让一点（焦点行凸出来），形成"错落"而不是"参差"；
 //   · 逐字点亮仍然由 `SynchronizedLyricText` 负责（和全屏歌词页**同一套**
 //     光晕 / 填充前沿 / 长音强调），所以两档的"唱到哪一个字"在视觉上是一致的。
 //
@@ -14,8 +14,17 @@ import SwiftUI
 // ⚠️ 这里**不给滚动**：一屏就那几行（Folia 的 tilt 同样不滚动）。要翻歌词请切回
 //   `appleMusic` 那一档（设置 → 实验 → 歌词舞台 → 样式）。
 //
+// ★ 2026-10-24（真机照片 1 的返工）：第一版是"每行按距离各自偏移 + 各自斜排 + 每行都画译文"，
+//   在 414pt 宽的屏幕上一眼就是"排版乱了"：
+//     · 四行四个左边距（0/+16/+24）、每行还带一点旋转 ⇒ 左边缘参差、像没对齐；
+//     · 非焦点行的译文被压到 11pt × 0.22 透明度 ⇒ 只剩一道灰糊；
+//     · 焦点行的译文按 0.52 倍派生 = 17.7pt，比上下文的主歌词还粗 ⇒ 抢戏；
+//     · 一屏四行 + 四条译文 ⇒ 整块太高，被垂直居中后顶上留一大片空白。
+//   现在：**三行**、**同一个左边距**（上下文行统一 +16，焦点行 0）、**不旋转**，
+//   **只给焦点行画译文/副唱/罗马字**，字号 34 / 20，译文 15。干净优先，"错落"靠字号与缩进表达。
+//
 // 性能（交接文档 §5 / §6 的教训）：
-//   · 只有焦点行开逐字特效（`appliesTimingEffects`），其余三行是**静态绘制**；
+//   · 只有焦点行开逐字特效（`appliesTimingEffects`），上下两行是**静态绘制**；
 //   · 不重建布局：每帧只是"换一个 `playbackTime` 交给渲染器"，行窗口只在换行时变；
 //   · 不给 `ForEach` 做任何逐帧变化的 identity —— 行 id 稳定，SwiftUI 只重算内容。
 
@@ -30,13 +39,15 @@ struct LyricsStageTiltLayout: View {
     /// 是否画行译文（与舞台其它两档同一口径，由宿主判好传进来）。
     let showsTranslation: Bool
 
-    /// 焦点行前后各留几行（-1 … +2 ⇒ 最多 4 行）。
+    /// 焦点行上下各留几行（-1 … +1 ⇒ 最多 3 行）。
     private static let leadingContext = 1
-    private static let trailingContext = 2
+    private static let trailingContext = 1
     /// 行与行之间的间距（大字档，比全屏歌词页更大）。
-    private static let rowSpacing: CGFloat = 20
+    private static let rowSpacing: CGFloat = 18
     /// 左右内边距。
-    private static let sideInset: CGFloat = 28
+    private static let sideInset: CGFloat = 26
+    /// 上下文行（前/后各一行）往右让出的距离 —— 焦点行凸出来，就是"错落"。
+    private static let contextIndent: CGFloat = 16
 
     var body: some View {
         GeometryReader { geometry in
@@ -69,7 +80,7 @@ struct LyricsStageTiltLayout: View {
         return index
     }
 
-    /// 这一屏要画哪几行：焦点前 1 行 + 焦点 + 后 2 行，越界就裁掉。
+    /// 这一屏要画哪几行：焦点前 1 行 + 焦点 + 后 1 行，越界就裁掉。
     private func visibleIndices(focus: Int) -> [Int] {
         var result: [Int] = []
         result.reserveCapacity(Self.leadingContext + Self.trailingContext + 1)
@@ -88,6 +99,10 @@ struct LyricsStageTiltLayout: View {
         let distance = index - focus
         let isFocus = distance == 0
 
+        // ⚠️ 上下文行**只画主歌词**：译文/副唱/罗马字一律不给。
+        //
+        // 一串 11pt × 0.22 的灰字在深色底上既读不出来、又把三行挤成六行 ——
+        // 真机照片 1 里那几道"糊在歌词下面的小字"就是这么来的。
         return SynchronizedLyricText(
             syllables: line.syllables,
             text: line.text,
@@ -96,42 +111,37 @@ struct LyricsStageTiltLayout: View {
             // 非焦点行直接按 0 画（不模糊、不缩放、不发光）——
             // 舞台的"层次"靠字号与不透明度表达，再叠一层模糊会糊成一团。
             focusStrength: isFocus ? 1 : 0,
-            translation: line.translation,
-            romanization: line.romanization,
-            backgroundVocal: line.backgroundVocal,
+            translation: isFocus && showsTranslation ? line.translation : nil,
+            romanization: isFocus ? line.romanization : nil,
+            backgroundVocal: isFocus ? line.backgroundVocal : nil,
             constrainedWidth: width,
             alignment: .leading,
             typography: Self.typography(for: distance),
             primaryColor: primaryColor,
             appliesTimingEffects: isFocus,
-            showsBackgroundVocals: true,
-            showsTranslation: showsTranslation
+            showsBackgroundVocals: isFocus,
+            showsTranslation: isFocus && showsTranslation
         )
         .opacity(Self.opacity(for: distance))
-        .rotationEffect(.degrees(Self.rotation(for: distance)), anchor: .leading)
-        .padding(.leading, Self.leading(for: distance))
+        .padding(.leading, isFocus ? 0 : Self.contextIndent)
         .frame(maxWidth: .infinity, alignment: .leading)
         .transition(.opacity)
     }
 
     // MARK: - 按距离取参数
 
-    /// 字号分档：焦点 34pt、上下各一档、再远一档。
+    /// 字号/译文分档：焦点 34pt（译文 15pt），上下文 20pt（不画译文）。
     ///
-    /// 34 这个数不是拍的：全屏歌词页是 22、`.player` 也是 22，而这一档**一屏只有 4 行**、
-    /// 左右各留 28pt ⇒ 366pt 宽的容器放 34pt 的拉丁文一行约 18~22 字符，长句会折成两行
+    /// 34 这个数不是拍的：全屏歌词页是 22、`.player` 也是 22，而这一档**一屏只有 3 行**、
+    /// 左右各留 26pt ⇒ 362pt 宽的容器放 34pt 的拉丁文一行约 18~22 字符，长句会折成两行
     /// （折行由 `SynchronizedLyricText` 自带的构建器处理，不用这里管）。
-    /// 再大就会在中文长句上折成三行、把下面几行挤出屏幕。
+    /// 再大就会在中文长句上折成三行、把上下文挤出去。
     private static func typography(for distance: Int) -> LyricsTypographyScale {
-        let size: CGFloat
-        switch distance {
-        case 0: size = 34
-        case 1, -1: size = 22
-        default: size = 17
-        }
+        let size: CGFloat = distance == 0 ? 34 : 20
         return LyricsTypographyScale(
             primaryFontSize: size,
-            supplementalFontSize: max(size * 0.52, 12),
+            // 译文按 0.44 派生：34 ⇒ 15（照片 1 里 17.7 那档比上下文主歌词还粗，抢戏）。
+            supplementalFontSize: distance == 0 ? 15 : 11,
             lineSpacing: 8,
             wrappedLineSpacing: 4,
             supplementalSpacing: 4
@@ -142,29 +152,7 @@ struct LyricsStageTiltLayout: View {
     private static func opacity(for distance: Int) -> Double {
         switch distance {
         case 0: return 1
-        case 1, -1: return 0.42
-        default: return 0.22
-        }
-    }
-
-    /// 轻微斜排：焦点行水平，往后的行角度递增（Folia 的 tilt 是整行斜着摆，
-    /// 这里只取 ±3° 以内 —— 手机屏幕窄，再斜就读不动了）。
-    private static func rotation(for distance: Int) -> Double {
-        switch distance {
-        case 0: return 0
-        case 1: return 1.6
-        case -1: return -1.6
-        default: return 3
-        }
-    }
-
-    /// 左右错开：焦点行贴齐左边，后续行往右让一点，形成"斜着落下来"的感觉。
-    private static func leading(for distance: Int) -> CGFloat {
-        switch distance {
-        case 0: return 0
-        case 1: return 16
-        case -1: return 8
-        default: return 24
+        default: return 0.38
         }
     }
 }

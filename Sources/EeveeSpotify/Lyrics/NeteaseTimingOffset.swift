@@ -53,9 +53,51 @@ enum NeteaseTimingOffset {
     /// 备份 / 全局重置 / 本页重置要认识的键。
     static var ownedKeys: [String] { [trackOffsetsKey, trackTitlesKey] }
 
-    // MARK: - 单曲覆盖
+    // MARK: - 单曲覆盖（内存索引）
+
+    /// 运行期索引：**只解一次 JSON，之后按 track id 哈希查找**。
+    ///
+    /// ★★ 2026-10-23（用户：「插件要判断这首歌有没有被偏移、偏移了多少，这个的搜歌逻辑呢，
+    ///   总不能从上到下吧」）：存储本来就是 `[track id: 毫秒]` 的字典 —— 查一首是 O(1)
+    ///   的哈希查找，**不是**逐首扫。但旧实现**每次查询都重新解码整份 JSON**（歌词拉取一次
+    ///   要问 1~2 次；歌多了就是反复解析几十 KB）。现在把解码结果缓存在内存里：
+    ///   · 首次读 → 解码一次；
+    ///   · 我们自己的写入 → 原地更新缓存（不重读、不重编码读者那侧）；
+    ///   · 外部批量改键（备份导入 / 全局重置）→ 调 `invalidateCache()`。
+    ///
+    /// 锁是必须的：读发生在取词队列（后台），写发生在设置页（主线程）。
+    private static let cacheLock = NSLock()
+    private static var cachedOffsets: [String: Int]?
+    private static var cachedTitles: [String: String]?
+
+    /// 备份导入 / 全局重置这类"绕过本类型直接写 UserDefaults"的操作之后叫一次。
+    static func invalidateCache() {
+        cacheLock.lock()
+        cachedOffsets = nil
+        cachedTitles = nil
+        cacheLock.unlock()
+    }
 
     static var trackOffsets: [String: Int] {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let cachedOffsets { return cachedOffsets }
+        let decoded = decodeOffsets()
+        cachedOffsets = decoded
+        return decoded
+    }
+
+    /// 单曲覆盖的显示名（见 `trackTitlesKey`）。老数据没有这一份 ⇒ 空字典。
+    static var trackTitles: [String: String] {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let cachedTitles { return cachedTitles }
+        let decoded = decodeTitles()
+        cachedTitles = decoded
+        return decoded
+    }
+
+    private static func decodeOffsets() -> [String: Int] {
         guard let text = UserDefaults.standard.string(forKey: trackOffsetsKey),
               let data = text.data(using: .utf8),
               let decoded = try? JSONDecoder().decode([String: Int].self, from: data) else {
@@ -64,8 +106,7 @@ enum NeteaseTimingOffset {
         return decoded
     }
 
-    /// 单曲覆盖的显示名（见 `trackTitlesKey`）。老数据没有这一份 ⇒ 空字典。
-    static var trackTitles: [String: String] {
+    private static func decodeTitles() -> [String: String] {
         guard let text = UserDefaults.standard.string(forKey: trackTitlesKey),
               let data = text.data(using: .utf8),
               let decoded = try? JSONDecoder().decode([String: String].self, from: data) else {
@@ -127,8 +168,12 @@ enum NeteaseTimingOffset {
 
     /// 清掉全部单曲覆盖（设置页那颗「清除全部单曲偏移」用这个）。
     static func clearAllOverrides() {
+        cacheLock.lock()
         UserDefaults.standard.removeObject(forKey: trackOffsetsKey)
         UserDefaults.standard.removeObject(forKey: trackTitlesKey)
+        cachedOffsets = [:]
+        cachedTitles = [:]
+        cacheLock.unlock()
     }
 
     /// 完整重置/排障用：单曲覆盖全清，并顺手清掉旧版本留下的"默认偏移"键
@@ -161,12 +206,21 @@ enum NeteaseTimingOffset {
 
         guard let data = try? JSONEncoder().encode(offsets),
               let text = String(data: data, encoding: .utf8) else { return offsets }
+
+        // 写完**直接**把缓存换掉：读歌词那一侧不需要再解码一次。
+        cacheLock.lock()
         UserDefaults.standard.set(text, forKey: trackOffsetsKey)
+        cachedOffsets = offsets
+        cacheLock.unlock()
         return offsets
     }
 
     /// 写"单曲显示名"那份小字典；空字典就把键删掉（备份/重置看到的是"没有"）。
     private static func saveTitles(_ titles: [String: String]) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        cachedTitles = titles
+
         if titles.isEmpty {
             UserDefaults.standard.removeObject(forKey: trackTitlesKey)
             return

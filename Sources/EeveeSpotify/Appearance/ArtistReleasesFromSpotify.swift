@@ -224,7 +224,10 @@ enum ArtistReleasesFromSpotify {
         let task = session.dataTask(with: makeRequest(url: url, token: token)) { data, response, error in
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
 
-            if withMarket, status == 400 || status == 401 {
+            // ★★ 2026-10-23（日志 6 的现场：`albums failed, status 404` —— 艺术家卡一直不出现）：
+            //    带 `market` 的第一次请求在这台设备上（地区 CN）直接 404。400/401 原来的重试
+            //    覆盖不到它 ⇒ 这里把 404 也算进"去掉 market 再问一次"。
+            if withMarket, status == 400 || status == 401 || status == 404 {
                 writeDebugLog(
                     "[Release] spotify — \"\(artist)\": albums answered \(status) with a market,"
                         + " asking once more without it"
@@ -238,6 +241,13 @@ enum ArtistReleasesFromSpotify {
                 writeDebugLog(
                     "[Release] spotify — \"\(artist)\": albums failed, status \(status), \(reason)"
                 )
+                // ★★ 2026-10-23：`/artists/{id}/albums` 整条不通时还有一条**同一个令牌能走通**的路
+                //    （搜索接口在这台设备上已经证明返回 200）⇒ 去按专辑搜索里挑最新一张。
+                //    只在"已经去掉 market 仍失败"时走，避免同一个 404 问两遍。
+                if !withMarket {
+                    searchAlbums(artist: artist, key: key, token: token)
+                    return
+                }
                 finish(key: key, release: nil)
                 return
             }
@@ -256,13 +266,71 @@ enum ArtistReleasesFromSpotify {
         task.resume()
     }
 
+    /// 兜底数据线：`/v1/search?type=album`。
+    ///
+    /// ★★ 2026-10-23（日志 6：`albums failed, status 404`，卡片一直等页面那一行）：
+    /// `/artists/{id}/albums` 在有的地区 / 令牌组合下会直接 404，而**同一个令牌**问
+    /// `/v1/search` 是 200（它刚刚就在同一个会话里返回过 artist id）⇒ 用歌手名搜一批专辑，
+    /// 仍然按"主艺人逐字相等 + 日期最新"来挑（解析复用 `latestRelease`，它同时认
+    /// `items` 与 `albums.items` 两种形状）。
+    private static func searchAlbums(artist: String, key: String, token: String) {
+        guard var components = URLComponents(string: "https://api.spotify.com/v1/search") else {
+            writeDebugLog("[Release] spotify — \"\(artist)\": could not build the album search URL")
+            finish(key: key, release: nil)
+            return
+        }
+        components.queryItems = [
+            URLQueryItem(name: "q", value: artist),
+            URLQueryItem(name: "type", value: "album"),
+            URLQueryItem(name: "limit", value: "50"),
+        ]
+        guard let url = components.url else {
+            writeDebugLog("[Release] spotify — \"\(artist)\": could not build the album search URL")
+            finish(key: key, release: nil)
+            return
+        }
+        writeDebugLog(
+            "[Release] spotify — \"\(artist)\": falling back to the album search endpoint"
+        )
+        let task = session.dataTask(with: makeRequest(url: url, token: token)) { data, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard let data, error == nil, status == 200 else {
+                let reason = error.map { String(describing: $0) } ?? "-"
+                writeDebugLog(
+                    "[Release] spotify — \"\(artist)\": album search failed, status \(status), \(reason)"
+                )
+                finish(key: key, release: nil)
+                return
+            }
+            guard let release = latestRelease(in: data, artist: artist) else {
+                // 具体原因已经在 `latestRelease` 里记过一行。
+                finish(key: key, release: nil)
+                return
+            }
+            writeDebugLog(
+                "[Release] spotify — \"\(artist)\": picked \(release.title) / \(release.albumURI)"
+                    + " (\(release.trackCount) track(s)) through the album search"
+            )
+            finish(key: key, release: release)
+        }
+        task.resume()
+    }
+
     /// 从 `items` 里挑出"主艺人就是这一位 + 日期最新"的那一张。
     ///
     /// 过滤：`album_type == compilation` 丢掉、`uri` 不是 `spotify:album:` 的丢掉、
     /// 主艺人（`artists[0]`）归一化后对不上的丢掉（合作曲 / 群星合辑都在这里出局）。
     private static func latestRelease(in data: Data, artist: String) -> SpotifyArtistRelease? {
-        guard let root = jsonObject(data), let items = root["items"] as? [[String: Any]] else {
-            writeDebugLog("[Release] spotify — \"\(artist)\": the albums answer carried no items")
+        guard let root = jsonObject(data) else {
+            writeDebugLog("[Release] spotify — \"\(artist)\": the answer was not a JSON object")
+            return nil
+        }
+        // `artists/{id}/albums` 给的是根上的 `items`；`search?type=album` 把它包在
+        // `albums.items` 里 ⇒ 两种形状都认（兜底数据线用同一个解析）。
+        let items = (root["items"] as? [[String: Any]])
+            ?? ((root["albums"] as? [String: Any])?["items"] as? [[String: Any]])
+        guard let items else {
+            writeDebugLog("[Release] spotify — \"\(artist)\": the answer carried no items")
             return nil
         }
 

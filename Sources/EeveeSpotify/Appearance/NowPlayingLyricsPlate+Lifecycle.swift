@@ -411,10 +411,19 @@ extension NowPlayingLyricsPlate {
         guard lastPage?.window != nil else { return reject() }
 
         if shouldHold {
-            guard let cover = sameSizeChild(of: tilt), cover.alpha > 0.01 else {
-                return reject()
-            }
-            hideSpotifyCover(cover)
+            // ★★ 2026-10-23（用户：「播放页**还是**闪 Spotify 原生封面」）：
+            //    旧门禁要求 `cover.alpha > 0.01`，可换歌那一瞬新封面对象**常常先以 alpha = 0
+            //    出现**，等 Spotify 把它淡入时**没有新的 layout 回调** ⇒ 这一帧被放过去，
+            //    要等 0.3s 节拍才按掉 = 一次"大封面闪一下"。
+            //    现在两件事一起做：
+            //      ① 不再要求 alpha（`hideCoverView` 按对象记账，还原时写回它自己的原值，
+            //         所以对 alpha=0 的对象动手也不会把别人的值改坏）；
+            //      ② **连 `tilt` 本身也按下去** —— 之后 Spotify 在同一份 tilt 里换图 / 加层
+            //         都不会再露出来。我们那张宿主盖在同一块位置上，画面上不会出现空洞。
+            if let cover = sameSizeChild(of: tilt) { hideSpotifyCover(cover) }
+            // 封面 tilt 的"正常可见"就是 1：换歌转场里它可能先以 0 出现，还原时写 1（不是 0），
+            // 否则离开播放页之后那张原生封面会永久停在透明。
+            hideCoverView(tilt, restoringTo: 1)
 
             coverLocalHides += 1
             guard coverLocalHides == 1 || coverLocalHides % 20 == 0 else { return }
@@ -466,11 +475,13 @@ extension NowPlayingLyricsPlate {
     /// ⚠️ 用 **`isKind(of:)`（= pw 的 `isKindOfClass:`）而不是比较类名字符串**：字符串比较只在**恰好**
     /// 是那个类时成立，Spotify 一旦派生子类就静默失效。走查有界（8 跳），拿不到就放弃（宁可漏，不可误伤）。
     static func isInsideCoverCell(_ tilt: UIView) -> Bool {
-        guard let cellClass = coverCellClass else { return false }
         var node: UIView? = tilt.superview
         var hops = 0
         while let current = node, hops < 8 {
-            if current.isKind(of: cellClass) { return true }
+            if let cls = coverCellClass, current.isKind(of: cls) { return true }
+            // ★★ 2026-10-23：类名兜底（覆盖 Swift 改版 / 名字长度变了的情况）。
+            //    只在 `isKind(of:)` 没命中时走，而且有界（8 跳以内）。
+            if NSStringFromClass(type(of: current)).contains("CoverArtCellImpl") { return true }
             node = current.superview
             hops += 1
         }
@@ -478,8 +489,19 @@ extension NowPlayingLyricsPlate {
     }
 
     /// 只查**一个**类（不是运行时类枚举，本仓库纪律 1）。
-    static let coverCellClass: AnyClass? =
-        NSClassFromString("NowPlaying_ContentLayersImpl.CoverArtCellImpl")
+    ///
+    /// ★★ 2026-10-23（日志 6：`[NPVLyrics] hid the native cover from its own tilt (local path)`
+    ///    **一次都没有**）：Swift 类在 ObjC 运行时里的名字是 **mangled** 的
+    ///    （`_TtC28NowPlaying_ContentLayersImpl16CoverArtCellImpl`），`NSClassFromString` 用
+    ///    `Module.Class` 那种写法取不到 ⇒ `coverCellClass` 为 nil ⇒ `isInsideCoverCell` 恒假
+    ///    ⇒ 事件驱动那条路**每次都拒绝**，只剩 0.3s 节拍兜底 = 换歌时"原生封面闪一下"。
+    ///    先按 Swift 名试（将来若支持），再按 dump 里的 mangled 名取。
+    static let coverCellClass: AnyClass? = {
+        if let cls = NSClassFromString("NowPlaying_ContentLayersImpl.CoverArtCellImpl") {
+            return cls
+        }
+        return NSClassFromString("_TtC28NowPlaying_ContentLayersImpl16CoverArtCellImpl")
+    }()
 
     /// pw 的 `coverIn(tilt)`：**和 tilt 等大的那个直接子视图**就是封面
     /// （`CoverArtTiltView 354x354 > 一个同样大小的 ElementView > ImageViewProxy >

@@ -399,9 +399,19 @@ extension NowPlayingLyricsPlate {
     }
 
     /// 按下某个视图的 `alpha`，并**只在第一次**记下它自己的原值（还原时按原值写回，见名册那段）。
-    static func hideCoverView(_ view: UIView) {
+    ///
+    /// - Parameter restoringTo: 原值读不到 / 还是 0（换歌转场里新封面先以 `alpha = 0` 出现）时，
+    ///   还原成什么。封面 tilt 的"正常可见"就是 1 ⇒ 调用方给 1；别的视图不传，照旧写回原值。
+    static func hideCoverView(_ view: UIView, restoringTo fallback: CGFloat? = nil) {
         let key = ObjectIdentifier(view)
-        if hiddenCoverAlphas[key] == nil { hiddenCoverAlphas[key] = view.alpha }
+        if hiddenCoverAlphas[key] == nil {
+            let original = view.alpha
+            if original > 0.01 {
+                hiddenCoverAlphas[key] = original
+            } else {
+                hiddenCoverAlphas[key] = fallback ?? original
+            }
+        }
         hiddenCovers.add(view)
         view.alpha = 0
     }

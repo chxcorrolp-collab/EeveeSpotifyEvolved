@@ -203,7 +203,16 @@ extension NowPlayingLyricsPlate {
     static func visibleArtistLineWidth(_ label: UILabel, in page: UIView) -> CGFloat {
         let frame = label.convert(label.bounds, to: page)
         var widths: [CGFloat] = []
-        if label.bounds.width > 1 { widths.append(label.bounds.width) }
+
+        // ★★ 2026-10-23（用户：`（NetEase）` 会**慢慢把歌手名吞掉**，照片 31 最后只剩 `（NetEase）`）：
+        //    **不能**无条件把 `label.bounds.width` 当上限。Spotify 那一行是"按内容撑开"的
+        //    （`bounds.width == intrinsicContentSize.width`）—— 我们把它写短一点，它自己就跟着
+        //    变窄 ⇒ 下一拍量到更小的上限、再裁得更短 …… 0.3s 一拍，歌手名被一点一点吃光。
+        //    判据：`bounds ≈ intrinsic` ⇒ 自撑开 ⇒ 它的宽度是**我们写进去的文本的结果**，不是约束；
+        //    真正的上限是页边与裁剪祖先（它们不会因为我们改文本而变）。
+        let intrinsic = label.intrinsicContentSize.width
+        let selfSizing = intrinsic > 1 && abs(label.bounds.width - intrinsic) <= 1.5
+        if !selfSizing, label.bounds.width > 1 { widths.append(label.bounds.width) }
 
         let byPage = page.bounds.width - frame.minX
         if byPage > 1 { widths.append(byPage) }
@@ -236,8 +245,11 @@ extension NowPlayingLyricsPlate {
     ///
     /// 2026-10-22（用户：图片里 `日のメゾンデ, 礼衣, 大漠波新 （NetEas` 被截断）：
     /// 以前只是把后缀拼到歌手名后面，Spotify 的标签按它自己的宽度从尾部截 ⇒ 被截掉的
-    /// 恰恰是**我们新加的提供商**（信息量最大的那一段）。现在按标签的**可见宽度**量一遍：
-    /// 放不下就把歌手名缩短到能容下 `…（提供商）`，提供商一个像素都不许少。
+    /// 恰恰是**我们新加的提供商**（信息量最大的那一段）。现在按可见宽度量一遍：
+    /// 放不下就把歌手名缩短到能容下 `…（提供商）`。
+    ///
+    /// ★★ 2026-10-23（照片 31：歌手名被慢慢吃光，最后只剩 `（NetEase）`）：**歌手名优先** ——
+    /// 当连"…（提供商）"都放不下时，返回**完整歌手名**（放弃提供商），不再把整条换成提供商。
     ///
     /// 宽度量不到（首帧 / 标签还没布局）⇒ 原样返回，下一拍（0.3s）会再量。
     static func fittedArtistLine(
@@ -262,8 +274,10 @@ extension NowPlayingLyricsPlate {
         let suffixWidth = width(suffix)
         let ellipsisWidth = width(ellipsis)
         let allowed = limit - suffixWidth - ellipsisWidth
-        // 连"…（提供商）"都放不下：宁可只剩提供商（它比歌手名更短，而且正是要展示的东西）。
-        guard allowed > 1 else { return suffix }
+        // ★★ 2026-10-23（照片 31：最后只剩 `（NetEase）`）：**连"…（提供商）"都放不下时不再
+        //    只剩提供商** —— 那等于把歌手名整条抹掉，比"提供商被截断"更糟。这里直接放弃提供商、
+        //    把**完整歌手名**交回去（Spotify 若还是放不下，它自己按它的宽度截尾，至少名字在）。
+        guard allowed > 1 else { return base }
 
         if width(base) <= allowed { return base + ellipsis + suffix }
 
@@ -274,11 +288,20 @@ extension NowPlayingLyricsPlate {
                 return trimmed + ellipsis + suffix
             }
         }
-        return ellipsis + suffix
+        // 连一个字都放不下 ⇒ 同上：歌手名优先。
+        return base
     }
 
     /// 这一次"因为放不下而缩短了歌手名"——每首只报一行，避免 0.3s 节拍刷屏。
     static var loggedArtistTruncationTrack = ""
+
+    /// 这一行**可用宽度**的缓存（`applyProviderToArtistLine` 用）。key = 曲目 | 展开状态 | 标签对象。
+    ///
+    /// ★★ 2026-10-23：**必须缓存**。每拍重新量会把"我们自己写短之后变窄的标签"当成新的上限 ⇒
+    /// 越量越小（用户看到的"慢慢往左吞"）。只在"换曲目 / 换展开状态 / 换标签 / 文本被 binder
+    /// 写回原样"这四种情况下重算。
+    static var artistFitWidthKey = ""
+    static var artistFitWidth: CGFloat = 0
 
     /// 改 Spotify 标签的文本时**保住它自己的字体/颜色**：有 `attributedText` 就在它上面改，
     /// 没有才退回 `text`（直接写 `text` 会把 Spotify 设的属性字符串整段丢掉）。

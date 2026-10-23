@@ -370,19 +370,35 @@ extension NowPlayingLyricsPlate {
         //    已经写着后缀的那一行要**重新按新宽度裁一次**，否则用户会在窄版式里继续看到截断。
         guard !base.isEmpty else { return }
 
-        let maxWidth = visibleArtistLineWidth(label, in: page)
+        // ★★ 2026-10-23：宽度**缓存**（见 `artistFitWidth` 的说明）—— 每拍重算会被我们自己
+        //    写短的文本反馈回来，越算越小。只有换曲 / 换展开状态 / 换标签 / 文本被 binder
+        //    写回原样时才重算一次；重算时标签上写的是 Spotify 给的**原歌手名**（没有被我们裁过）。
+        let trackId = currentTrackId() ?? ""
+        let stateKey = door.isOpen ? "open" : "closed"
+        let labelKey = "\(trackId)|\(stateKey)|\(String(describing: ObjectIdentifier(label)))"
+        let alreadyHasOurs = lastArtistSuffix.map { current.hasSuffix($0) } ?? false
+        var maxWidth = artistFitWidth
+        if labelKey != artistFitWidthKey || maxWidth <= 20 || !alreadyHasOurs {
+            let measured = visibleArtistLineWidth(label, in: page)
+            if measured > 20 {
+                maxWidth = measured
+                artistFitWidth = measured
+                artistFitWidthKey = labelKey
+            } else {
+                maxWidth = measured
+            }
+        }
         let wanted = fittedArtistLine(base: base, suffix: suffix, maxWidth: maxWidth, label: label)
         if current != wanted {
             setLabelText(wanted, on: label)
 
             if wanted != base + suffix {
-                let trackId = currentTrackId() ?? ""
                 if loggedArtistTruncationTrack != trackId {
                     loggedArtistTruncationTrack = trackId
-                    writeDebugLog(
-                        "[\(logTag)] the artist line was shortened to keep the provider visible —"
-                            + " \"\(wanted)\""
-                    )
+                    let note = wanted == base
+                        ? "the provider does not fit — kept the artist name whole and dropped the provider"
+                        : "the artist line was shortened to keep the provider visible"
+                    writeDebugLog("[\(logTag)] \(note) — \"\(wanted)\"")
                 }
             }
         }
@@ -392,7 +408,6 @@ extension NowPlayingLyricsPlate {
         // ★ 2026-10-04：这条日志原来**一个进程只打一次**，于是"换歌之后有没有重新贴上"
         //   在日志里完全看不出来（用户这次报的就是"没有展示"，而我们手里没有一行能判它的证据）。
         //   改成"每换一首歌允许再报一次"。
-        let trackId = currentTrackId() ?? ""
         if !didLogArtistProvider || loggedArtistProviderTrack != trackId {
             didLogArtistProvider = true
             loggedArtistProviderTrack = trackId

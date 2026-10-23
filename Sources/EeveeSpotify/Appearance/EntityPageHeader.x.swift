@@ -7,6 +7,15 @@ import ObjectiveC.runtime
 /// 这是本仓库既有的写法（见 `DeclutterChrome.x.swift` 的 `declutterHiddenByUsKey`）。
 var entityPageHeaderKey: UInt8 = 0
 
+/// 上一拍量"封面压没压到文字"时，这个页头的高度。
+///
+/// ★★ 2026-10-23（用户：「专辑页自画按键在上下划的时候有抖动」）：`probeCoverOverlap` 会改
+/// 我们那一块的高度（`header.bounds.height + coverDrop`），而滚动中页头**每帧**都在变高/变矮
+/// ⇒ 量到的重叠每帧都不一样，`coverDrop` 就在 0 / 4 / 6 之间来回翻（日志里
+/// `moved our block down 4pt` → `cleared the extra 6pt` 就是现场），按钮跟着每帧上下跳。
+/// 只在页头高度**稳定**时量一次，滚动中途保持上一次的值。
+var coverProbeHeightKey: UInt8 = 0
+
 /// 页头替换：找到歌单页头、把 Spotify 那一列藏掉、把我们自己的（`EntityPageHeaderView`）摆上去。
 ///
 /// ## 为什么挂 `HeaderContentLayout`
@@ -654,6 +663,20 @@ enum EntityPageHeaderManager {
     ///      这里清的是"滚动过程中量到的、现在已经不成立的"那一截）。
     private static func probeCoverOverlap(cover: UIView?, headerView: EntityPageHeaderView, role: String) {
         guard let cover, headerView.bounds.height > 1, headerView.window != nil else { return }
+        // ★★ 2026-10-23（用户：「专辑页自画按键在上下划的时候有抖动」）：
+        //    只在页头高度**稳定**的那一拍量。滚动中页头每帧都在变高/变矮，而这段代码会反过来
+        //    改页头高度（`+ coverDrop`）⇒ 量一次、改一次、下一页又量到不同的值 ⇒ 按钮每帧上下跳。
+        //    中途保持上一次的 drop，停下之后这一拍再收敛。
+        let currentHeight = Double(headerView.bounds.height)
+        let lastHeight = (objc_getAssociatedObject(headerView, &coverProbeHeightKey) as? NSNumber)?.doubleValue
+        objc_setAssociatedObject(
+            headerView,
+            &coverProbeHeightKey,
+            NSNumber(value: currentHeight),
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+        if let lastHeight, abs(currentHeight - lastHeight) > 1 { return }
+
         // ★★ 2026-10-19（日志 555 的现场：歌单页 `text top -1pt`）：`textTop` 用 -1 表示"没有标题"，
         //    但**标题上沿正好压在本视图顶边**时也是 -1 ⇒ 原来那句 `guard textTop > 0` 会把这种页
         //    整段跳过（"把字挪出封面"从来没跑过）。现在先问 `hasTitle`，再把 -1 夹成 0 继续量。
@@ -663,7 +686,7 @@ enum EntityPageHeaderManager {
         let frame = cover.convert(cover.bounds, to: headerView)
         guard frame.maxY > naturalTextTop + 1, frame.minY < headerView.bounds.height else {
             // 自然位置下没有重叠 ⇒ 之前那截 drop 已经不需要了（多半是滚动中途量到的）。
-            guard current > 0.5 else { return }
+            guard current > 2 else { return }
             objc_setAssociatedObject(
                 headerView,
                 &coverDropKey,
@@ -678,7 +701,8 @@ enum EntityPageHeaderManager {
         }
         let overlap = frame.maxY - naturalTextTop
         let wanted = min(coverDropLimit, max(0, overlap))
-        guard abs(wanted - current) > 0.5 else { return }
+        // ★★ 2026-10-23：2pt 的滞回 —— 1pt 级的变化不算"需要挪"（那几个 pt 正是抖动的来源）。
+        guard abs(wanted - current) > 2 else { return }
         let coverBottom = Int(frame.maxY.rounded())
         let textLine = Int(naturalTextTop.rounded())
         logOnce(

@@ -95,10 +95,13 @@ enum NowPlayingPageOverlay {
     /// ★ 2026-10-22：音量条是「修改Spotify听歌页布局」的**二级菜单**项 ⇒
     /// 总开关关着时它也不该出现（`nowPlayingLayout && nowPlayingVolume`）。
     /// 关总开关会把音量条一起撤掉，但**不动**这颗子开关存的值（再打开时还是用户上次的选择）。
-    /// ★ 2026-10-23 四轮：iOS 27 版**不再**自带这一行了 —— 底部那一坨不再上挪，
-    /// 控件行与工具行之间根本没有 28pt 的空隙；强行塞进去只会压在播放键上。
-    /// 等下一轮用 pw 那套“裸字形 + 三颗工具行”重排底部时，再把它按 AM 的位置放回去。
-    static var isEnabled: Bool { UserDefaults.nowPlayingLayout && UserDefaults.nowPlayingVolume }
+    /// ★ 2026-10-23（用户：「全做」）：**iOS 27 版重新带上这一行**（AM 的播放页就有音量条，
+    /// 位置在传输行与工具行之间 —— 见 `ios27VolumeY`）。新版不看「展示音量条」那颗子开关：
+    /// AM 的目标图里它本来就在，少一条反而对不上。
+    static var isEnabled: Bool {
+        UserDefaults.nowPlayingIOS27
+            || (UserDefaults.nowPlayingLayout && UserDefaults.nowPlayingVolume)
+    }
 
     // MARK: - 对外入口
 
@@ -399,6 +402,12 @@ enum NowPlayingPageOverlay {
         // 安全区底：页面自己的 `safeAreaInsets` 就是最可靠的"别压到 home indicator"来源。
         let bottomLimit = page.bounds.height - page.safeAreaInsets.bottom - 4
 
+        // ★ 2026-10-23：iOS 27 版摆在**传输行与工具行之间**（AM 的目标位置）。
+        if UserDefaults.nowPlayingIOS27, let centred = ios27VolumeY(in: page) {
+            let y = min(centred, bottomLimit - volumeRowHeight)
+            return CGRect(x: x, y: max(0, y), width: width, height: volumeRowHeight)
+        }
+
         var y: CGFloat
         if let anchor = locateBottomAnchor(in: page) {
             let frame = anchor.convert(anchor.bounds, to: overlay)
@@ -412,6 +421,46 @@ enum NowPlayingPageOverlay {
             y = max(0, bottomLimit - volumeRowHeight)
         }
         return CGRect(x: x, y: y, width: width, height: volumeRowHeight)
+    }
+
+    /// iOS 27 版音量行的 y：**夹在传输行下沿与工具行上沿的正中**。
+    ///
+    /// AM 在 414×896 上量出来是：播放键下沿 ≈651、工具行上沿 ≈789 ⇒ 空档 138pt，
+    /// 音量行 28pt ⇒ 摆在 `651 + (138−28)/2 = 706`，中线 720（AM 实测 ≈724）。
+    /// 三个锚（播放键 / 分享 / 队列）缺一个就返回 nil，退回既有的"锚点下面"那套。
+    ///
+    /// ⚠️ 这里**只用 UIKit 的 id 查找**，不碰 `NowPlayingLyricsPlate`（那个 enum 是 `@MainActor`，
+    /// 而本文件不是 —— 从非隔离的同步上下文调它过不了编译）。找法沿用本文件既有的三跳：
+    /// 页面 → 播放器列表（`NowPlayingOneScreen.pinnedList` 也是弱读，不涉及隔离）→ 窗口。
+    private static func ios27VolumeY(in page: UIView) -> CGFloat? {
+        let identifiers = [
+            "SPTNowPlayingPlayButton",
+            "ShareButtonNowPlayingView",
+            "QueueButtonNowPlaying",
+        ]
+        var frames: [CGRect] = []
+        for identifier in identifiers {
+            guard let view = locateAnchor(identifier, in: page) else { return nil }
+            let rect = view.convert(view.bounds, to: page)
+            guard rect.width > 1, rect.height > 1 else { return nil }
+            frames.append(rect)
+        }
+        guard frames.count == 3 else { return nil }
+        let transportBottom = frames[0].maxY
+        let footerTop = min(frames[1].minY, frames[2].minY)
+        let gap = footerTop - transportBottom
+        guard gap > volumeRowHeight + 8 else { return transportBottom + gapBelowAnchor }
+        return transportBottom + (gap - volumeRowHeight) / 2
+    }
+
+    /// 按 id 找一个视图：**页面 → 播放器列表 → 窗口**（与 `locateBottomAnchor` 同一条走查）。
+    private static func locateAnchor(_ identifier: String, in page: UIView) -> UIView? {
+        if let found = findView(identifier, in: page) { return found }
+        if let list = NowPlayingOneScreen.pinnedList, let found = findView(identifier, in: list) {
+            return found
+        }
+        guard let window = page.window else { return nil }
+        return findView(identifier, in: window)
     }
 
     /// `npv.bottomStackView` 在哪：**页面 → 播放器列表 → 窗口**，三跳。
@@ -433,6 +482,12 @@ enum NowPlayingPageOverlay {
 
     /// 按 `accessibilityIdentifier` 找播放器底部那一坨（有界广度优先）。
     private static func findBottomAnchor(in root: UIView) -> UIView? {
+        findView(bottomAnchorIdentifier, in: root)
+    }
+
+    /// 按 `accessibilityIdentifier` 找一个视图（有界广度优先；`findBottomAnchor` 与
+    /// iOS 27 音量行那三个锚共用这一份）。
+    private static func findView(_ identifier: String, in root: UIView) -> UIView? {
         var visited = 0
         var queue: [UIView] = [root]
 
@@ -440,7 +495,7 @@ enum NowPlayingPageOverlay {
             let view = queue.removeFirst()
             visited += 1
 
-            if view.accessibilityIdentifier == bottomAnchorIdentifier { return view }
+            if view.accessibilityIdentifier == identifier { return view }
             queue.append(contentsOf: view.subviews)
         }
         return nil

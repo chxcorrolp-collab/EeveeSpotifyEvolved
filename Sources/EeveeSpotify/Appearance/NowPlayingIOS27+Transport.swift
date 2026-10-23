@@ -49,24 +49,23 @@ import ObjectiveC.runtime
 
 /// 跨位置替身：把"我们画的那颗"的触摸交给**另一处**的原生控件。
 ///
-/// · `sourceRect` 是**我们这一层坐标**里的可点区域（圆钮的框）；
+/// · `zones` 是若干**本层坐标**里的可点区域，每块各指向一颗原生视图（工具行/传输行共用一套）；
 /// · 命中后 `target.hitTest(中心)` ⇒ 返回原生视图链里的那一颗，UIKit 于是把这一下
 ///   当成**落在原生控件上**（与直接点它完全一样）。
 final class NowPlayingIOS27RemoteRelayView: UIView {
 
-    weak var target: UIView?
-    var sourceRect: CGRect = .zero
+    var zones: [(rect: CGRect, target: UIView)] = []
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return false }
-        return sourceRect.contains(point)
+        return zones.contains { $0.rect.contains(point) }
     }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard point(inside: point, with: event) else { return nil }
-        guard let target, target.window != nil, target.alpha > 0.01, !target.isHidden else {
-            return nil
-        }
+        guard isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return nil }
+        guard let zone = zones.first(where: { $0.rect.contains(point) }) else { return nil }
+        let target = zone.target
+        guard target.window != nil, target.alpha > 0.01, !target.isHidden else { return nil }
         let centre = CGPoint(x: target.bounds.midX, y: target.bounds.midY)
         return target.hitTest(centre, with: event)
     }
@@ -103,9 +102,6 @@ extension NowPlayingIOS27 {
 
     // MARK: - 状态
 
-    /// 被我们藏掉的循环**图标子树**（按钮本身还活着）。
-    static let hiddenRepeatIcons = NSHashTable<UIView>.weakObjects()
-    static var repeatIconAlphas: [ObjectIdentifier: CGFloat] = [:]
     /// 我们画的圆钮 + 它上面的替身。
     static weak var repeatPill: UIView?
     static weak var repeatGlyph: UIImageView?
@@ -123,8 +119,12 @@ extension NowPlayingIOS27 {
         var changed = false
         if let shuffle = row.shuffle, hideChrome(shuffle) { changed = true }
         if let repeatKey = row.repeat {
-            if hideRepeatIcons(repeatKey) { changed = true }
-            if mountRepeatPill(in: page, forwardingTo: repeatKey) { changed = true }
+            // 先摆圆钮、**再**藏图标：摆不出去（量不到工具行）就让循环留在传输行，
+            // 而不是"藏了图标、又没有替身" ⇒ 那颗功能就彻底看不见了。
+            if mountRepeatPill(in: page, forwardingTo: repeatKey) {
+                changed = true
+                if hideGlyphSubtree(repeatKey) { changed = true }
+            }
         }
 
         if !didLogTransport {
@@ -197,30 +197,6 @@ extension NowPlayingIOS27 {
         return nil
     }
 
-    // MARK: - 循环：藏图标（按钮留着收触摸）
-
-    /// 把循环键的**图标子树**按 `alpha = 0` 藏掉（按钮本身不动 —— 替身要能命中的是它）。
-    private static func hideRepeatIcons(_ button: UIView) -> Bool {
-        var changed = false
-        var queue: [UIView] = button.subviews
-        var visited = 0
-        while !queue.isEmpty, visited < 64 {
-            let view = queue.removeFirst()
-            visited += 1
-            queue.append(contentsOf: view.subviews)
-            let key = ObjectIdentifier(view)
-            if repeatIconAlphas[key] == nil {
-                repeatIconAlphas[key] = view.alpha > 0.01 ? view.alpha : 1
-                hiddenRepeatIcons.add(view)
-            }
-            if view.alpha != 0 {
-                view.alpha = 0
-                changed = true
-            }
-        }
-        return changed
-    }
-
     // MARK: - 循环：工具行那颗圆钮 + 替身
 
     @discardableResult
@@ -284,16 +260,20 @@ extension NowPlayingIOS27 {
             repeatRelay = fresh
             changed = true
         }
-        relay.target = repeatKey
-        relay.sourceRect = frame
+        relay.zones = [(frame, repeatKey)]
         if relay.frame != page.bounds { relay.frame = page.bounds }
         if page.subviews.last !== relay { page.bringSubviewToFront(relay) }
         return changed
     }
 
-    /// 队列那颗的框（页面坐标）；量不到就退到分享那颗（两者同在工具行）。
+    /// 循环圆钮的锚：**我们画的那颗队列字形**（T3 之后它才在 AM 的位置上）；
+    /// 还没有字形（第一拍 / T3 没跑）就退到原生队列那颗、再退到分享那颗。
     private static func footerAnchorFrame(in page: UIView) -> CGRect? {
-        let identifiers = [queueButtonIdentifier, NowPlayingLyricsPlate.shareButtonIdentifier]
+        let identifiers = [
+            footerGlyphIdentifierPrefix + "queue",
+            queueButtonIdentifier,
+            NowPlayingLyricsPlate.shareButtonIdentifier,
+        ]
         for identifier in identifiers {
             guard let view = NowPlayingLyricsPlate.findByIdentifier(identifier, in: page) else {
                 continue
@@ -353,14 +333,11 @@ extension NowPlayingIOS27 {
 
     // MARK: - 收尾
 
-    /// 把循环键的图标还回来、拆掉我们的圆钮与替身。
+    /// 拆掉我们的圆钮与替身。
     ///
-    /// 随机那颗走的是 `hideChrome`（`revealChrome()` 统一写回），这里不重复处理。
+    /// 藏掉的图标（随机走 `hideChrome`、循环走 `hideGlyphSubtree`）由 `restore()` 里的
+    /// `revealChrome()` / `revealHiddenGlyphs()` 统一写回 —— T2 与 T3 共用那两套表，只写一次。
     static func teardownTransport() {
-        for view in hiddenRepeatIcons.allObjects {
-            guard let original = repeatIconAlphas[ObjectIdentifier(view)] else { continue }
-            if view.alpha != original { view.alpha = original }
-        }
         repeatPill?.removeFromSuperview()
         repeatPill = nil
         repeatGlyph = nil
@@ -369,8 +346,6 @@ extension NowPlayingIOS27 {
     }
 
     static func clearTransportState() {
-        hiddenRepeatIcons.removeAllObjects()
-        repeatIconAlphas.removeAll()
         repeatPill = nil
         repeatGlyph = nil
         repeatRelay = nil

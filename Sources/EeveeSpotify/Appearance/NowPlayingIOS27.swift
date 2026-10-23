@@ -29,20 +29,24 @@
 //   ③ 封面自己下沿再用一条 mask 淡进那条模糊里 ⇒ 没有接缝；
 //   ④ **标题行只收左边距**（16pt），**纵向留在 Spotify 原生位置** —— 不抬它就不会和进度条
 //      之间空出一大块（照片 161 的老问题）；
-//   ⑤ 顶部 chrome：藏歌单名与向下箭头、画 AM 那根小横条、⋯ 搬到工具行正中间；
-//   ⑥ **底部一点不动**（进度条 / 三个键 / 工具行都是 Spotify 的原生位置），
-//      pw 那套"裸字形 + 三颗工具行"留到下一轮（它不搬东西，可以安全叠加）。
+//   ⑤ 顶部 chrome：藏歌单名与向下箭头、画 AM 那根小横条（⋯ 留在右上角原生位置）；
+//   ⑥ 底部按 AM 重排（2026-10-23 深夜，T1~T4/T6）：
+//      · **进度条** 4pt 细轨 + 无圆钮 + 等宽时间 → `NowPlayingIOS27+Progress.swift`；
+//      · **传输行** 只留上一首/播放/下一首，循环挪到工具行右上方 → `NowPlayingIOS27+Transport.swift`；
+//      · **工具行** 三颗按 AM 摆在 86/207/328（歌词 / 隔空播放 / 队列）→ `NowPlayingIOS27+Footer.swift`；
+//      · **音量条** 夹在传输行与工具行之间 → `NowPlayingPageOverlay.ios27VolumeY`。
 //
-// ## 纪律（前三轮踩出来的）
+// ## 纪律（前几轮踩出来的）
 //
-//   · **不移动**任何会被 Spotify 重排的行（stack / 工具行）——移出去就点不到，替身是 bug 源；
+//   · **不移动**任何会被 Spotify 重排的行（stack / 工具行）——移出去就点不到；
+//     要换位置的控件统一用"**藏字形 + 自绘 + 替身**"（`NowPlayingIOS27RemoteRelayView`）；
 //   · 只对**封面壳**写 `alpha`（记原值、每拍补、收尾写回），其余原生属性一律不碰；
 //   · 自己的视图全部挂在**封面所在的那个整页 cell** 里（contentlayer 在 UI 栈下面），
 //     z-order 天然正确；
 //   · 每 0.3s 蹭 `DeclutterChrome` 的既有节拍（不新开定时器）。
 //
-// 日志 tag：`[iOS27]`。排查先看：`artwork up` / `field mounted` / `context menu moved` /
-// `frames`（各行的真实坐标）/ `restored`。
+// 日志 tag：`[iOS27]`。排查先看：`artwork up` / `field mounted` / `frames`（各行的真实坐标）/
+// `progress styled` / `transport` / `repeat state` / `footer` / `restored`。
 import Foundation
 import UIKit
 import CoreImage
@@ -200,6 +204,9 @@ enum NowPlayingIOS27 {
         // 待办 T1：进度条（4pt 轨 + 藏圆钮 + 等宽时间），见 `NowPlayingIOS27+Progress.swift`。
         // 它只换 UISlider 的三张图与两颗标签的字体，不碰几何、不碰手势。
         if placeProgress(in: page) { changed = true }
+        // 待办 T3 + T6：工具行排成 AM 的三颗（歌词 / 隔空播放 / 队列），见 `NowPlayingIOS27+Footer.swift`。
+        // ⚠️ 必须排在 T2 前面：循环那颗圆钮是**按我们画的那颗队列字形**定位的。
+        if placeFooter(in: page) { changed = true }
         // 待办 T2（用户拍板 A）：藏随机/循环，循环挪到工具行右上方，见 `NowPlayingIOS27+Transport.swift`。
         if placeTransport(in: page) { changed = true }
         if !didLogFrames {
@@ -653,7 +660,7 @@ enum NowPlayingIOS27 {
         let hadState = fieldHost != nil || artworkView != nil || titleRowBase != nil
             || grabber != nil || !shellAlphas.isEmpty || !chromeAlphas.isEmpty
             || progressStyledSlider != nil || progressTimeLabelViews.count > 0
-            || repeatPill != nil || hiddenRepeatIcons.count > 0
+            || repeatPill != nil || footerRelay != nil || !hiddenGlyphs.allObjects.isEmpty
         if didLogRestore || !hadState {
             clearState()
             return
@@ -662,6 +669,8 @@ enum NowPlayingIOS27 {
 
         revealShells()
         revealChrome()
+        // T2/T3 藏掉的原生字形（循环 / 工具行三颗）—— 与 `revealChrome()` 同一套写法，只是目标另一组。
+        revealHiddenGlyphs()
         grabber?.removeFromSuperview()
         grabber = nil
         if let row = titleRow, let recorded = titleRowBase,
@@ -672,6 +681,7 @@ enum NowPlayingIOS27 {
         teardownArtwork()
         teardownProgress()
         teardownTransport()
+        teardownFooter()
 
         writeDebugLog("[\(logTag)] restored (\(reason)) — native cover, title row and our views are back")
         clearState()
@@ -703,6 +713,8 @@ enum NowPlayingIOS27 {
         didLogRestore = false
         clearProgressState()
         clearTransportState()
+        clearFooterState()
+        clearHiddenGlyphs()
     }
 
     private static func revealChrome() {

@@ -57,18 +57,15 @@ enum NowPlayingIOS27 {
 
     /// 标题行左边距（AM 16pt；Spotify 原生 28pt）。**只改横向**。
     static let titleLeadInset: CGFloat = 16
-    /// 封面自己下沿从哪一档开始淡出（占封面高度）。
-    static let artworkFadeStart: CGFloat = 0.90
-    /// 封面下沿那条模糊拷贝的高度（占封面边长）；裁的是原图**同样比例**的下沿 ⇒ 1:1 接得上。
-    static let stripFraction: CGFloat = 0.45
+    /// 封面自己下沿从哪一档开始淡出（占封面高度）。**长一点**，淡进底色才看不出接缝。
+    static let artworkFadeStart: CGFloat = 0.78
+    /// 取"字段色"时裁封面下沿多少（占封面边长）。
+    static let stripFraction: CGFloat = 0.30
     /// 压黑渐变：pw 的 `kBlackFrom = 0.55` / `kBlackTo = 1`（按**窗口高度**算）。
     static let blackFromRatio: CGFloat = 0.55
     /// 字段颜色：pw 的 `SGRPalette` 两条上限（饱和度 0.55、线性亮度 0.07 ⇒ sRGB ≈ 0.29）。
     static let maxFieldSaturation: CGFloat = 0.55
     static let maxFieldBrightness: CGFloat = 0.30
-    /// 高斯模糊半径**按原图宽度比例**（专辑/歌单/艺人页实测的 3.5%）。
-    static let blurRadiusRatio: CGFloat = 0.035
-
     /// 顶部导航那三件的 id（真机树：`108.log:1735-1736`）。
     ///
     ///   · `now-playing-minimize-button` —— 左上那颗向下箭头（48×48，`Tertiary`）；
@@ -103,18 +100,10 @@ enum NowPlayingIOS27 {
     static var chromeAlphas: [ObjectIdentifier: CGFloat] = [:]
     static weak var grabber: UIView?
 
-    /// ⋯（`Context menu`）：搬到工具行正中间，配一个触摸替身。
-    static weak var menuView: UIView?
-    static var menuBase: (ObjectIdentifier, CGAffineTransform)?
-    static weak var menuRelay: NowPlayingTitleRelayView?
-    static let unclippedViews = NSHashTable<UIView>.weakObjects()
-    static var unclippedOriginals: [ObjectIdentifier: Bool] = [:]
-    static var didLogMenu = false
 
     /// 背景 field（挂在封面那个整页 cell 里、我们封面下面）。
     static weak var fieldHost: UIView?
     static weak var fieldSolid: UIView?
-    static weak var fieldBlur: UIImageView?
     static weak var fieldBlack: UIView?
 
     /// 被我们改了左边距的标题行，以及它原来的 `transform` 与原生位置。
@@ -124,6 +113,8 @@ enum NowPlayingIOS27 {
 
     /// 上一次画上去的是哪一首。
     static var lastTrackId = ""
+    /// 上一次给 field 上色的曲目（`lastTrackId` 在 `updateArtwork` 里先写了，这里要单独一笔）。
+    static var lastFieldTrackId = ""
 
     static var didLogArtwork = false
     static var didLogField = false
@@ -247,8 +238,14 @@ enum NowPlayingIOS27 {
             // 换歌那一两拍，`rememberArtworkIfNeeded` 会**故意**返回 nil（树里还是上一首的图）。
             // 这一拍**不要**退回 `firstImage` —— 那会把上一首的封面画到新壳的位置上。
             if trackChanged {
-                revealShells()
-                if let view = artworkView { view.isHidden = true }
+                // ★ 2026-10-23 第五轮（照片 2：切歌闪过 Spotify 原生大封面）：
+                //   **换歌时不要把自己那张收起来** —— 旧图继续顶着（底色也先不换），
+                //   新图一到就原地替换；只有"这一次进来还没有任何图"才让原生露出来。
+                if artworkView != nil {
+                    hideShell(shell)
+                } else {
+                    revealShells()
+                }
                 return false
             }
             image = NowPlayingLyricsPlate.firstImage(in: shell)
@@ -340,10 +337,12 @@ enum NowPlayingIOS27 {
 
     // MARK: - 背景 field（pw 的配方）
 
-    /// 字段色底 + 压黑渐变 + 封面下沿的模糊拷贝。
+    /// 字段色底 + 压黑渐变（`_solid + _black` 那两半，与专辑/歌单/艺人页同一套）。
     ///
-    /// 层次（从下往上）：`solid`（字段色，整页）→ `black`（55% 起渐到纯黑，整页）→
-    /// `blur`（封面下沿那条模糊拷贝，落在方图底边之下）→ 我们那张封面（`updateArtwork` 加的）。
+    /// 层次（从下往上）：`solid`（字段色，整页）→ `black`（55% 起渐到纯黑，整页）
+    /// → 我们那张封面（`updateArtwork` 加的，下沿自己淡出）。
+    /// ★ 2026-10-23 第五轮：**去掉了那条模糊拷贝**（pw 的 `_backdrop`）—— 用户看了照片 1/163
+    /// 说"和 AM 不搭、回退"。现在封面下沿直接淡进字段色，没有会糊成一块的中间层。
     @discardableResult
     private static func mountField(in page: UIView) -> Bool {
         guard let shell = artworkShell,
@@ -380,24 +379,6 @@ enum NowPlayingIOS27 {
         black.layer.addSublayer(blackGradient)
         wrapper.addSubview(black)
 
-        let blur = UIImageView(frame: .zero)
-        blur.contentMode = .scaleToFill
-        blur.clipsToBounds = true
-        blur.isUserInteractionEnabled = false
-        blur.accessibilityIdentifier = "eevee-ios27-field-blur"
-        let blurMask = CAGradientLayer()
-        blurMask.name = "eevee-ios27-blur-mask"
-        blurMask.colors = [
-            UIColor.white.cgColor,
-            UIColor.white.cgColor,
-            UIColor.clear.cgColor,
-        ]
-        blurMask.locations = [0, 0.45, 1]
-        blurMask.startPoint = CGPoint(x: 0.5, y: 0)
-        blurMask.endPoint = CGPoint(x: 0.5, y: 1)
-        blur.layer.mask = blurMask
-        wrapper.addSubview(blur)
-
         // 插在**我们那张封面下面**（cell 里其它原生视图仍在更下面）。
         if let art = artworkView, art.superview === host {
             host.insertSubview(wrapper, belowSubview: art)
@@ -407,7 +388,6 @@ enum NowPlayingIOS27 {
 
         fieldHost = wrapper
         fieldSolid = solid
-        fieldBlur = blur
         fieldBlack = black
         _ = layoutField(in: wrapper)
         _ = updateField(in: page)
@@ -448,41 +428,22 @@ enum NowPlayingIOS27 {
             }
         }
 
-        let side = bounds.width
-        let strip = CGRect(
-            x: 0,
-            y: side,
-            width: side,
-            height: (side * stripFraction).rounded()
-        )
-        if let blur = fieldBlur {
-            if blur.frame != strip {
-                blur.frame = strip
-                changed = true
-            }
-            if let mask = blur.layer.mask as? CAGradientLayer, mask.frame != blur.bounds {
-                mask.frame = blur.bounds
-                changed = true
-            }
-        }
         return changed
     }
 
-    /// 字段色 / 模糊拷贝：按曲目 id 只做一次；换歌交叉淡入。
+    /// 字段色：按曲目 id 只做一次；换歌交叉淡入。
     @discardableResult
     private static func updateField(in page: UIView) -> Bool {
         let trackId = NowPlayingLyricsPlate.currentTrackId() ?? ""
-        if trackId == lastTrackId, fieldBlur?.image != nil { return false }
+        if trackId == lastFieldTrackId, fieldSolid != nil { return false }
         guard let shell = artworkShell,
               let image = NowPlayingLyricsPlate.firstImage(in: shell)
                   ?? NowPlayingLyricsPlate.rememberArtworkIfNeeded(in: page) else { return false }
 
         let colour = fieldColour(from: image)
-        let strip = bottomStrip(of: image).flatMap { blurredImage($0) }
-
+        lastFieldTrackId = trackId
         let apply = {
             fieldSolid?.backgroundColor = colour
-            if let strip { fieldBlur?.image = strip }
         }
         // 只对我们自己的 wrapper 做交叉淡入（对外层 cell 做 transition 会连 Spotify 的内容一起快照）。
         if let wrapper = fieldHost, wrapper.window != nil {
@@ -603,7 +564,10 @@ enum NowPlayingIOS27 {
             }
             if hideChrome(view) { changed = true }
         }
-        if placeContextMenu(in: page) { changed = true }
+        // ★ 2026-10-23 第五轮：⋯ **不搬了**。
+        //   它住在导航条里（SwiftUI 托管的那一层），**每一帧都会重置 transform** ——
+        //   我们 0.3s 一拍地搬回去就是"一直在闪"（用户报的现象）。要搬得换一种做法
+        //   （自绘一颗 + 自己拉菜单），不在这一轮。
         if placeGrabber(in: page) { changed = true }
         return changed
     }
@@ -632,95 +596,6 @@ enum NowPlayingIOS27 {
         page.bringSubviewToFront(view)
         grabber = view
         return true
-    }
-
-    /// 把 ⋯（`Context menu`）搬到**工具行正中间** —— 也就是 AM 那颗雷达标的落点。
-    ///
-    /// 风险与做法：它住在导航条里，往下搬 700+pt ⇒ 链上只要有 `clipsToBounds` 就会被切掉，
-    /// 所以先把链上的裁剪**放开**（记原值、收尾写回）；移出原来的 superview 之后命中测试
-    /// 够不到它 ⇒ 用 `NowPlayingTitleRelayView` 转发（只覆盖它那一块，别处照常穿透）。
-    @discardableResult
-    private static func placeContextMenu(in page: UIView) -> Bool {
-        guard let menu = NowPlayingLyricsPlate.findByIdentifier(contextMenuIdentifier, in: page) else {
-            return false
-        }
-        guard let footer = footerRowView(in: page), footer.window != nil else { return false }
-
-        let footerFrame = footer.convert(footer.bounds, to: page)
-        let target = CGPoint(x: page.bounds.width / 2, y: footerFrame.midY)
-        let current = menu.convert(menu.bounds, to: page)
-        let dx = (target.x - current.midX).rounded()
-        let dy = (target.y - current.midY).rounded()
-
-        menuView = menu
-        let key = ObjectIdentifier(menu)
-        let base: CGAffineTransform
-        if let recorded = menuBase, recorded.0 == key {
-            base = recorded.1
-        } else {
-            base = menu.transform
-            menuBase = (key, base)
-            openClips(from: menu, upTo: page)
-        }
-        let wanted = base.concatenating(CGAffineTransform(translationX: dx, y: dy))
-        var changed = false
-        if menu.transform != wanted {
-            menu.transform = wanted
-            changed = true
-        }
-
-        let relay: NowPlayingTitleRelayView
-        if let existing = menuRelay, existing.superview === page {
-            relay = existing
-        } else {
-            menuRelay?.removeFromSuperview()
-            let view = NowPlayingTitleRelayView(frame: page.bounds)
-            view.backgroundColor = .clear
-            view.accessibilityIdentifier = "eevee-ios27-menu-relay"
-            page.addSubview(view)
-            page.bringSubviewToFront(view)
-            menuRelay = view
-            relay = view
-            changed = true
-        }
-        relay.row = menu
-        if relay.frame != page.bounds { relay.frame = page.bounds; changed = true }
-
-        if !didLogMenu {
-            didLogMenu = true
-            writeDebugLog(
-                "[\(logTag)] context menu moved to the footer centre — "
-                    + "\(Int(dx)),\(Int(dy)) (AM's radar slot); tap relay armed"
-            )
-        }
-        return changed
-    }
-
-    /// 放开从 `view` 到 `page` 之间的裁剪（记原值；收尾 `restoreClips()` 写回）。
-    private static func openClips(from view: UIView, upTo page: UIView) {
-        var current = view.superview
-        var visited = 0
-        while let candidate = current, candidate !== page, visited < 8 {
-            visited += 1
-            if candidate.clipsToBounds {
-                let key = ObjectIdentifier(candidate)
-                if unclippedOriginals[key] == nil {
-                    unclippedOriginals[key] = true
-                    unclippedViews.add(candidate)
-                }
-                candidate.clipsToBounds = false
-            }
-            current = candidate.superview
-        }
-    }
-
-    private static func restoreClips() {
-        for view in unclippedViews.allObjects {
-            guard let original = unclippedOriginals[ObjectIdentifier(view)] else { continue }
-            if view.clipsToBounds != original { view.clipsToBounds = original }
-        }
-        unclippedViews.removeAllObjects()
-        unclippedOriginals.removeAll()
     }
 
     private static func hideChrome(_ view: UIView) -> Bool {
@@ -758,8 +633,7 @@ enum NowPlayingIOS27 {
     /// 关开关 / 离开页面：把写过的每一处写回去，拆掉我们自己的视图。
     static func restore(reason: String) {
         let hadState = fieldHost != nil || artworkView != nil || titleRowBase != nil
-            || grabber != nil || menuBase != nil || menuRelay != nil
-            || !unclippedOriginals.isEmpty || !shellAlphas.isEmpty || !chromeAlphas.isEmpty
+            || grabber != nil || !shellAlphas.isEmpty || !chromeAlphas.isEmpty
         if didLogRestore || !hadState {
             clearState()
             return
@@ -768,7 +642,6 @@ enum NowPlayingIOS27 {
 
         revealShells()
         revealChrome()
-        teardownContextMenu()
         grabber?.removeFromSuperview()
         grabber = nil
         if let row = titleRow, let recorded = titleRowBase,
@@ -791,14 +664,11 @@ enum NowPlayingIOS27 {
         titleRowBase = nil
         titleRowBaseRect = nil
         grabber = nil
-        menuView = nil
-        menuBase = nil
-        menuRelay = nil
         fieldHost = nil
         fieldSolid = nil
-        fieldBlur = nil
         fieldBlack = nil
         lastTrackId = ""
+        lastFieldTrackId = ""
         hiddenShells.removeAllObjects()
         shellAlphas.removeAll()
         hiddenChrome.removeAllObjects()
@@ -809,17 +679,6 @@ enum NowPlayingIOS27 {
         didLogFrames = false
         didLogMissingCover = false
         didLogRestore = false
-        didLogMenu = false
-    }
-
-    private static func teardownContextMenu() {
-        if let view = menuView, let recorded = menuBase,
-           recorded.0 == ObjectIdentifier(view), view.transform != recorded.1 {
-            view.transform = recorded.1
-        }
-        menuRelay?.removeFromSuperview()
-        menuRelay = nil
-        restoreClips()
     }
 
     private static func revealChrome() {
@@ -833,7 +692,6 @@ enum NowPlayingIOS27 {
         fieldHost?.removeFromSuperview()
         fieldHost = nil
         fieldSolid = nil
-        fieldBlur = nil
         fieldBlack = nil
     }
 
@@ -938,19 +796,5 @@ enum NowPlayingIOS27 {
             )
         }
         writeDebugLog("[\(logTag)] frames — " + parts.joined(separator: " · "))
-    }
-
-    /// 高斯模糊（按原图宽度的 3.5%；一换歌才一次，不缓存 `CIContext`）。
-    private static func blurredImage(_ image: UIImage) -> UIImage? {
-        guard let cgImage = image.cgImage else { return nil }
-        let input = CIImage(cgImage: cgImage)
-        guard let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
-        let radius = min(40, max(8, image.size.width * blurRadiusRatio))
-        filter.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
-        filter.setValue(radius, forKey: kCIInputRadiusKey)
-        guard let output = filter.outputImage else { return nil }
-        let context = CIContext(options: nil)
-        guard let rendered = context.createCGImage(output, from: input.extent) else { return nil }
-        return UIImage(cgImage: rendered, scale: image.scale, orientation: image.imageOrientation)
     }
 }

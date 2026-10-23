@@ -25,6 +25,9 @@
 //
 //   ① **封面满血**：`(0, 0, W, 0.58H)` 的竖长裁切（`scaleAspectFill`、无圆角），从屏幕最顶上开始画；
 //      ⚠️ 2026-10-24 之前这里写的是 `W×W` 方图 —— 照片 2 显示那会在封面与标题之间留 186pt 的黑。
+//   ①′ **底部那一坨整体上移 55pt**（`npv.bottomStackView`，曲名/进度/时间/传输行/工具行都在里面）
+//      ⇒ 曲名落到 545、只比封面下沿（520）低 25pt。目标就是 `C:\dsh\am\1.jpg` 那个关系
+//      （曲名压在封面下沿、进度紧接其下）。量位置的地方全部改用 `convert`（带 transform）。
 //   ② **背景 = pw 的 field**：字段色（封面下沿的平均色，压到 pw 的两条上限）→
 //      窗口 55% 起渐到纯黑 → 封面下沿那一条**模糊拷贝**（同一条边界的裁切，1:1 接得上）；
 //   ③ 封面自己下沿再用一条 mask 淡进那条模糊里 ⇒ 没有接缝；
@@ -78,6 +81,15 @@ enum NowPlayingIOS27 {
     static let artworkHeightRatio: CGFloat = 0.58
     /// 封面高宽比上限：方图裁成竖图最多裁到 1.30；再大会把封面两边裁掉太多。
     static let artworkMaxAspect: CGFloat = 1.30
+    /// 底部那一坨（`npv.bottomStackView`：曲名 / 进度 / 时间 / 传输行 / 工具行）整体上移多少。
+    ///
+    /// ★ 2026-10-24（用户：「`C:\dsh\am` 里不是有图片 1 么，这个先做得像吧起码」）：
+    ///   图片 1 里曲名**压在封面下沿**、进度紧接其下；我们原来是"方图 + 曲名留在原生 600"
+    ///   ⇒ 封面（0…520）到曲名之间一整块黑。上移 55 ⇒ 曲名 600→**545**，只比封面下沿低 25pt，
+    ///   就是图片 1 那个关系（再往上就压到封面上了，那是另一笔账：得先确认封面层在曲名下面）。
+    /// ⚠️ 只有**这一层** transform；量位置的地方必须用 `convert`（带 transform），不能用
+    ///   `untransformed`，否则字形/音量行会留在原位（上一轮"抬 130pt"翻车就是这个）。
+    static let bottomStackYOffset: CGFloat = -55
     /// 压黑渐变：从页面 60% 起渐到纯黑（pw 的 `kBlackFrom` 是 0.55；这里推后一点，
     /// 让封面淡出来的那块颜色多留一会儿，过渡更长）。
     static let blackFromRatio: CGFloat = 0.60
@@ -128,6 +140,11 @@ enum NowPlayingIOS27 {
     static weak var titleRow: UIView?
     static var titleRowBase: (ObjectIdentifier, CGAffineTransform)?
     static var titleRowBaseRect: (ObjectIdentifier, CGRect)?
+
+    /// 被我们**整体上移**的"底部那一坨"，以及它原来的 `transform`（收尾要写回）。
+    static weak var bottomStack: UIView?
+    static var bottomStackBase: (ObjectIdentifier, CGAffineTransform)?
+    static var didLogBottomStack = false
 
     /// 上一次画上去的是哪一首。
     static var lastTrackId = ""
@@ -208,6 +225,13 @@ enum NowPlayingIOS27 {
 
         var changed = updateArtwork(shell, in: page)
         if mountField(in: page) { changed = true }
+        // ★ 2026-10-24（用户：「C:\dsh\am 里不是有图片 1 么，这个先做得像吧起码」）：
+        //   图片 1 里曲名**压在封面下沿**上、进度/时间紧接其下 —— 而我们曲名在 600、
+        //   封面到 414…520 就结束 ⇒ 中间 186pt 黑。这里把**底部那一坨**（`npv.bottomStackView`，
+        //   曲名 + 进度 + 传输行 + 工具行全在里面）整体上移 55pt ⇒ 曲名落到 545，
+        //   只比封面下沿（520）低 25pt，视觉上就是"贴在封面下沿"。
+        //   ⚠️ 只写这一个 transform；必须排在各"量位置"的函数**之前**，让它们量到新位置。
+        if placeBottomStack(in: page) { changed = true }
         if placeTitleRow(in: page) { changed = true }
         if placeNavChrome(in: page) { changed = true }
         // 待办 T1：进度条（4pt 轨 + 藏圆钮 + 等宽时间），见 `NowPlayingIOS27+Progress.swift`。
@@ -574,6 +598,49 @@ enum NowPlayingIOS27 {
 
     // MARK: - 标题行
 
+    /// 把 `npv.bottomStackView` 整体上移 `bottomStackYOffset`（逐拍幂等，只写一层 transform）。
+    ///
+    /// 为什么选它：曲名 / 进度 / 时间 / 传输行 / 工具行**都在这一个 stack 里**（日志：
+    /// `npv.bottomStackView=4,592 406×241`），所以一次 transform 就能把"整块底部"提到
+    /// 图片 1 的位置；逐个行去搬要写五份、还要各自记账，出错面大得多。
+    ///
+    /// ⚠️ 必须排在各"量位置"的函数之前（`placeTitleRow` / `placeFooter` / `placeTransport` /
+    ///   音量行），并且那些地方必须用 **`convert`**（带 transform）而不是 `untransformed`。
+    @discardableResult
+    private static func placeBottomStack(in page: UIView) -> Bool {
+        guard let stack = NowPlayingLyricsPlate.findByIdentifier(
+            NowPlayingLyricsPlate.bottomStackIdentifier, in: page
+        ) else { return false }
+        bottomStack = stack
+
+        let key = ObjectIdentifier(stack)
+        let base: CGAffineTransform
+        if let recorded = bottomStackBase, recorded.0 == key {
+            base = recorded.1
+        } else {
+            base = stack.transform
+            bottomStackBase = (key, base)
+        }
+
+        let wanted = base.concatenating(
+            CGAffineTransform(translationX: 0, y: bottomStackYOffset)
+        )
+        guard stack.transform != wanted else { return false }
+        stack.transform = wanted
+
+        if !didLogBottomStack {
+            didLogBottomStack = true
+            let rect = stack.convert(stack.bounds, to: page)
+            let title = titleRowView(in: page).map { $0.convert($0.bounds, to: page) }
+            writeDebugLog(
+                "[\(logTag)] bottom stack lifted \(Int(bottomStackYOffset))pt —"
+                    + " \(Int(rect.minY))…\(Int(rect.maxY))"
+                    + (title.map { ", title row y \(Int($0.minY))" } ?? "")
+            )
+        }
+        return true
+    }
+
     /// 只把标题行的**左边距**收到 16pt（纵向留在原生位置）。
     ///
     /// 为什么不抬上去：前三轮把它抬到 `W+56`，而进度条在原生那一档 —— 中间就空出一大块
@@ -700,6 +767,7 @@ enum NowPlayingIOS27 {
     /// 关开关 / 离开页面：把写过的每一处写回去，拆掉我们自己的视图。
     static func restore(reason: String) {
         let hadState = fieldHost != nil || artworkView != nil || titleRowBase != nil
+            || bottomStackBase != nil
             || grabber != nil || !shellAlphas.isEmpty || !chromeAlphas.isEmpty
             || progressStyledSlider != nil || progressTimeLabelViews.count > 0
             || repeatPill != nil || footerRelay != nil || !hiddenGlyphs.allObjects.isEmpty
@@ -713,6 +781,11 @@ enum NowPlayingIOS27 {
         revealChrome()
         // T2/T3 藏掉的原生字形（循环 / 工具行三颗）—— 与 `revealChrome()` 同一套写法，只是目标另一组。
         revealHiddenGlyphs()
+        // ★ 2026-10-24：底部那一坨的上移也要写回（否则离开页面后下一位用户看到的是被抬高的行）。
+        if let stack = bottomStack, let recorded = bottomStackBase,
+           recorded.0 == ObjectIdentifier(stack), stack.transform != recorded.1 {
+            stack.transform = recorded.1
+        }
         grabber?.removeFromSuperview()
         grabber = nil
         if let row = titleRow, let recorded = titleRowBase,
@@ -737,6 +810,9 @@ enum NowPlayingIOS27 {
         titleRow = nil
         titleRowBase = nil
         titleRowBaseRect = nil
+        bottomStack = nil
+        bottomStackBase = nil
+        didLogBottomStack = false
         grabber = nil
         fieldHost = nil
         fieldSolid = nil
@@ -852,7 +928,9 @@ enum NowPlayingIOS27 {
             guard let view = NowPlayingLyricsPlate.findByIdentifier(identifier, in: page) else {
                 return "\(identifier)=missing"
             }
-            let rect = NowPlayingLyricsPlate.untransformed(view, in: page)
+            // ⚠️ 用 `convert`（带 transform）：底部那一坨被整体上移 55pt，
+            //    `untransformed` 打出来的是**上移之前**的坐标，排查时会误判成"没生效"。
+            let rect = view.convert(view.bounds, to: page)
             return "\(identifier)=\(Int(rect.minX)),\(Int(rect.minY))"
                 + " \(Int(rect.width))×\(Int(rect.height))"
         }
@@ -868,7 +946,7 @@ enum NowPlayingIOS27 {
             text(contextMenuIdentifier),
         ]
         if let row = titleRow {
-            let rect = NowPlayingLyricsPlate.untransformed(row, in: page)
+            let rect = row.convert(row.bounds, to: page)
             parts.append(
                 "titleRow=\(Int(rect.minX)),\(Int(rect.minY)) \(Int(rect.width))×\(Int(rect.height))"
             )

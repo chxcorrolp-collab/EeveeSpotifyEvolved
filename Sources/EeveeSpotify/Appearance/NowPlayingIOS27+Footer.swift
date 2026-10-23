@@ -184,7 +184,10 @@ extension NowPlayingIOS27 {
     ) -> CGFloat? {
         var values: [CGFloat] = []
         for view in [share, queue, connect].compactMap({ $0 }) {
-            let rect = NowPlayingLyricsPlate.untransformed(view, in: page)
+            // ⚠️ 必须用 `convert`（**带 transform**）：2026-10-24 起 `npv.bottomStackView`
+            //   被整体上移 55pt（`placeBottomStack`），`untransformed` 会量到**上移之前**的位置，
+            //   于是我们画的字形/替身留在老地方、和原生键错开一整段（上一轮翻车就这原因）。
+            let rect = view.convert(view.bounds, to: page)
             guard rect.height > 1, rect.midY > 0, rect.midY < page.bounds.height else { continue }
             values.append(rect.midY)
         }

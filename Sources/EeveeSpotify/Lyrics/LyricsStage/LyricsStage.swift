@@ -107,8 +107,6 @@ final class LyricsStage {
     /// 在真机日志 18 上踩过并修过（`dropForeignLineModel`），这里按同一条纪律处理：
     /// **换歌 ⇒ 把版本号判据作废**，下一次对齐一定重新求值。
     private var lastLiveTrackId = ""
-    /// 已经渲染进去的样式（设置页当场改样式时要重建 rootView）。
-    private var renderedStyle: LyricsStageStyle?
     /// 空状态那一句（还在查 / 没找到 / 纯音乐）。
     private var statusText = ""
 
@@ -206,7 +204,7 @@ final class LyricsStage {
         }
 
         writeDebugLog(
-            "[\(Self.logTag)] present — style=\(renderedStyle?.rawValue ?? "?")"
+            "[\(Self.logTag)] present — crazy word-by-word stage"
                 + " lines=\(lines.count)"
                 + " scene=\(NSStringFromClass(type(of: scene)))"
                 + " level=\(Int(stageWindow.windowLevel.rawValue))"
@@ -349,12 +347,6 @@ final class LyricsStage {
             changed = true
         }
 
-        let style = UserDefaults.experimentsOptions.lyricsStageStyle
-        if style != renderedStyle {
-            renderedStyle = style
-            changed = true
-        }
-
         // 空状态那一句也要跟着"查词进度"变：`loading → failed` **不一定**会让
         // `currentLyricsVersion` 变（失败也可能只是没有再取词），只靠上面那段会停在
         // "正在等待…" —— 而用户盯着的正是那句话。
@@ -383,7 +375,6 @@ final class LyricsStage {
             artist: currentTrackArtist,
             provider: providerName,
             providerCredit: providerCredit,
-            style: renderedStyle ?? UserDefaults.experimentsOptions.lyricsStageStyle,
             showsTranslation: showsTranslationNow,
             statusText: statusText,
             onClose: { LyricsStage.shared.dismiss() }

@@ -31,21 +31,17 @@ struct ExperimentsOptions: Codable, Equatable {
     /// 见 `AppleMusicTtml+UserDefaults.swift`）。没填令牌时这一源直接抛
     /// `.missingAppleMusicToken`，界面上表现为"未找到歌词" + 一次提示弹窗。
     var appleMusicOfficialTtml: Bool
-    /// 「歌词舞台」—— 2026-10-24（用户：「功能开关放在实验里面」）。
+    /// 「更炫酷的逐词歌词」—— 2026-10-24（用户：功能开关放实验页，名字改成这个）。
     ///
     /// 打开后，听歌页（iOS 27 布局）底排左边的歌词气泡**不再转发给 Spotify 的
     /// `ShowLyricsButton`**，而是打开我们自己的全屏歌词窗口（`Lyrics/LyricsStage/`）。
     /// 理由见 `C:\dsh\me\HANDOFF_2026-10-23_EeveeSpotify-ng_LyricsStage-Folia.md`
-    /// 第 1 / 7 节：新版页面里没有歌词区，那颗气泡原本只是个"找不到原生键就变暗"的替身。
+    /// 第 1 / 7 节：新版页面里没有歌词区，那颗气泡原本只是个“找不到原生键就变暗”的替身。
     ///
     /// **默认关**：它是一条整屏型的新界面，还没在真机上定过性（正是「实验」页的准入条件 ①）。
+    /// ★ 2026-10-24（用户）：只保留仿 Folia 的那一档观感（`LyricsStageTiltLayout`），
+    ///   `appleMusic` 那一档已删 —— 正常逐词歌词是进播放器那条线的事，舞台只负责“炫”。
     var lyricsStage: Bool
-    /// 舞台的排版样式（`.appleMusic` 整屏滚动 / `.tilt` 大字错落）。
-    ///
-    /// 存 `LyricsStageStyle` 而不是裸 `String`：解码时未知值会走 `?? .appleMusic`，
-    /// 不会因为以后删了一档样式就让整份设置掉回默认（那会顺带把 `liveContainerSharing`
-    /// 打开 —— 见下面手写解码那段）。
-    var lyricsStageStyle: LyricsStageStyle
 
     init(
         liveContainerSharing: Bool,
@@ -53,8 +49,7 @@ struct ExperimentsOptions: Codable, Equatable {
         amllFuzzySearch: Bool = false,
         spicyLyricsCrossValidation: Bool = false,
         appleMusicOfficialTtml: Bool = false,
-        lyricsStage: Bool = false,
-        lyricsStageStyle: LyricsStageStyle = .appleMusic
+        lyricsStage: Bool = false
     ) {
         self.liveContainerSharing = liveContainerSharing
         self.showInstagramDestination = showInstagramDestination
@@ -62,7 +57,6 @@ struct ExperimentsOptions: Codable, Equatable {
         self.spicyLyricsCrossValidation = spicyLyricsCrossValidation
         self.appleMusicOfficialTtml = appleMusicOfficialTtml
         self.lyricsStage = lyricsStage
-        self.lyricsStageStyle = lyricsStageStyle
     }
 
     /// 手写解码：`liveContainerSharing` 之外那些都是**后加的**字段，早期盘上根本没有它们。
@@ -79,12 +73,5 @@ struct ExperimentsOptions: Codable, Equatable {
         appleMusicOfficialTtml = try container.decodeIfPresent(Bool.self, forKey: .appleMusicOfficialTtml)
             ?? false
         lyricsStage = try container.decodeIfPresent(Bool.self, forKey: .lyricsStage) ?? false
-        // ⚠️ 用 `try?` 而不是 `try`：`.rawValue` 解不出来时（比如以后删掉一档样式）是**抛错**，
-        //   而抛错会让整份 `experimentsOptions` 掉回 defaultValue —— 那等于顺手把
-        //   `liveContainerSharing` 又打开。未知样式一律按默认那一档显示。
-        lyricsStageStyle = (try? container.decodeIfPresent(
-            LyricsStageStyle.self,
-            forKey: .lyricsStageStyle
-        )) ?? .appleMusic
     }
 }

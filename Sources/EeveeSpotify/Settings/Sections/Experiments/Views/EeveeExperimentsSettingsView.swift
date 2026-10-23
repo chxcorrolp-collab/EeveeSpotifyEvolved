@@ -13,7 +13,7 @@ import UIKit
 /// ⚠️ 2026-10-18：「NetEase 交叉验证」与「PetitLyrics 回退 NetEase」两个实验**已整体撤掉**
 ///    （用户拍板：这周关于网易云的改动全部回退，NE 目前只在来源说明里标注"不推荐非中国用户使用"）。
 ///    这一页现在只留 Instagram 分享位、AMLL 模糊搜索、SpicyLyrics 交叉验证、Apple 官方 TTML。
-/// ★ 2026-10-24：加**歌词舞台**（`Lyrics/LyricsStage/`，默认关 + 两档样式）——
+/// ★ 2026-10-24：加**更炫酷的逐词歌词**（`Lyrics/LyricsStage/`，默认关）——
 ///   它是一条整屏型的新界面，符合本页准入条件 ①（还没在真机上定过性）。
 struct EeveeExperimentsSettingsView: View {
     @State var experimentsOptions = UserDefaults.experimentsOptions
@@ -44,30 +44,18 @@ struct EeveeExperimentsSettingsView: View {
             //   它的行为早就定死了 —— 链接打不开就转给 LC、失败就把 URL 复制到剪贴板；
             //   真正"没定性"的是 LC 那一侧的私有深链，不是这个开关。）
 
-            // ★★ 2026-10-24（用户：「功能开关放在实验里面」）：**歌词舞台**。
+            // ★★ 2026-10-24（用户）：**更炫酷的逐词歌词**（原名「歌词舞台」）。
             //   一条整屏型的新界面，还没在真机上定过性 ⇒ 按本页准入条件 ① 放这里，默认关。
             //   实现见 `Lyrics/LyricsStage/`，设计依据见
             //   `C:\dsh\me\HANDOFF_2026-10-23_EeveeSpotify-ng_LyricsStage-Folia.md`。
             //   打开后听歌页（iOS 27 布局）底排左边那颗歌词气泡改成开我们自己的全屏窗口，
             //   不再转发给 Spotify 的 `ShowLyricsButton`（`NowPlayingIOS27+Footer.swift`）。
-            //   样式选择器只在开关打开时出现 —— 关着的时候不占版面。
-            Section(footer: Text(lyricsStageFooter)) {
+            //   ★ 2026-10-24（用户）：只保留仿 Folia 那一档观感，**样式选择器已删**。
+            Section(footer: Text("lyrics_stage_description".localized)) {
                 Toggle(
                     "lyrics_stage".localized,
                     isOn: $experimentsOptions.lyricsStage
                 )
-
-                if experimentsOptions.lyricsStage {
-                    Picker(
-                        "lyrics_stage_style".localized,
-                        selection: $experimentsOptions.lyricsStageStyle
-                    ) {
-                        ForEach(LyricsStageStyle.allCases, id: \.self) { style in
-                            Text(style.displayName).tag(style)
-                        }
-                    }
-                    .pickerStyle(SegmentedPickerStyle())
-                }
             }
 
             // ★★ 2026-10-16：这个实验 2026-10-02 删过一次 —— 它当时挂的
@@ -138,7 +126,6 @@ struct EeveeExperimentsSettingsView: View {
 
             // ★ 2026-10-24：舞台开关关掉时**当场收窗口** —— 它是一扇独立窗口，
             //   不跟着开关收的话只能等用户自己下拉，那看起来就像"开关没生效"。
-            //   样式那一颗不用管：宿主每 0.25s 对齐一次，打开着的舞台会就地换样式。
             if !options.lyricsStage {
                 LyricsStageEntry.dismissIfPresented()
             }
@@ -160,34 +147,6 @@ struct EeveeExperimentsSettingsView: View {
                 AppleMusicOfficialTtmlLyricsRepository.invalidateAccountCache()
             }
         }
-    }
-
-    /// 开关下方那段说明：开关关闭时只讲"这是什么"，打开后再追加"怎么拿令牌"。
-    private var appleMusicOfficialTtmlFooter: String {
-        var text = "apple_music_official_ttml_description".localized
-
-        if experimentsOptions.appleMusicOfficialTtml {
-            text.append("\n\n")
-            text.append("apple_music_official_ttml_token_hint".localized)
-        }
-
-        return text
-    }
-
-    /// 开关下方那段说明：关着时只讲"这是什么 + 入口在哪"，打开后再补一句"两档样式怎么选"。
-    ///
-    /// ⚠️ 必须写明"入口在 iOS 27 听歌页底排左边那颗气泡"：舞台的入口只挂在
-    ///   `NowPlayingIOS27+Footer` 上（旧布局那一套没动），用户没开那一版布局时
-    ///   会觉得"开了没反应"。
-    private var lyricsStageFooter: String {
-        var text = "lyrics_stage_description".localized
-
-        if experimentsOptions.lyricsStage {
-            text.append("\n\n")
-            text.append("lyrics_stage_style_hint".localized)
-        }
-
-        return text
     }
 
     /// `media-user-token` 输入框（开关打开时才出现）。

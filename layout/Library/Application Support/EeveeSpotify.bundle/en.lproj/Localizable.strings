@@ -102,12 +102,8 @@ experiments_page_warning = "Please note: the features below are either untested 
 show_instagram_destination = "Show Instagram Destination";
 show_instagram_destination_description = "Always show the Instagram share destination. %@";
 
-lyrics_stage = "Lyrics stage";
-lyrics_stage_description = "Opens our own full-screen lyrics window instead of handing the tap to Spotify: the lyrics bubble on the left of the bottom row on the iOS 27 now-playing page opens it, and swiping down (or the chevron) closes it. Requires iOS 26 or newer and the iOS 27 now-playing layout.";
-lyrics_stage_style = "Stage style";
-lyrics_stage_style_apple_music = "Word by word";
-lyrics_stage_style_tilt = "Big and offset";
-lyrics_stage_style_hint = "Word by word: the full Apple Music style page, scrollable, every word lights up. Big and offset: four lines only, the current line set large and the others staggered - no scrolling.";
+lyrics_stage = "Fancier word-by-word lyrics";
+lyrics_stage_description = "Requires the iOS 27 now-playing layout and iOS 26 or newer. Performance cost goes up noticeably.";
 lyrics_stage_waiting = "Waiting for this track's lyrics...";
 lyrics_stage_no_lyrics = "No lyrics available for this track.";
 

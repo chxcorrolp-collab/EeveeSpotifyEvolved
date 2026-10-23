@@ -96,12 +96,8 @@ experiments_page_warning = "请注意：以下功能要么未经测试，要么�
 show_instagram_destination = "显示 Instagram 分享目标";
 show_instagram_destination_description = "始终把 Instagram 作为分享目标。%@";
 
-lyrics_stage = "歌词舞台";
-lyrics_stage_description = "开启后，听歌页底排左边的歌词气泡不再交给 Spotify，而是打开我们自己的全屏歌词窗口：气泡打开、下拉（或右上角箭头）关闭。需要 iOS 26 及以上，并且先开启「iOS 27 听歌页」布局。";
-lyrics_stage_style = "舞台样式";
-lyrics_stage_style_apple_music = "逐词歌词";
-lyrics_stage_style_tilt = "大字错落";
-lyrics_stage_style_hint = "逐词歌词：Apple Music 风格的整屏歌词页，可滚动、逐词点亮。大字错落：一屏只留四行，当前行放大、其余按距离缩小错开，不能滚动。";
+lyrics_stage = "更炫酷的逐词歌词";
+lyrics_stage_description = "选项生效需要开启 iOS27 听歌页以及系统版本不低于 iOS26。性能开销会显著上升。";
 lyrics_stage_waiting = "正在等待这一首的歌词……";
 lyrics_stage_no_lyrics = "这一首没有可用的歌词。";
 

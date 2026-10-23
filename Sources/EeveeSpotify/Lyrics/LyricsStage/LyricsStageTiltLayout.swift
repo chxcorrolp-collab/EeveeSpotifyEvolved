@@ -1,32 +1,35 @@
 import SwiftUI
 
-// 歌词舞台的「大字错落」排版（样式：`tilt`）。
+// 歌词舞台的唯一排版：「更炫酷的逐词歌词」（参考 Folia 的 `tilt`）。
 //
-// 设计**参考** Folia 的 `tilt`（`folia-major/src/components/visualizer/tilt/`）：
-//   · 一屏只留 3 行 —— 不是"歌词列表"，是"舞台上的一句话"；
-//   · 焦点行明显更大，上下两行缩下去、变淡；
-//   · 上下文两行统一往里让一点（焦点行凸出来），形成"错落"而不是"参差"；
-//   · 逐字点亮仍然由 `SynchronizedLyricText` 负责（和全屏歌词页**同一套**
-//     光晕 / 填充前沿 / 长音强调），所以两档的"唱到哪一个字"在视觉上是一致的。
+// ★ 2026-10-24（用户拍板）：「歌词舞台就只留这个仿 fo 的就好，另外一个没必要留着 ——
+//   除了仿 fo，正常的逐词歌词都是要进播放器的」。⇒ `appleMusic` 那一档（复用
+//   `AppleMusicLyricsPage` 的整屏滚动版）**整条删掉**，舞台只剩这一种观感。
 //
-// ⚠️ 只参考**排版思路与参数**，不复制 Folia 的代码/注释（它是 AGPL-3.0，我们是 GPL-3.0；
-//   见 `C:\dsh\me\HANDOFF_2026-10-23_EeveeSpotify-ng_LyricsStage-Folia.md` §4 的 C 档）。
-// ⚠️ 这里**不给滚动**：一屏就那几行（Folia 的 tilt 同样不滚动）。要翻歌词请切回
-//   `appleMusic` 那一档（设置 → 实验 → 歌词舞台 → 样式）。
+// ## 为什么第一版"不炫"（2026-10-24 复盘）
 //
-// ★ 2026-10-24（真机照片 1 的返工）：第一版是"每行按距离各自偏移 + 各自斜排 + 每行都画译文"，
-//   在 414pt 宽的屏幕上一眼就是"排版乱了"：
-//     · 四行四个左边距（0/+16/+24）、每行还带一点旋转 ⇒ 左边缘参差、像没对齐；
-//     · 非焦点行的译文被压到 11pt × 0.22 透明度 ⇒ 只剩一道灰糊；
-//     · 焦点行的译文按 0.52 倍派生 = 17.7pt，比上下文的主歌词还粗 ⇒ 抢戏；
-//     · 一屏四行 + 四条译文 ⇒ 整块太高，被垂直居中后顶上留一大片空白。
-//   现在：**三行**、**同一个左边距**（上下文行统一 +16，焦点行 0）、**不旋转**，
-//   **只给焦点行画译文/副唱/罗马字**，字号 34 / 20，译文 15。干净优先，"错落"靠字号与缩进表达。
+//   原来只做了「字号 34/20 + 缩进 + 透明度」，那是**排版**，不是**舞台**：
+//     · 没有 z 深度 / 没有透视 ⇒ 画面是平的；
+//     · 换行只是整块淡一下，没有"新行落位、旧行飘走"；
+//     · 光晕是 22pt 正文那一档（`glowRadius = 5pt` 固定值），34pt 上几乎看不见；
+//     · 没有节奏 —— Folia 的"活"有一半来自随拍脉冲。
 //
-// 性能（交接文档 §5 / §6 的教训）：
-//   · 只有焦点行开逐字特效（`appliesTimingEffects`），上下两行是**静态绘制**；
-//   · 不重建布局：每帧只是"换一个 `playbackTime` 交给渲染器"，行窗口只在换行时变；
-//   · 不给 `ForEach` 做任何逐帧变化的 identity —— 行 id 稳定，SwiftUI 只重算内容。
+// ## 这一版（v2）做了什么
+//
+//   ① **3D 层叠**：上下文行 `rotation3DEffect`（±18°、perspective 0.55）+ 缩放 + 纵向偏移
+//      ⇒ 是"插进屏幕的层"，不是"缩小的文字"；
+//   ② **进出场**：新行从下方 44pt / 0.9 倍 / 透明滑入，旧行向上飘走并淡出（`transition`）；
+//   ③ **真的有光**：焦点行叠两层 shadow（9pt 紧光 + 24pt 大光晕），上下文行改用 0.7pt 模糊
+//      （景深），不再靠压透明度；
+//   ④ **节奏**：用**音节 onset** 当伪节拍（逐词时间轴本身就是节奏轨，不需要音频）——
+//      每个字起音后 0.22s 内焦点行有最多 +3.5% 的脉冲；
+//   ⑤ **光带**：焦点行下方一条 2pt 进度光带，长度 = 本行已唱比例。
+//
+// ⚠️ 只参考 Folia 的**排版思路与参数**，不复制它的代码/注释（它是 AGPL-3.0，我们是 GPL-3.0）。
+// ⚠️ 性能：120Hz 屏 + 每帧 3 行 AttributedString + 两层 shadow + 3D 变换，开销**显著上升**
+//   （设置页文案已写明）。真机上若掉帧，先砍 shadow 的第二层、再砍 3D 透视。
+//
+// 数据层（`LyricSyllable` 的起止时间）全部来自各歌词源，不在这里算。
 
 @available(iOS 26.0, *)
 struct LyricsStageTiltLayout: View {
@@ -36,38 +39,51 @@ struct LyricsStageTiltLayout: View {
     /// 当前播放时间（秒）。
     let playbackTime: TimeInterval
     let primaryColor: Color
-    /// 是否画行译文（与舞台其它两档同一口径，由宿主判好传进来）。
+    /// 是否画行译文（舞台口径，由宿主判好传进来）。
     let showsTranslation: Bool
 
-    /// 焦点行上下各留几行（-1 … +1 ⇒ 最多 3 行）。
+    /// 焦点行上下各留一行（-1 … +1 ⇒ 最多 3 行）。
     private static let leadingContext = 1
     private static let trailingContext = 1
-    /// 行与行之间的间距（大字档，比全屏歌词页更大）。
-    private static let rowSpacing: CGFloat = 18
+    /// 行与行之间的间距。
+    private static let rowSpacing: CGFloat = 22
     /// 左右内边距。
     private static let sideInset: CGFloat = 26
-    /// 上下文行（前/后各一行）往右让出的距离 —— 焦点行凸出来，就是"错落"。
-    private static let contextIndent: CGFloat = 16
+    /// 上下文行往右让出的距离（焦点行凸出来）。
+    private static let contextIndent: CGFloat = 18
+    /// 上下文行的 3D 倾角（度）与透视系数。
+    private static let contextTiltDegrees: Double = 18
+    private static let perspective: CGFloat = 0.55
+    /// 音节脉冲时长（秒）与幅度。
+    private static let pulseWindow: TimeInterval = 0.22
+    private static let pulseAmount: CGFloat = 0.035
+
+    /// 一屏里的三行（带它在 `lines` 里的下标，用来算"离焦点多远"）。
+    private struct Row: Identifiable {
+        let index: Int
+        let line: LyricLine
+        var id: LyricLine.ID { line.id }
+    }
 
     var body: some View {
         GeometryReader { geometry in
             let width = max(geometry.size.width - Self.sideInset * 2, 1)
             let focus = focusIndex
-            let indices = visibleIndices(focus: focus)
+            let rows = visibleRows(focus: focus)
 
             VStack(alignment: .leading, spacing: Self.rowSpacing) {
-                ForEach(indices, id: \.self) { index in
-                    row(index: index, focus: focus, width: width)
+                ForEach(rows) { row in
+                    self.row(row, focus: focus, width: width)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .padding(.horizontal, Self.sideInset)
-            // 换行时整块淡入淡出（只在焦点行变化时触发，不是每帧）。
-            .animation(.easeInOut(duration: 0.22), value: focus)
+            // 换行时：位置/缩放/倾角走弹簧；新行旧行走上面的 `transition`。
+            .animation(.spring(response: 0.5, dampingFraction: 0.82), value: focus)
         }
     }
 
-    // MARK: - 焦点行
+    // MARK: - 焦点
 
     /// 当前焦点行的下标。播放位置在第一行之前时落在 0（否则开场会一片空）。
     private var focusIndex: Int {
@@ -81,78 +97,121 @@ struct LyricsStageTiltLayout: View {
     }
 
     /// 这一屏要画哪几行：焦点前 1 行 + 焦点 + 后 1 行，越界就裁掉。
-    private func visibleIndices(focus: Int) -> [Int] {
-        var result: [Int] = []
-        result.reserveCapacity(Self.leadingContext + Self.trailingContext + 1)
+    private func visibleRows(focus: Int) -> [Row] {
+        var rows: [Row] = []
+        rows.reserveCapacity(Self.leadingContext + Self.trailingContext + 1)
         for offset in -Self.leadingContext...Self.trailingContext {
             let index = focus + offset
             guard index >= 0, index < lines.count else { continue }
-            result.append(index)
+            rows.append(Row(index: index, line: lines[index]))
         }
-        return result
+        return rows
     }
 
     // MARK: - 单行
 
-    private func row(index: Int, focus: Int, width: CGFloat) -> some View {
-        let line = lines[index]
-        let distance = index - focus
+    private func row(_ row: Row, focus: Int, width: CGFloat) -> some View {
+        let line = row.line
+        let distance = row.index - focus
         let isFocus = distance == 0
+        // ④ 伪节拍：这个字起音后的一小段里，焦点行轻轻"顶"一下。
+        let pulse = isFocus ? syllablePulse(for: line) : 0
 
-        // ⚠️ 上下文行**只画主歌词**：译文/副唱/罗马字一律不给。
-        //
-        // 一串 11pt × 0.22 的灰字在深色底上既读不出来、又把三行挤成六行 ——
-        // 真机照片 1 里那几道"糊在歌词下面的小字"就是这么来的。
-        return SynchronizedLyricText(
-            syllables: line.syllables,
-            text: line.text,
-            playbackTime: playbackTime,
-            isFocused: isFocus,
-            // 非焦点行直接按 0 画（不模糊、不缩放、不发光）——
-            // 舞台的"层次"靠字号与不透明度表达，再叠一层模糊会糊成一团。
-            focusStrength: isFocus ? 1 : 0,
-            translation: isFocus && showsTranslation ? line.translation : nil,
-            romanization: isFocus ? line.romanization : nil,
-            backgroundVocal: isFocus ? line.backgroundVocal : nil,
-            constrainedWidth: width,
-            alignment: .leading,
-            typography: Self.typography(for: distance),
-            primaryColor: primaryColor,
-            appliesTimingEffects: isFocus,
-            showsBackgroundVocals: isFocus,
-            showsTranslation: isFocus && showsTranslation
+        return ZStack(alignment: .bottomLeading) {
+            // ⑤ 光带：本行已唱比例（放在文字**下面** 10pt 处）。
+            if isFocus {
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [primaryColor.opacity(0.9), primaryColor.opacity(0.15)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: max(width * lineProgress(for: line), 3), height: 2)
+                    .offset(y: 12)
+                    .blur(radius: 0.4)
+            }
+
+            SynchronizedLyricText(
+                syllables: line.syllables,
+                text: line.text,
+                playbackTime: playbackTime,
+                isFocused: isFocus,
+                focusStrength: isFocus ? 1 : 0,
+                // 上下文行只留主歌词：11pt × 0.32 的译文在深色底上读不出来、还把三行挤成六行。
+                translation: isFocus && showsTranslation ? line.translation : nil,
+                romanization: isFocus ? line.romanization : nil,
+                backgroundVocal: isFocus ? line.backgroundVocal : nil,
+                constrainedWidth: width,
+                alignment: .leading,
+                typography: Self.typography(for: distance),
+                primaryColor: primaryColor,
+                appliesTimingEffects: isFocus,
+                showsBackgroundVocals: isFocus,
+                showsTranslation: isFocus && showsTranslation
+            )
+        }
+        // ④ 音节脉冲
+        .scaleEffect(isFocus ? 1 + pulse : 0.93, anchor: .leading)
+        // ① 3D 层叠：上下文行分别向前/向后倾，焦点行水平
+        .rotation3DEffect(
+            .degrees(isFocus ? 0 : Self.contextTiltDegrees * (distance < 0 ? 1 : -1)),
+            axis: (x: 1, y: 0, z: 0),
+            anchor: .leading,
+            perspective: Self.perspective
         )
-        .opacity(Self.opacity(for: distance))
+        .offset(y: isFocus ? 0 : (distance < 0 ? -4 : 8))
         .padding(.leading, isFocus ? 0 : Self.contextIndent)
+        // ③ 光：焦点行两层 shadow（紧光 + 大光晕）；上下文行用景深模糊代替压暗
+        .shadow(color: isFocus ? primaryColor.opacity(0.45) : .clear, radius: isFocus ? 9 : 0)
+        .shadow(color: isFocus ? primaryColor.opacity(0.20) : .clear, radius: isFocus ? 24 : 0)
+        .blur(radius: isFocus ? 0 : 0.7)
+        .opacity(isFocus ? 1 : 0.32)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .transition(.opacity)
+        // ② 进出场
+        .transition(
+            .asymmetric(
+                insertion: .offset(y: 44)
+                    .combined(with: .opacity)
+                    .combined(with: .scale(scale: 0.9)),
+                removal: .offset(y: -30).combined(with: .opacity)
+            )
+        )
     }
 
-    // MARK: - 按距离取参数
+    // MARK: - 数据
+
+    /// 4 伪节拍：这一个字起音之后 `pulseWindow` 内给一个衰减的放大。
+    ///
+    /// 为什么用音节、不用音频：我们是注入式 tweak，拿不到 Spotify 的 PCM（做音频分析得先做
+    /// Core Audio 重绑）。而逐词时间轴里每个字的 onset 就是**歌声音头**，与拍点的相关性很高 ——
+    /// 用它能拿到 Folia 那种"随唱顶一下"的节奏感。
+    private func syllablePulse(for line: LyricLine) -> CGFloat {
+        guard let onset = line.syllables.last(where: { $0.startTime <= playbackTime + 0.001 })
+        else { return 0 }
+        let age = playbackTime - onset.startTime
+        guard age >= 0, age < Self.pulseWindow else { return 0 }
+        return Self.pulseAmount * CGFloat(1 - age / Self.pulseWindow)
+    }
+
+    /// 这一行已经唱了多少（0…1），给光带用。
+    private func lineProgress(for line: LyricLine) -> CGFloat {
+        // 行级同步的来源没有 `duration`（只有"下一行什么时候来"），退一个常见行时长。
+        let duration = line.duration ?? 3
+        guard duration > 0 else { return 0 }
+        return CGFloat(min(max((playbackTime - line.time) / duration, 0), 1))
+    }
 
     /// 字号/译文分档：焦点 34pt（译文 15pt），上下文 20pt（不画译文）。
-    ///
-    /// 34 这个数不是拍的：全屏歌词页是 22、`.player` 也是 22，而这一档**一屏只有 3 行**、
-    /// 左右各留 26pt ⇒ 362pt 宽的容器放 34pt 的拉丁文一行约 18~22 字符，长句会折成两行
-    /// （折行由 `SynchronizedLyricText` 自带的构建器处理，不用这里管）。
-    /// 再大就会在中文长句上折成三行、把上下文挤出去。
     private static func typography(for distance: Int) -> LyricsTypographyScale {
         let size: CGFloat = distance == 0 ? 34 : 20
         return LyricsTypographyScale(
             primaryFontSize: size,
-            // 译文按 0.44 派生：34 ⇒ 15（照片 1 里 17.7 那档比上下文主歌词还粗，抢戏）。
             supplementalFontSize: distance == 0 ? 15 : 11,
             lineSpacing: 8,
             wrappedLineSpacing: 4,
             supplementalSpacing: 4
         )
-    }
-
-    /// 不按距离发糊，只变淡（发糊在深色舞台上会读成"没加载出来"）。
-    private static func opacity(for distance: Int) -> Double {
-        switch distance {
-        case 0: return 1
-        default: return 0.38
-        }
     }
 }

@@ -3,31 +3,28 @@ import UIKit
 
 // 舞台窗口的 SwiftUI 根视图。
 //
-// 分工：
-//   · 背景 —— 复用 `AppleMusicLyricsBackdrop.makeBackground(style: .stage, solid: true)`
-//     （模糊封面 + 舞台式均匀暗化，见 `LyricsBackdropView`）；
-//   · 正文 —— 按样式二选一：`AppleMusicLyricsPage`（整屏滚动版）或
-//     `LyricsStageTiltLayout`（大字错落版）；
-//   · 壳 —— 曲名/歌手、关闭键、下拉把手、歌词署名。**这一层自己画**，不往
-//     `AppleMusicLyricsPage` 的 `headerContent` 里塞：两档要用同一套壳，
-//     否则换样式时标题会跳位置。
+// ★ 2026-10-24（用户拍板）：舞台**只留仿 Folia 的那一档**（`LyricsStageTiltLayout`）。
+//   原来还有一档"复用 `AppleMusicLyricsPage` 的整屏滚动歌词"，已删 ——
+//   正常逐词歌词是进播放器那条线的事，舞台只负责"炫"。
 //
-// ⚠️ 这里**不碰** Spotify 的原生视图。舞台是独立窗口（见 `LyricsStage.swift`），
-//   盖住就行 —— 藏、挪、改 alpha 那套在 `NowPlayingIOS27` 里已经吃过太多次亏。
+// 分工：
+//   · 背景 —— `AppleMusicLyricsBackdrop`（模糊封面 + 舞台式均匀暗化，见 `LyricsBackdropView`）；
+//   · 正文 —— `LyricsStageTiltLayout`（3 行 3D 层叠 + 音节脉冲 + 光带）；
+//   · 壳 —— 曲名/歌手、关闭键、下拉把手、歌词署名（**这一层自己画**，两档共用同一套位置）。
+//
+// ⚠️ 这里**不碰** Spotify 的原生视图：舞台是独立窗口（见 `LyricsStage.swift`），盖住就行。
 
 @available(iOS 26.0, *)
 struct LyricsStageRootView: View {
 
     /// 行模型（换歌 / 重新取词时由宿主整体替换）。
     var lines: [LyricLine]
-    /// 每帧变化的播放时间（`AppleMusicLyricsClock` 是 ObservableObject，
-    /// 只有时间真的变了才发通知 —— 暂停时整页不重绘，见宿主那边的省电说明）。
+    /// 每帧变化的播放时间（`AppleMusicLyricsClock` 是 ObservableObject）。
     @ObservedObject var clock: AppleMusicLyricsClock
     var title: String
     var artist: String
     var provider: String
     var providerCredit: String
-    var style: LyricsStageStyle
     var showsTranslation: Bool
     /// 没得画时那一句（还在查 / 没找到 / 纯音乐）。
     var statusText: String
@@ -36,14 +33,7 @@ struct LyricsStageRootView: View {
     /// 白字是目前唯一"在任何封面上都读得清"的选择（背景已经压到 0.55 那档暗化）。
     private let primaryColor: Color = .white
 
-    /// 正文顶部让出的高度（壳：把手 + 曲名 + 歌手）。
-    ///
-    /// 132 是按最坏情况倒推的：刘海机上 `safeArea.top ≈ 59`，把手在 +4、曲名从 +18 起、
-    /// 两行文字 ≈ 40 ⇒ 壳的下沿到 117；再留 15 呼吸才是正文的起点。
-    ///
-    /// ⚠️ 给 `AppleMusicLyricsPage` 的 `contentInsets.top` 要**减半**再传：
-    ///   它内部把 `contentInsets.top` 加了**两次**（`headerContent == nil` 那条分支），
-    ///   见 `AppleMusicLyricsPage.body` 里 `scrollInsets` 的算法。传 66 ⇒ 实际 132。
+    /// 正文顶部让出的高度（壳：把手 + 曲名 + 歌手）。`safeArea.top ≈ 59` ⇒ 壳下沿到 ~117。
     private let headerBand: CGFloat = 132
     /// 底部让出的高度（歌词署名那一行 + 安全区）。
     private let footerBand: CGFloat = 72
@@ -56,7 +46,7 @@ struct LyricsStageRootView: View {
                 if lines.isEmpty {
                     emptyState
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if style == .tilt {
+                } else {
                     LyricsStageTiltLayout(
                         lines: lines,
                         playbackTime: clock.playbackTime,
@@ -65,68 +55,11 @@ struct LyricsStageRootView: View {
                     )
                     .padding(.top, headerBand)
                     .padding(.bottom, footerBand)
-                } else {
-                    appleMusicPage
                 }
 
                 chrome(safeArea: geometry.safeAreaInsets)
             }
         }
-    }
-
-    // MARK: - 逐词滚动那一档
-
-    /// 复用现有 Apple Music 歌词页。
-    ///
-    /// 只改三处输入：
-    ///   · `background` 给透明 —— 背景由外层铺（这一页的 `background` 是 `ignoresSafeArea` 的，
-    ///     再铺一层模糊封面等于叠两次暗化）；
-    ///   · `showsProviderFooter: false` —— 署名由外层壳固定在底部（滚动到底才看得到的那一行
-    ///     在舞台里不合适）；
-    ///   · `contentInsets` 让出外层壳的位置（顶部那个加倍见 `headerBand` 的说明）。
-    private var appleMusicPage: some View {
-        AppleMusicLyricsPage(
-            lines: lines,
-            playbackTime: clock.playbackTime,
-            background: AnyView(Color.clear),
-            onClose: nil,
-            onSeek: { time in
-                // 点行跳转只有一份实现（`+5ms` 那两个细节别自己抄一遍）。
-                seekToTappedLyricLine(time)
-            },
-            contentInsets: EdgeInsets(
-                // ⚠️ 这里传的是**一半**：`AppleMusicLyricsPage` 在 `headerContent` / `footerContent`
-                //    为 nil 时会把 top/bottom **各加两次**（见它 `scrollInsets` 的算法：
-                //    `(headerContent == nil ? contentInsets.top : …) + contentInsets.top`）
-                //    ⇒ 66 × 2 = 132、36 × 2 = 72，与外层壳 `headerBand` / `footerBand` 对齐。
-                //    那一页哪天改掉这个"加两次"，这两个值就得翻倍。
-                top: headerBand / 2,
-                leading: 26,
-                bottom: footerBand / 2,
-                trailing: 26
-            ),
-            typography: .stage,
-            showsBackgroundVocals: true,
-            showsTranslation: showsTranslation,
-            provider: provider,
-            providerCredit: providerCredit,
-            showsProviderFooter: false,
-            primaryColor: primaryColor,
-            headerContent: nil,
-            footerContent: nil,
-            closeContent: nil,
-            // ⚠️ 下面四个（headerHeight / headerTopInset / footerHeight / fadeBottomBand）
-            //    在**这一档里是不生效的**：没有 headerContent / footerContent 时，
-            //    `fadeMaskStops` 走 `legacyFadeStops`，只读 `fadeBottomOpaqueRatio`。
-            //    留着是为了和全屏歌词页那几个调用点的形状一致（改起来不用再背一遍标签）。
-            headerHeight: 62,
-            headerTopInset: -30,
-            hidesShellOnScroll: false,
-            fadeBottomOpaqueRatio: 0.9,
-            footerHeight: 0,
-            fadeBottomBand: 30,
-            isStatic: false
-        )
     }
 
     // MARK: - 空状态
@@ -190,7 +123,7 @@ struct LyricsStageRootView: View {
         }
     }
 
-    /// 底部歌词署名（条款要求的"歌词在哪署名就在哪"，固定在屏底比"滚到底才看见"更实在）。
+    /// 底部歌词署名（条款要求的"歌词在哪署名就在哪"）。
     private var creditText: String {
         providerCredit.isEmpty ? provider : providerCredit
     }

@@ -29,6 +29,11 @@
 //     （alpha 0.35）并在日志里写明原因，**不做假入口**（这一档按下去就是没反应，
 //     与本仓库"没词时歌词键变灰"的既有做法一致）。
 //
+// ★ 2026-10-24（实验 →「歌词舞台」开着时）：这一套**整条让位** ——
+//   左边那颗不再转发给原生键，改成打开我们自己的全屏歌词窗口（`LyricsStageEntry`，
+//   实现见 `Lyrics/LyricsStage/`）。那时这颗键不依赖 `ShowLyricsButton` 存不存在，
+//   所以「找不到就变暗」那一档也不会出现。没开实验时行为与从前逐字一致。
+//
 // ⚠️ 分享键的**图形**被藏了，但功能还在：Spotify 的 ⋯ 菜单里有分享
 // （`ShareButtonNowPlayingView` 只是快捷方式）。
 //
@@ -184,7 +189,11 @@ extension NowPlayingIOS27 {
         // 但上一拍已经找到的那颗还在（`lyricsEntryView`）—— 否则那颗键会每 3 秒"失灵 9 拍"、
         // 左边那颗也会跟着一闪一闪。
         let lyricsTarget = lyricsEntryTarget(in: page) ?? lyricsEntryView
-        footerLyricsAvailable = lyricsTarget != nil
+        // ★ 2026-10-24：开了「歌词舞台」（设置 → 实验）就**不再需要**原生那颗键 ——
+        //   左边这颗气泡直接开我们自己的全屏歌词窗口（`LyricsStageEntry`）。
+        //   这也顺手修掉了"找不到 `ShowLyricsButton` 就变暗"那一档：舞台键不依赖它。
+        let stageEnabled = LyricsStageEntry.isEnabled
+        footerLyricsAvailable = stageEnabled || lyricsTarget != nil
 
         // 页面换了（或上一份的宿主没了）⇒ 先把旧字形拆干净，别留在上一页上。
         if footerRelay == nil || footerRelay?.superview !== page {
@@ -251,6 +260,7 @@ extension NowPlayingIOS27 {
             changed = true
         }
         var zones: [(rect: CGRect, target: UIView)] = []
+        var actionZones: [(rect: CGRect, action: () -> Void)] = []
         let tapSide = footerTapSide
         func tapRect(_ frame: CGRect) -> CGRect {
             CGRect(
@@ -260,10 +270,17 @@ extension NowPlayingIOS27 {
                 height: tapSide
             )
         }
-        if let target = lyricsTarget { zones.append((tapRect(frames[0]), target)) }
+        // ★ 2026-10-24：舞台开着时左中那颗走**自己的动作**（替身的 `actionZones`），
+        //   不再把触摸转发给原生 `ShowLyricsButton`；其余两颗永远是转发。
+        if stageEnabled {
+            actionZones.append((tapRect(frames[0]), { LyricsStageEntry.present() }))
+        } else if let target = lyricsTarget {
+            zones.append((tapRect(frames[0]), target))
+        }
         if let target = connect { zones.append((tapRect(frames[1]), target)) }
         if let target = queue { zones.append((tapRect(frames[2]), target)) }
         relay.zones = zones
+        relay.actionZones = actionZones
         if relay.frame != page.bounds { relay.frame = page.bounds }
         if page.subviews.last !== relay { page.bringSubviewToFront(relay) }
 
@@ -277,9 +294,11 @@ extension NowPlayingIOS27 {
                     + " queue \(name(queue)); three glyphs at"
                     + " \(Int(frames[0].midX))/\(Int(frames[1].midX))/\(Int(frames[2].midX))"
                     + " (y \(Int(midY))); lyrics entry"
-                    + (footerLyricsAvailable
-                        ? " = \(name(lyricsTarget))"
-                        : " missing (left glyph dimmed)")
+                    + (stageEnabled
+                        ? " = our lyrics stage (LyricsStageEntry)"
+                        : (footerLyricsAvailable
+                            ? " = \(name(lyricsTarget))"
+                            : " missing (left glyph dimmed)"))
             )
         }
         return changed

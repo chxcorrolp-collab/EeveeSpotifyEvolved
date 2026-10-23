@@ -102,6 +102,15 @@ experiments_page_warning = "Please note: the features below are either untested 
 show_instagram_destination = "Show Instagram Destination";
 show_instagram_destination_description = "Always show the Instagram share destination. %@";
 
+lyrics_stage = "Lyrics stage";
+lyrics_stage_description = "Opens our own full-screen lyrics window instead of handing the tap to Spotify: the lyrics bubble on the left of the bottom row on the iOS 27 now-playing page opens it, and swiping down (or the chevron) closes it. Requires the iOS 27 now-playing layout.";
+lyrics_stage_style = "Stage style";
+lyrics_stage_style_apple_music = "Word by word";
+lyrics_stage_style_tilt = "Big and offset";
+lyrics_stage_style_hint = "Word by word: the full Apple Music style page, scrollable, every word lights up. Big and offset: four lines only, the current line set large and the others staggered - no scrolling.";
+lyrics_stage_waiting = "Waiting for this track's lyrics...";
+lyrics_stage_no_lyrics = "No lyrics available for this track.";
+
 amll_fuzzy_search = "AMLL fuzzy search";
 amll_fuzzy_search_description = "Only applies when \"AMLL preferred\" is on or the lyrics source is AMLL. AMLL's lookup stops being an exact Spotify-ID match and falls back to a name search. The word-by-word timeline quality and the word-by-word-only rule are unchanged.";
 

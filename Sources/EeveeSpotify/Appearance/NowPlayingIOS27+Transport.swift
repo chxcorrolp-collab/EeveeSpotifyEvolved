@@ -52,22 +52,62 @@ import ObjectiveC.runtime
 /// · `zones` 是若干**本层坐标**里的可点区域，每块各指向一颗原生视图（工具行/传输行共用一套）；
 /// · 命中后 `target.hitTest(中心)` ⇒ 返回原生视图链里的那一颗，UIKit 于是把这一下
 ///   当成**落在原生控件上**（与直接点它完全一样）。
+/// · ★ 2026-10-24：`actionZones` 是"**不转发、自己执行**"的区域（「歌词舞台」那颗气泡用它：
+///   舞台是我们的独立窗口，没有原生控件可打）。命中这种区域时 `hitTest` 返回**本视图**，
+///   由自带的 `UITapGestureRecognizer` 在抬手时调那个闭包。
 final class NowPlayingIOS27RemoteRelayView: UIView {
 
     var zones: [(rect: CGRect, target: UIView)] = []
+    var actionZones: [(rect: CGRect, action: () -> Void)] = []
+
+    /// 抬手时才执行动作（与原生按钮的 `.touchUpInside` 同一时机；
+    /// `UIControl` 那条路本来就是"命中即转发"，两者手感一致）。
+    private var actionTap: UITapGestureRecognizer?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        installActionTap()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        installActionTap()
+    }
+
+    private func installActionTap() {
+        guard actionTap == nil else { return }
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleActionTap(_:)))
+        tap.cancelsTouchesInView = false
+        addGestureRecognizer(tap)
+        actionTap = tap
+    }
+
+    @objc private func handleActionTap(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended else { return }
+        let point = recognizer.location(in: self)
+        guard let zone = actionZones.first(where: { $0.rect.contains(point) }) else { return }
+        zone.action()
+    }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return false }
         return zones.contains { $0.rect.contains(point) }
+            || actionZones.contains { $0.rect.contains(point) }
     }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return nil }
-        guard let zone = zones.first(where: { $0.rect.contains(point) }) else { return nil }
-        let target = zone.target
-        guard target.window != nil, target.alpha > 0.01, !target.isHidden else { return nil }
-        let centre = CGPoint(x: target.bounds.midX, y: target.bounds.midY)
-        return target.hitTest(centre, with: event)
+        if let zone = zones.first(where: { $0.rect.contains(point) }) {
+            let target = zone.target
+            guard target.window != nil, target.alpha > 0.01, !target.isHidden else { return nil }
+            let centre = CGPoint(x: target.bounds.midX, y: target.bounds.midY)
+            return target.hitTest(centre, with: event)
+        }
+        // 自己执行动作的那一块：返回自己，手势识别器接住这一下。
+        if actionZones.contains(where: { $0.rect.contains(point) }) {
+            return self
+        }
+        return nil
     }
 }
 

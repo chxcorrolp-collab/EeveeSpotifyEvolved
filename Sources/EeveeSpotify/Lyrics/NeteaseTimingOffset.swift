@@ -8,14 +8,15 @@ import Foundation
 /// （Musixmatch / AMLL / Genius / Spicy / Petit / LRCLIB）来自官方或相对稳定的库，
 /// 偏差通常是个别歌，不值得为它们各配一套偏移。用户 2026-10-20 拍板：只做网易云。
 ///
-/// ## 两级（单曲覆盖优先）
+/// ## 只有单曲覆盖（2026-10-23 去掉"默认偏移"）
 ///
 /// ```
-/// 生效偏移 = 单曲覆盖（Spotify track id） ?? 网易云默认 ?? 0
+/// 生效偏移 = 单曲覆盖（Spotify track id） ?? 0
 /// ```
 ///
-/// - 单曲覆盖解决“这一首的某个上传版本就是不对”；
-/// - 网易云默认解决“这个源整体慢/快了几拍”。
+/// 用户 2026-10-23：「默认偏移这玩意没什么用，只留当前歌曲的偏移就好了」——
+/// 默认值是"所有网易云歌词一起挪"，实际几乎没人用，反而让"这首歌到底存了多少"更难看清。
+/// 所以这里只保留**按曲目**的那一层；键 `ngzhwm_neteaseOffsetMs` 不再读写。
 ///
 /// ⚠️ 只对**实际给词是网易云**的那份歌词生效：取值点在
 ///    `NeteaseLyricsRepository.getLyrics`（按 `query.spotifyTrackId` 取），
@@ -25,8 +26,6 @@ import Foundation
 ///    键名与 `UserDefaults.ownedKeys` 的登记见本文件末尾。
 enum NeteaseTimingOffset {
 
-    /// 网易云整体默认偏移（毫秒）。缺省 = 0。
-    static let sourceOffsetKey = "ngzhwm_neteaseOffsetMs"
     /// 单曲覆盖：`[Spotify track id: 毫秒]` 的 JSON 文本。
     ///
     /// 用 String 而不是 Data，是为了让它能走设置备份的“普通 `key=value`”路径
@@ -48,14 +47,7 @@ enum NeteaseTimingOffset {
     static let maxTrackOverrides = 300
 
     /// 备份 / 全局重置 / 本页重置要认识的键。
-    static var ownedKeys: [String] { [sourceOffsetKey, trackOffsetsKey, trackTitlesKey] }
-
-    // MARK: - 默认偏移
-
-    static var sourceOffsetMs: Int {
-        get { clamped(UserDefaults.standard.integer(forKey: sourceOffsetKey)) }
-        set { UserDefaults.standard.set(clamped(newValue), forKey: sourceOffsetKey) }
-    }
+    static var ownedKeys: [String] { [trackOffsetsKey, trackTitlesKey] }
 
     // MARK: - 单曲覆盖
 
@@ -78,13 +70,13 @@ enum NeteaseTimingOffset {
         return decoded
     }
 
-    /// 这一首实际生效的偏移（单曲覆盖 ?? 默认 ?? 0）。
+    /// 这一首实际生效的偏移（单曲覆盖 ?? 0）。
     static func offsetMs(forTrackId trackId: String) -> Int {
         let trimmed = trackId.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty, let override = trackOffsets[trimmed] {
             return clamped(override)
         }
-        return sourceOffsetMs
+        return 0
     }
 
     static func hasOverride(forTrackId trackId: String) -> Bool {
@@ -129,17 +121,17 @@ enum NeteaseTimingOffset {
         saveTitles(titles)
     }
 
-    /// 只清单曲覆盖（设置页那颗「清除全部单曲偏移」用这个；**不动**默认偏移）。
+    /// 清掉全部单曲覆盖（设置页那颗「清除全部单曲偏移」用这个）。
     static func clearAllOverrides() {
         UserDefaults.standard.removeObject(forKey: trackOffsetsKey)
         UserDefaults.standard.removeObject(forKey: trackTitlesKey)
     }
 
-    /// 默认 + 单曲覆盖一起清（完整重置/排障用）。
+    /// 完整重置/排障用：单曲覆盖全清，并顺手清掉旧版本留下的"默认偏移"键
+    /// （2026-10-23 起不再使用 `ngzhwm_neteaseOffsetMs`，但老设备上可能还留着）。
     static func clearAll() {
-        UserDefaults.standard.removeObject(forKey: sourceOffsetKey)
-        UserDefaults.standard.removeObject(forKey: trackOffsetsKey)
-        UserDefaults.standard.removeObject(forKey: trackTitlesKey)
+        UserDefaults.standard.removeObject(forKey: "ngzhwm_neteaseOffsetMs")
+        clearAllOverrides()
     }
 
     // MARK: - 归一化

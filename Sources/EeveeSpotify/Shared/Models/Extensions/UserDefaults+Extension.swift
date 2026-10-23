@@ -138,10 +138,10 @@ extension UserDefaults {
         "artistBioSource",
         "flagOverrides",
 
-        // 网易云歌词时间轴偏移（默认 + 单曲覆盖）：键由功能自己拥有，
-        // 见 `Lyrics/NeteaseTimingOffset.swift`。
-        NeteaseTimingOffset.sourceOffsetKey,
+        // 网易云歌词时间轴偏移（单曲覆盖 + 显示名）：键由功能自己拥有，
+        // 见 `Lyrics/NeteaseTimingOffset.swift`。默认偏移 2026-10-23 已去掉。
         NeteaseTimingOffset.trackOffsetsKey,
+        NeteaseTimingOffset.trackTitlesKey,
     ]
     // 听歌页「卡片」那批（总开关 + 每张卡一个键）：键表由 `PlayerCard` / `PlayerCardsDeclutter`
     // 自己拥有 —— 加一张卡片只改那一处，这里跟着走，不会漏。

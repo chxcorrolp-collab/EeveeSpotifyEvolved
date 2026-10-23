@@ -200,6 +200,8 @@ enum NowPlayingIOS27 {
         // 待办 T1：进度条（4pt 轨 + 藏圆钮 + 等宽时间），见 `NowPlayingIOS27+Progress.swift`。
         // 它只换 UISlider 的三张图与两颗标签的字体，不碰几何、不碰手势。
         if placeProgress(in: page) { changed = true }
+        // 待办 T2（用户拍板 A）：藏随机/循环，循环挪到工具行右上方，见 `NowPlayingIOS27+Transport.swift`。
+        if placeTransport(in: page) { changed = true }
         if !didLogFrames {
             didLogFrames = true
             logFrames(in: page)
@@ -610,7 +612,11 @@ enum NowPlayingIOS27 {
         return true
     }
 
-    private static func hideChrome(_ view: UIView) -> Bool {
+    /// 把一颗原生视图按 `alpha = 0` 藏掉（记原值；`revealChrome()` 统一写回）。
+    ///
+    /// ⚠️ 从 `private` 提到 internal（2026-10-23，T2）：传输行那两颗也走这一条，
+    /// 于是"记原值 / 收尾写回"只有一套实现，`hiddenChrome` / `chromeAlphas` 也只有一份。
+    static func hideChrome(_ view: UIView) -> Bool {
         let key = ObjectIdentifier(view)
         if chromeAlphas[key] == nil {
             chromeAlphas[key] = view.alpha > 0.01 ? view.alpha : 1
@@ -647,6 +653,7 @@ enum NowPlayingIOS27 {
         let hadState = fieldHost != nil || artworkView != nil || titleRowBase != nil
             || grabber != nil || !shellAlphas.isEmpty || !chromeAlphas.isEmpty
             || progressStyledSlider != nil || progressTimeLabelViews.count > 0
+            || repeatPill != nil || hiddenRepeatIcons.count > 0
         if didLogRestore || !hadState {
             clearState()
             return
@@ -664,6 +671,7 @@ enum NowPlayingIOS27 {
         teardownField()
         teardownArtwork()
         teardownProgress()
+        teardownTransport()
 
         writeDebugLog("[\(logTag)] restored (\(reason)) — native cover, title row and our views are back")
         clearState()
@@ -694,6 +702,7 @@ enum NowPlayingIOS27 {
         didLogMissingCover = false
         didLogRestore = false
         clearProgressState()
+        clearTransportState()
     }
 
     private static func revealChrome() {

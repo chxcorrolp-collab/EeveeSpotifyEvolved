@@ -6,46 +6,47 @@
 //    和旧那套（`NowPlayingLyricsPlate` 的"歌词进播放器"）**互斥**：新的开着时旧的自动让位
 //    （`NowPlayingLyricsPlate.isEnabled` 的 `!nowPlayingIOS27` 那道门）。
 //
+// ## 2026-10-23 第二轮（日志 777 / 照片 160·161 之后）
+//
+// 第一版是"把 Spotify 那个 `Encore.ImageView` 用 `transform` 放大到满屏"。真机发现两件事：
+//
+//   ① **它会弹回去**：`[NPVLyrics] artwork picked … at 24,159,366,366` 与 `… at 0,0,414,414`
+//      在日志里交替出现 ⇒ 封面层自己会**重写 transform**（倾斜/视差那套），
+//      我们 0.3s 一拍地覆盖 ⇒ 屏幕上就是照片 160（原大小）⇄ 161（满屏）来回跳；
+//   ② 放大后它自己那层圆角/裁剪还得靠 `clipsToBounds` 硬掰，副作用大。
+//
+// ⇒ 改成**自己画一张**（与 `NowPlayingLyricsPlate` 同一思路），原生那张只负责供图：
+//
+//   · 我们的封面 `eevee-ios27-artwork` 挂在**封面所在那个整页 cell** 里（contentlayer），
+//     所以天然在标题/进度/控件**下面**，不需要跟任何人的 z-order 打架；
+//   · 原生那张壳写 `alpha = 0`（记原值、收尾写回、每拍补一次 —— Spotify 会自己写回来）；
+//   · 图从 `rememberArtworkIfNeeded`（按曲目 id 缓存、>=128pt 才算数）拿，
+//     拿不到就先让原生那张露着（**绝不出现空白封面**），下一拍再换；
+//   · 换歌：`CoverArtTiltLayoutHook` 转发过来的 `coverDidLayOut` 立刻重算一次。
+//
 // ## 这一版（v1）做什么
 //
-// 目标图逐条拆开（`C:\dsh\am\1.jpg`，628×1055）：
-//   ① **封面满血**：不是 366pt 的圆角方块，而是顶到屏幕左右两边、从屏幕最顶上开始画；
-//   ② 封面**下沿柔和过渡**到深色：不是硬切，也不是整页模糊（一层"模糊 + 压黑"的带子）；
-//   ③ **标题叠在过渡带上**（白色粗体、左对齐）—— v1 先把原生标题行挪下来；
-//   ④ 极细进度条 + 两端时间 —— 原生那条先不动（v2）；
-//   ⑤ 三个传输键 —— 原生（「控制键本地字形」那颗子开关照旧生效）；
-//   ⑥ 底部细音量条（两端小喇叭）—— 复用 `NowPlayingPageOverlay` 已经写好的那一行；
-//   ⑦ 底部工具行 —— 原生（v2）。
-//
-// ⇒ v1 = ① + ② + ③ + ⑥。**不碰 Spotify 的属性值**（除了四处可还原的：封面壳的
-//    `transform` 与圆角、标题行的 `transform`、祖先链上的 `clipsToBounds`）：
-//    关开关 = 逐个写回原位 + 拆掉我们自己的那层视图。
-//
-// ## 为什么是"缩放原生封面"而不是自绘一张
-//
-// 仓库里已经有两套拿封面的办法：`NowPlayingLyricsPlate` 自己画一张（要藏原生那张、
-// 还要处理换歌闪图），以及"直接用原生那张"。这里选后者：
-//   · 零取图、零缓存、零换歌空档 —— 原生那个 `Encore.ImageView` 换图由 Spotify 自己管；
-//   · 层次天然正确：封面在 **contentlayer** 里（整页背景层，`CoverArtCellImpl@0,0,414,896`），
-//     标题 / 进度 / 控件在它上面 ⇒ 放大封面**不需要跟任何人的 z-order 打架**；
-//   · 代价是圆角与裁剪要自己收：下面那三处写入都**记原值**、收尾原样写回。
+//   ① **封面满血**：`(0, 0, W, W)` 的方图（`scaleAspectFill`、无圆角），从屏幕最顶上开始画；
+//   ② 封面**下沿柔和过渡**：`(0, W−2, W, bandHeight)` 铺一张高斯模糊的同一张图 +
+//      透明→黑渐变，把方图"融"进整页取色底；
+//   ③ **标题叠在过渡带上**（原生标题行挪到 `W + 56`、左缩进 16pt）；
+//   ④ 底部细音量条（两端小喇叭）—— 复用 `NowPlayingPageOverlay`；
+//   ⑤ 极细进度条 / 底部工具行 / ☆ 与 ⋯ —— 留 v2（见 `HANDOFF_2026-10-23_…`）。
 //
 // ## 几何（按页宽推，不写死像素）
 //
-//   封面方块：`(0, 0, W, W)` —— 方图按屏宽铺满，并从 y = 0 起（AM 就是这么**裁**的）。
-//   模糊带  ：`(0, W−2, W, bandHeight+2)`，底下压一条从透明到黑的渐变（`scrim`）。
-//   标题行  ：顶边 = `W + titleTopGap`，左边 = `titleLeadInset`（AM 是 16pt）。
-//   音量条  ：`NowPlayingPageOverlay` 里按 iOS 27 分支摆在"控件行与 footer 之间"。
+//   封面方块：`(0, 0, W, W)`；模糊带：`(0, W−2, W, bandHeight)`（bandHeight = 0.36W ≈ 149）；
+//   标题行  ：顶边 = `W + 56`（≈470 on 414×896），左边 = 16pt；先夹在进度条之上。
 //
 // ## 时序
 //
 //   · 进页面：`NPVScrollViewControllerHook.viewWillAppear/.viewDidAppear` → `apply(in:)`；
 //   · 每 0.3s：蹭 `DeclutterChrome` 既有的复查节拍 → `reconcile()`（不新开定时器）；
-//   · 换歌：`CoverArtTiltLayoutHook` 多转发一次 → `coverDidLayOut(from:)`（新封面对象
-//     当场摆好、不等下一拍，否则会闪一下 366pt 的原生封面）；
-//   · 关开关：设置页 → `reapply()` → 里面的 `restore()`。
+//   · 换歌：`CoverArtTiltLayoutHook` → `coverDidLayOut(from:)`（新封面对象当场接管）；
+//   · 关开关 / 页面消失：`restore()`（原生壳 alpha 写回、标题行 transform 写回、拆掉我们的视图）。
 //
-// 日志 tag：`[iOS27]`。排查先看：`cover scaled` / `title row moved` / `band mounted` / `restored`。
+// 日志 tag：`[iOS27]`。排查先看：`artwork up` / `title row moved` / `band mounted` /
+// `frames`（一次性把各行的真实坐标打出来，v2 排版靠它）/ `restored`。
 import Foundation
 import UIKit
 import CoreImage
@@ -58,19 +59,14 @@ enum NowPlayingIOS27 {
 
     // MARK: - 几何
 
-    /// 标题行顶边离封面底边的距离（pt）。AM 截图里 ≈ 64；取 56 是给长标题与进度条之间留口气
-    /// （W + 56，而进度条顶边 ≈ 560）。
+    /// 标题行顶边离封面底边的距离（pt）。AM 截图里 ≈ 64；取 56（W + 56 ≈ 470）。
     static let titleTopGap: CGFloat = 56
     /// 标题行左边距（AM 16pt；Spotify 原生 28pt）。
     static let titleLeadInset: CGFloat = 16
-    /// 模糊带在封面底边以下的高度。
-    static let bandHeight: CGFloat = 52
-    /// 压黑渐变从封面高度的哪一档开始（0.55 = 封面下半段开始转暗）。
-    static let scrimTopFraction: CGFloat = 0.55
+    /// 模糊带高度占页宽的比例（0.36 ⇒ 414pt 上 ≈ 149pt）。
+    static let bandHeightRatio: CGFloat = 0.36
     /// 高斯模糊半径。
-    static let blurRadius: CGFloat = 26
-    /// 走查上限（本仓库纪律）。
-    static let maxNodes = 2000
+    static let blurRadius: CGFloat = 24
 
     /// 这颗开关自己就是全部条件（旧的"歌词进播放器"在它那边让位，见文件头）。
     static var isEnabled: Bool { UserDefaults.nowPlayingIOS27 }
@@ -78,40 +74,33 @@ enum NowPlayingIOS27 {
     // MARK: - 状态
 
     static weak var lastPage: UIView?
+
     /// Spotify 那张**真正画封面**的壳（`Encore.ImageView`，366×366）。
     static weak var artworkShell: UIView?
-    /// 被我们摆过的每一个壳：原 `transform` / 原**位置** / 原圆角
-    /// （换歌会换对象，所以是复数）。
-    ///
-    /// ⚠️ 必须记"接管那一刻的矩形"：`untransformed()` 只减平移、不减缩放 ——
-    ///    已经被我们缩过的那张壳，`natural.width` 就是**目标宽**，再按它算缩放会得到 1、
-    ///    位移得到 0，于是每一拍都把封面**还原回 366pt**（第一版就是这么写的）。
-    static let touchedShells = NSHashTable<UIView>.weakObjects()
-    static var shellBaseTransforms: [ObjectIdentifier: CGAffineTransform] = [:]
-    static var shellBaseRects: [ObjectIdentifier: CGRect] = [:]
-    static var shellBaseRadii: [ObjectIdentifier: CGFloat] = [:]
-    /// 记这些矩形时的页宽：转屏 / 分屏换了宽度就作废重记。
-    static var recordedPageWidth: CGFloat = 0
-    /// 被我们放开裁剪的祖先（按各自原值写回）。
-    static let unclippedViews = NSHashTable<UIView>.weakObjects()
-    static var unclippedOriginals: [ObjectIdentifier: Bool] = [:]
+    /// 我们自己画的那张封面 + 它的宿主（整页 cell）。
+    static weak var artworkHost: UIView?
+    static weak var artworkView: UIImageView?
+    /// 被我们按下 `alpha` 的原生壳（记原值，收尾按原值写回）。
+    static let hiddenShells = NSHashTable<UIView>.weakObjects()
+    static var shellAlphas: [ObjectIdentifier: CGFloat] = [:]
 
-    /// 我们自己那层（挂在 contentlayer 那个整页 cell 的最底层）：模糊带 + 压黑渐变。
+    /// 我们那层"模糊带 + 渐变"（挂在同一个整页 cell 的最底层）。
     static weak var bandHost: UIView?
     static weak var bandImage: UIImageView?
     static weak var scrim: UIView?
 
-    /// 被我们挪下来的标题行，以及它原来的 `transform` 与**原生位置**（理由同 `shellBaseRects`）。
+    /// 被我们挪下去的标题行，以及它原来的 `transform` 与**原生位置**。
     static weak var titleRow: UIView?
     static var titleRowBase: (ObjectIdentifier, CGAffineTransform)?
     static var titleRowBaseRect: (ObjectIdentifier, CGRect)?
 
-    /// 按曲目 id 记"模糊带那张图什么时候要重做"。
-    static var lastBandTrackId = ""
+    /// 上一次画上去的是哪一首（同一首不重复取图/模糊）。
+    static var lastTrackId = ""
 
-    static var didLogCover = false
+    static var didLogArtwork = false
     static var didLogTitle = false
     static var didLogBand = false
+    static var didLogFrames = false
     static var didLogMissingCover = false
     static var didLogRestore = false
 
@@ -132,8 +121,8 @@ enum NowPlayingIOS27 {
 
     /// 设置页切开关时叫一次：还挂着就当场落地，否则等下次进听歌页。
     ///
-    /// ⚠️ **关掉时不管页面在不在都要收尾**：壳与 cell 会被复用，留着放大后的
-    /// `transform` 就是下一次在别处显形的错。`restore()` 不依赖页面对象。
+    /// ⚠️ **关掉时不管页面在不在都要收尾**：壳与 cell 会被复用，留着 `alpha = 0` 的壳
+    /// 就是下一次在别处显形的空封面。`restore()` 不依赖页面对象。
     static func reapply() {
         guard isEnabled else {
             restore(reason: "switch off")
@@ -145,16 +134,10 @@ enum NowPlayingIOS27 {
 
     /// 蹭 `DeclutterChrome` 既有的 0.3s 复查节拍（**不新开定时器**，本仓库纪律）。
     ///
-    /// 需要它的两个理由：
-    ///   · 换歌会换一个**新的封面对象**（旧的 `transform` 跟着旧对象走）；
-    ///   · 标题行在 stack 里，布局回合会重写 `frame`（`transform` 不会被抹，但仍要保证
-    ///     "这一拍量到的位置还是我们摆的那个"）。
-    ///
     /// - Returns: 这一拍真的改了东西吗（给排查用）。
     @discardableResult
     static func reconcile() -> Bool {
-        // 页面真的不在窗口里了 ⇒ 把写过的每一处还回去。封面壳与它那个 cell 都是**会被复用**的，
-        // 留着放大后的 `transform`，下一次在别处复用那一格就是错的（本仓库最不能接受的失败）。
+        // 页面真的不在窗口里了 ⇒ 把写过的每一处还回去（cell 会被复用）。
         // ⚠️ 这一步**不能**放在 `isEnabled` 后面：用户可能"先离开播放器、再在设置里关掉"。
         if let page = lastPage, page.window == nil {
             restore(reason: "page disappeared")
@@ -165,14 +148,11 @@ enum NowPlayingIOS27 {
     }
 
     /// 封面自己被布局的那一刻（`CoverArtTiltLayoutHook` 转发进来）。
-    ///
-    /// 只做一件事：当前这张壳如果还没被我们摆过，就**当场**接管 —— 换歌那一瞬间原生封面
-    /// 先以 366pt 出现，靠这一条把空档变成 0。
     static func coverDidLayOut(from tilt: UIView) {
         guard isEnabled, let page = lastPage, page.window != nil, tilt.window != nil else { return }
         guard tilt.bounds.width >= 200, tilt.isDescendant(of: page) else { return }
         guard let shell = shell(in: tilt) else { return }
-        _ = applyCoverTransform(shell, in: page, log: false)
+        _ = updateArtwork(shell, in: page)
     }
 
     // MARK: - 布局
@@ -185,73 +165,89 @@ enum NowPlayingIOS27 {
         ), let shell = NowPlayingLyricsPlate.visibleCover(in: list, page: page) else {
             if !didLogMissingCover {
                 didLogMissingCover = true
-                writeDebugLog("[\(logTag)] no visible artwork yet — nothing to scale this tick")
+                writeDebugLog("[\(logTag)] no visible artwork yet — nothing to draw this tick")
             }
             return false
         }
         didLogMissingCover = false
         artworkShell = shell
 
-        var changed = applyCoverTransform(shell, in: page, log: true)
+        var changed = updateArtwork(shell, in: page)
         if placeTitleRow(in: page) { changed = true }
-        if mountBand(over: shell, in: page) { changed = true }
+        if mountBand(in: page) { changed = true }
+        if !didLogFrames {
+            didLogFrames = true
+            logFrames(in: page)
+        }
         return changed
     }
 
-    /// 把封面壳缩放到 `(0, 0, W, W)`。
-    ///
-    /// 三步，顺序要紧：
-    ///   ① 先让它自己那一套 `transform` 作用完、读**变换之后**的矩形
-    ///      （`untransformed(bounds, to: page)` —— 本仓库纪律：`transform` 非恒等时 `frame` 不可信）；
-    ///   ② 缩放比 = `W / 当前宽`；
-    ///   ③ 位移 = 目标中心 − 当前中心，写在**最后** ⇒ 单位就是 pt，不会被缩放带跑。
-    ///
-    /// - Parameter log: 只在"真的改了"时打一行（`coverDidLayOut` 高频调用，不打日志）。
+    /// 把"我们要画的那张封面"摆上去 —— 有图就画我们的、把原生的按下去；
+    /// 没图就让原生那张先露着（**绝不空白**）。
     @discardableResult
-    private static func applyCoverTransform(_ shell: UIView, in page: UIView, log: Bool) -> Bool {
-        if recordedPageWidth != page.bounds.width {
-            resetRecordings()
-            recordedPageWidth = page.bounds.width
+    private static func updateArtwork(_ shell: UIView, in page: UIView) -> Bool {
+        let trackId = NowPlayingLyricsPlate.currentTrackId() ?? ""
+
+        // 图：缓存优先（按曲目 id），再退回树里真实那张。
+        var image: UIImage? = NowPlayingLyricsPlate.rememberArtworkIfNeeded(in: page)
+        if image == nil { image = NowPlayingLyricsPlate.firstImage(in: shell) }
+
+        guard let image, let host = fullPageAncestor(of: shell, in: page) else {
+            // 还没有可用图（换歌那一两拍）：原生壳先露着、我们那张藏起来。
+            revealShells()
+            if let view = artworkView { view.isHidden = true }
+            return false
         }
 
-        let key = ObjectIdentifier(shell)
-        let base: CGAffineTransform
-        let baseRect: CGRect
-        if let recorded = shellBaseTransforms[key], let rect = shellBaseRects[key] {
-            base = recorded
-            baseRect = rect
+        let imageView: UIImageView
+        if let existing = artworkView, let currentHost = artworkHost,
+           existing.superview === host, currentHost === host {
+            imageView = existing
         } else {
-            base = shell.transform
-            baseRect = NowPlayingLyricsPlate.untransformed(shell, in: page)
-            shellBaseTransforms[key] = base
-            shellBaseRects[key] = baseRect
-            shellBaseRadii[key] = shell.layer.cornerRadius
-            touchedShells.add(shell)
-            openClips(from: shell, upTo: page)
+            teardownArtwork()
+            let view = UIImageView(frame: .zero)
+            view.contentMode = .scaleAspectFill
+            view.clipsToBounds = true
+            view.isUserInteractionEnabled = false
+            view.accessibilityIdentifier = "eevee-ios27-artwork"
+            // 贴在 cell 的**最上层**：contentlayer 在 UI 栈下面，所以我们盖住的是原生封面那几层，
+            // 不会压到标题/进度/控件；而把原生那张（已 alpha=0）留在下面不影响任何事。
+            host.addSubview(view)
+            artworkHost = host
+            artworkView = view
+            imageView = view
         }
-        guard baseRect.width > 1, baseRect.height > 1 else { return false }
 
-        let targetSide = page.bounds.width
-        let scale = targetSide / baseRect.width
-        let move = CGAffineTransform(
-            translationX: (targetSide / 2 - baseRect.midX).rounded(),
-            y: (targetSide / 2 - baseRect.midY).rounded()
+        var changed = false
+        if imageView.isHidden {
+            imageView.isHidden = false
+            changed = true
+        }
+        if trackId != lastTrackId || imageView.image !== image {
+            imageView.image = image
+            lastTrackId = trackId
+            changed = true
+            if !didLogArtwork {
+                didLogArtwork = true
+                writeDebugLog(
+                    "[\(logTag)] artwork up — \(Int(image.size.width))×\(Int(image.size.height))"
+                        + " in \(NSStringFromClass(type(of: host)))"
+                )
+            }
+        }
+
+        let coverSide = page.bounds.width
+        let wanted = host.convert(
+            CGRect(x: 0, y: 0, width: coverSide, height: coverSide),
+            from: page
         )
-        let wanted = base
-            .concatenating(CGAffineTransform(scaleX: scale, y: scale))
-            .concatenating(move)
-
-        guard shell.transform != wanted else { return false }
-        shell.transform = wanted
-        shell.layer.cornerRadius = 0
-        if log && !didLogCover {
-            didLogCover = true
-            writeDebugLog(
-                "[\(logTag)] cover scaled — \(Int(baseRect.width))pt → \(Int(targetSide))pt"
-                    + " at (0,0), corner radius 0 (Apple Music's full-bleed square)"
-            )
+        if imageView.frame != wanted {
+            imageView.frame = wanted
+            changed = true
         }
-        return true
+        // 我们的封面在原生那张**上面**（同一个 cell 里），原生那张必须按下去。
+        hideShell(shell)
+        return changed
     }
 
     /// 把标题行挪到封面下沿那条带上。
@@ -298,16 +294,16 @@ enum NowPlayingIOS27 {
         return true
     }
 
-    /// 装"模糊带 + 压黑渐变"（一整个整页容器，挂在封面所在那个整页 cell 的最底层）。
-    ///
-    /// 挂不上（找不到那个整页祖先 / 拿不到图）就只保留"满血封面"这半个效果：
-    /// 宁可少一层，也不往别人的视图里写。
+    /// 模糊带 + 压黑渐变（挂在封面那个整页 cell 的最底层，靠 page 坐标一次算好）。
     @discardableResult
-    private static func mountBand(over shell: UIView, in page: UIView) -> Bool {
-        guard let host = fullPageAncestor(of: shell, in: page) else { return false }
+    private static func mountBand(in page: UIView) -> Bool {
+        guard let shell = artworkShell, let host = fullPageAncestor(of: shell, in: page) else {
+            return false
+        }
 
         let width = page.bounds.width
         let height = page.bounds.height
+        let bandHeight = (width * bandHeightRatio).rounded()
 
         if let existing = bandHost, existing.superview === host {
             var changed = false
@@ -315,8 +311,8 @@ enum NowPlayingIOS27 {
                 existing.frame = CGRect(x: 0, y: 0, width: width, height: height)
                 changed = true
             }
-            if let image = bandImage, updateBandImage(image) { changed = true }
-            if let scrim { layoutBandLayers(in: existing, scrim: scrim) }
+            if let image = bandImage, updateBandImage(image, shell: shell) { changed = true }
+            if let scrim { layoutBandLayers(in: existing, scrim: scrim, bandHeight: bandHeight) }
             return changed
         }
 
@@ -340,31 +336,20 @@ enum NowPlayingIOS27 {
         gradient.name = "eevee-ios27-scrim-gradient"
         gradient.colors = [
             UIColor.black.withAlphaComponent(0.05).cgColor,
-            UIColor.black.withAlphaComponent(0.55).cgColor,
-            UIColor.black.withAlphaComponent(0.92).cgColor,
+            UIColor.black.withAlphaComponent(0.45).cgColor,
+            UIColor.black.withAlphaComponent(0.88).cgColor,
         ]
-        gradient.locations = [0, 0.55, 1]
+        gradient.locations = [0, 0.6, 1]
         scrimView.layer.addSublayer(gradient)
         wrapper.addSubview(scrimView)
 
-        // 封面下半段也压一点暗（AM 的封面往下走越来越沉）。
-        let coverScrim = UIView(frame: .zero)
-        coverScrim.isUserInteractionEnabled = false
-        let coverGradient = CAGradientLayer()
-        coverGradient.name = "eevee-ios27-cover-gradient"
-        coverGradient.colors = [
-            UIColor.clear.cgColor,
-            UIColor.black.withAlphaComponent(0.30).cgColor,
-        ]
-        coverScrim.layer.addSublayer(coverGradient)
-        wrapper.addSubview(coverScrim)
-
-        host.insertSubview(wrapper, at: 0)
+        // 同一条：整页 cell 的最上层（它在 UI 栈下面，见文件头）。
+        host.addSubview(wrapper)
         bandHost = wrapper
         bandImage = imageView
         scrim = scrimView
-        layoutBandLayers(in: wrapper, scrim: scrimView)
-        _ = updateBandImage(imageView)
+        layoutBandLayers(in: wrapper, scrim: scrimView, bandHeight: bandHeight)
+        _ = updateBandImage(imageView, shell: shell)
 
         if !didLogBand {
             didLogBand = true
@@ -376,13 +361,16 @@ enum NowPlayingIOS27 {
         return true
     }
 
-    /// 我们那三个子视图各自的框（`wrapper` 是整页坐标，省得每次换算）。
-    private static func layoutBandLayers(in wrapper: UIView, scrim scrimView: UIView) {
+    /// 我们那两个子视图各自的框（wrapper 是整页坐标，省得每次换算）。
+    private static func layoutBandLayers(
+        in wrapper: UIView,
+        scrim scrimView: UIView,
+        bandHeight: CGFloat
+    ) {
         let width = wrapper.bounds.width
         let coverSide = width
-        // 贴着封面底边**再往上多 60pt**：上面那 60pt 被封面方块盖住 ⇒ 接缝看不出来，
-        // 露在外面的只有 `bandHeight` 那一条（`scaleAspectFill` 从图的中下部取）。
-        let strip = CGRect(x: 0, y: coverSide - 60, width: width, height: 60 + bandHeight)
+        // 上沿压在封面里 2pt：接缝被我们自己那张不透明的封面盖住。
+        let strip = CGRect(x: 0, y: coverSide - 2, width: width, height: bandHeight + 2)
 
         if let image = bandImage, image.frame != strip { image.frame = strip }
         if scrimView.frame != strip { scrimView.frame = strip }
@@ -390,83 +378,79 @@ enum NowPlayingIOS27 {
            gradient.frame != scrimView.bounds {
             gradient.frame = scrimView.bounds
         }
-
-        if let coverScrim = wrapper.subviews.last, coverScrim !== scrimView,
-           coverScrim !== bandImage {
-            let rect = CGRect(
-                x: 0,
-                y: coverSide * scrimTopFraction,
-                width: width,
-                height: coverSide * (1 - scrimTopFraction) + 2
-            )
-            if coverScrim.frame != rect { coverScrim.frame = rect }
-            if let gradient = coverScrim.layer.sublayers?.first as? CAGradientLayer,
-               gradient.frame != coverScrim.bounds {
-                gradient.frame = coverScrim.bounds
-            }
-        }
     }
 
-    /// 按曲目 id 更新模糊带那张图（同一首只做一次；换歌才重做）。
+    /// 模糊带那张图：与封面同一张，按曲目 id 只做一次。
     @discardableResult
-    private static func updateBandImage(_ imageView: UIImageView) -> Bool {
+    private static func updateBandImage(_ imageView: UIImageView, shell: UIView) -> Bool {
         let trackId = NowPlayingLyricsPlate.currentTrackId() ?? ""
-        if trackId == lastBandTrackId, imageView.image != nil { return false }
-        guard let shell = artworkShell,
-              let image = NowPlayingLyricsPlate.firstImage(in: shell),
+        if trackId == lastTrackId, imageView.image != nil { return false }
+        guard let image = NowPlayingLyricsPlate.firstImage(in: shell),
               let blurred = blurredImage(image) else { return false }
         imageView.image = blurred
-        lastBandTrackId = trackId
         return true
+    }
+
+    // MARK: - 原生壳的显隐
+
+    /// 把原生那张壳按下去（记原值；每拍补一次 —— Spotify 会自己把 `alpha` 写回来）。
+    private static func hideShell(_ shell: UIView) {
+        let key = ObjectIdentifier(shell)
+        if shellAlphas[key] == nil {
+            // 换歌转场里新壳可能先以 0 出现 ⇒ 原值不可信时按 1 记（关开关要能看见）。
+            let original = shell.alpha
+            shellAlphas[key] = original > 0.01 ? original : 1
+            hiddenShells.add(shell)
+        }
+        if shell.alpha != 0 { shell.alpha = 0 }
+    }
+
+    /// 让原生壳露回来（还没有可用图时 / 收尾时）。
+    private static func revealShells() {
+        for shell in hiddenShells.allObjects {
+            guard let original = shellAlphas[ObjectIdentifier(shell)] else { continue }
+            if shell.alpha != original { shell.alpha = original }
+        }
     }
 
     // MARK: - 收尾
 
     /// 关开关 / 离开页面：把写过的每一处写回去，拆掉我们自己的视图。
     static func restore(reason: String) {
-        let hadState = !shellBaseTransforms.isEmpty || bandHost != nil
-            || titleRowBase != nil || !unclippedOriginals.isEmpty
+        let hadState = bandHost != nil || artworkView != nil || titleRowBase != nil
+            || !shellAlphas.isEmpty
         if didLogRestore || !hadState {
             clearState()
             return
         }
         didLogRestore = true
 
-        for shell in touchedShells.allObjects {
-            if let base = shellBaseTransforms[ObjectIdentifier(shell)],
-               shell.transform != base {
-                shell.transform = base
-            }
-            if let radius = shellBaseRadii[ObjectIdentifier(shell)],
-               shell.layer.cornerRadius != radius {
-                shell.layer.cornerRadius = radius
-            }
-        }
+        revealShells()
         if let row = titleRow, let recorded = titleRowBase,
            recorded.0 == ObjectIdentifier(row), row.transform != recorded.1 {
             row.transform = recorded.1
         }
-        restoreClips()
         teardownBand()
+        teardownArtwork()
 
-        writeDebugLog("[\(logTag)] restored (\(reason)) — cover, title row and the band are back")
+        writeDebugLog("[\(logTag)] restored (\(reason)) — native cover, title row and our views are back")
         clearState()
     }
 
     private static func clearState() {
         artworkShell = nil
+        artworkHost = nil
+        artworkView = nil
         titleRow = nil
         titleRowBase = nil
         titleRowBaseRect = nil
-        touchedShells.removeAllObjects()
-        shellBaseTransforms.removeAll()
-        shellBaseRects.removeAll()
-        shellBaseRadii.removeAll()
-        recordedPageWidth = 0
-        lastBandTrackId = ""
-        didLogCover = false
+        hiddenShells.removeAllObjects()
+        shellAlphas.removeAll()
+        lastTrackId = ""
+        didLogArtwork = false
         didLogTitle = false
         didLogBand = false
+        didLogFrames = false
         didLogRestore = false
     }
 
@@ -475,6 +459,12 @@ enum NowPlayingIOS27 {
         bandHost = nil
         bandImage = nil
         scrim = nil
+    }
+
+    private static func teardownArtwork() {
+        artworkView?.removeFromSuperview()
+        artworkView = nil
+        artworkHost = nil
     }
 
     // MARK: - 小工具
@@ -535,64 +525,35 @@ enum NowPlayingIOS27 {
         return nil
     }
 
-    /// 把封面壳到页面之间的裁剪全部放开（记录原值，收尾写回）。
-    ///
-    /// 为什么必须放：放大之后那张图会顶出 `CoverArtTiltView` 的 bounds，链上只要有一层
-    /// `clipsToBounds = true`，四边就会被切掉（AM 那张是齐边的）。
-    private static func openClips(from shell: UIView, upTo page: UIView) {
-        var current = shell.superview
-        var visited = 0
-        while let candidate = current, candidate !== page, visited < 8 {
-            visited += 1
-            if candidate.clipsToBounds {
-                let key = ObjectIdentifier(candidate)
-                if unclippedOriginals[key] == nil {
-                    unclippedOriginals[key] = true
-                    unclippedViews.add(candidate)
-                }
-                candidate.clipsToBounds = false
+    /// 一次性把各行的真实坐标打出来 —— v2 排版（进度条/控件/工具行）靠这几个数，不靠猜。
+    private static func logFrames(in page: UIView) {
+        func text(_ identifier: String) -> String {
+            guard let view = NowPlayingLyricsPlate.findByIdentifier(identifier, in: page) else {
+                return "\(identifier)=missing"
             }
-            current = candidate.superview
+            let rect = NowPlayingLyricsPlate.untransformed(view, in: page)
+            return "\(identifier)=\(Int(rect.minX)),\(Int(rect.minY))"
+                + " \(Int(rect.width))×\(Int(rect.height))"
         }
+        var parts: [String] = [
+            "page=\(Int(page.bounds.width))×\(Int(page.bounds.height))",
+            text(NowPlayingLyricsPlate.progressUnitIdentifier),
+            text(NowPlayingLyricsPlate.playButtonIdentifier),
+            text(NowPlayingLyricsPlate.shareButtonIdentifier),
+            text("Components.UI.AddToButton"),
+            text(NowPlayingLyricsPlate.bottomStackIdentifier),
+            text(NowPlayingLyricsPlate.minimizeButtonIdentifier),
+        ]
+        if let row = titleRow {
+            let rect = NowPlayingLyricsPlate.untransformed(row, in: page)
+            parts.append(
+                "titleRow=\(Int(rect.minX)),\(Int(rect.minY)) \(Int(rect.width))×\(Int(rect.height))"
+            )
+        }
+        writeDebugLog("[\(logTag)] frames — " + parts.joined(separator: " · "))
     }
 
-    /// 换宽度：把上一套记录**先还原**再作废（下一拍按新宽度重记）。
-    private static func resetRecordings() {
-        for shell in touchedShells.allObjects {
-            if let base = shellBaseTransforms[ObjectIdentifier(shell)],
-               shell.transform != base {
-                shell.transform = base
-            }
-            if let radius = shellBaseRadii[ObjectIdentifier(shell)],
-               shell.layer.cornerRadius != radius {
-                shell.layer.cornerRadius = radius
-            }
-        }
-        if let row = titleRow, let recorded = titleRowBase,
-           recorded.0 == ObjectIdentifier(row), row.transform != recorded.1 {
-            row.transform = recorded.1
-        }
-        restoreClips()
-        touchedShells.removeAllObjects()
-        shellBaseTransforms.removeAll()
-        shellBaseRects.removeAll()
-        shellBaseRadii.removeAll()
-        titleRowBase = nil
-        titleRowBaseRect = nil
-        didLogCover = false
-        didLogTitle = false
-    }
-
-    private static func restoreClips() {
-        for view in unclippedViews.allObjects {
-            guard let original = unclippedOriginals[ObjectIdentifier(view)] else { continue }
-            if view.clipsToBounds != original { view.clipsToBounds = original }
-        }
-        unclippedViews.removeAllObjects()
-        unclippedOriginals.removeAll()
-    }
-
-    /// 高斯模糊（只给小带子用；一换歌才一次，不缓存 `CIContext` —— 那东西不是线程安全的）。
+    /// 高斯模糊（只给小带子用；一换歌才一次，不缓存 `CIContext`）。
     private static func blurredImage(_ image: UIImage) -> UIImage? {
         guard let cgImage = image.cgImage else { return nil }
         let input = CIImage(cgImage: cgImage)

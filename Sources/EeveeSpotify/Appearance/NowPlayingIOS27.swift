@@ -463,7 +463,18 @@ enum NowPlayingIOS27 {
 
         let colour = fieldColour(from: image)
         lastFieldTrackId = trackId
-        let apply = {
+        // ⚠️ 必须**显式**标成 `() -> Void`。
+        //
+        // `fieldSolid?.backgroundColor = colour` 是**可选链赋值**，它的值类型是 `Void?`
+        // ⇒ 一个**只有这一句**的闭包会被推断成 `() -> ()?`，而
+        // `UIView.transition(animations:)` 要 `() -> Void`，于是报：
+        //   cannot convert value of type '() -> ()?' to expected argument type '() -> Void'
+        //
+        // 来由（别被 blame 带偏）：这个闭包原来是**两句**（第二句是
+        // `if let strip { fieldBlur?.image = strip }`，那一句是 Void），所以推断一直是
+        // `() -> Void`；`1ac5568`（2026-10-23 深夜，删掉那条模糊拷贝）之后它变成一句，
+        // 类型推断跟着变 —— 而 blame 只会说这三行来自 `328c202`。修法就是把类型写死。
+        let apply: () -> Void = {
             fieldSolid?.backgroundColor = colour
         }
         // 只对我们自己的 wrapper 做交叉淡入（对外层 cell 做 transition 会连 Spotify 的内容一起快照）。

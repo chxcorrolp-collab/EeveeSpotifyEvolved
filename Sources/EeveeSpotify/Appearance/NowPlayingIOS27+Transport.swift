@@ -49,12 +49,16 @@ import ObjectiveC.runtime
 
 /// 跨位置替身：把"我们画的那颗"的触摸交给**另一处**的原生控件。
 ///
-/// · `zones` 是若干**本层坐标**里的可点区域，每块各指向一颗原生视图（工具行/传输行共用一套）；
-/// · 命中后 `target.hitTest(中心)` ⇒ 返回原生视图链里的那一颗，UIKit 于是把这一下
-///   当成**落在原生控件上**（与直接点它完全一样）。
-/// · ★ 2026-10-24：`actionZones` 是"**不转发、自己执行**"的区域（「歌词舞台」那颗气泡用它：
-///   舞台是我们的独立窗口，没有原生控件可打）。命中这种区域时 `hitTest` 返回**本视图**，
-///   由自带的 `UITapGestureRecognizer` 在抬手时调那个闭包。
+/// · `zones` 是若干**本层坐标**里的可点区域，每块各指向一颗原生视图；
+/// · ★★ **2026-10-24 修正（这条很重要，别再往回改）**：`zones` 那条"把触摸 hitTest 到原生控件"
+///   的路**只在小位移时有效**。UIKit 交付给被命中视图的 `UITouch` 里存的仍然是**真实的窗口坐标**，
+///   控件换算到自己坐标系后落在 bounds **之外** ⇒ `UIControl` 发的是 `.touchUpOutside`，动作**不触发**。
+///   我们的字形和它对应的原生键差得越远越必然失败（歌词气泡离 `lyrics-expand-button` 有大半屏，
+///   用户 2026-10-24 报的"iOS 27 下歌词点不了"就是这条）。
+///   ⇒ 现在**一律走 `actionZones` + `sendActions(for: .touchUpInside)`**：与位置无关。
+///   `zones` 只剩"目标真的就在手指底下"那种情况可用。
+/// · `actionZones` 命中时 `hitTest` 返回**本视图**，由自带的 `UITapGestureRecognizer` 在抬手时执行闭包
+///   （「歌词舞台」那颗气泡也用它：舞台是独立窗口，没有原生控件可打）。
 final class NowPlayingIOS27RemoteRelayView: UIView {
 
     var zones: [(rect: CGRect, target: UIView)] = []
@@ -356,7 +360,16 @@ extension NowPlayingIOS27 {
             repeatRelay = fresh
             changed = true
         }
-        relay.zones = [(frame, repeatKey)]
+        // ★★ 2026-10-24：改成 `sendActions` 转发（`zones` 那条 hitTest 路对"不在手指底下"
+        //    的控件无效 —— 详见 `NowPlayingIOS27RemoteRelayView` 的头注）；
+        //    实在找不到 `UIControl` 才退回 hitTest（至少不会把触摸吞掉）。
+        if let action = tapAction(for: repeatKey, label: "repeat") {
+            relay.actionZones = [(frame, action)]
+            relay.zones = []
+        } else {
+            relay.actionZones = []
+            relay.zones = [(frame, repeatKey)]
+        }
         if relay.frame != page.bounds { relay.frame = page.bounds }
         if page.subviews.last !== relay { page.bringSubviewToFront(relay) }
         return changed
@@ -429,6 +442,60 @@ extension NowPlayingIOS27 {
         )
         return UIImage(systemName: "repeat", withConfiguration: configuration)?
             .withRenderingMode(.alwaysTemplate)
+    }
+
+    // MARK: - 转发（T2/T3 共用）
+
+    /// 把"点一下这颗原生视图"变成**与位置无关**的动作。
+    ///
+    /// 为什么需要它：替身把触摸 `hitTest` 到一颗**不在手指底下**的视图时，UIKit 交付的
+    /// `UITouch` 仍是真实窗口坐标 ⇒ 控件算出来的点在自己 bounds 之外 ⇒ 它发
+    /// `.touchUpOutside`（动作不触发）。`sendActions(for: .touchUpInside)` 不经过命中测试，
+    /// 走控件自己的 target/action / `UIAction` ⇒ 跨半屏也没问题。
+    ///
+    /// 返回 nil = 这颗视图附近**找不到 `UIControl`**（那时调用方就别放这块可点区，别造死键）。
+    @MainActor
+    static func tapAction(for target: UIView?, label: String) -> (() -> Void)? {
+        guard let target else { return nil }
+        guard let control = nearestControl(target) else {
+            writeDebugLog(
+                "[\(logTag)] \(label): no UIControl near"
+                    + " \(NSStringFromClass(type(of: target))) — the tap would do nothing"
+            )
+            return nil
+        }
+        let controlClass = NSStringFromClass(type(of: control))
+        return {
+            writeDebugLog("[\(logTag)] \(label): sendActions → \(controlClass)")
+            // 先 `.touchDown` 再 `.touchUpInside`：有些控件只在"按下过"之后才认抬手
+            // （`UIControl.sendActions` 只是逐个事件派发 target/action，发两个是安全的）。
+            control.sendActions(for: .touchDown)
+            control.sendActions(for: .touchUpInside)
+        }
+    }
+
+    /// 这颗视图自己、往上 6 跳、或往里 32 个视图之内最近的 `UIControl`。
+    ///
+    /// 顺序有意义：先认它自己（`EncoreButton` 本身就是 `UIButton`），再往上找
+    /// （有些"键"只是容器），最后往里找（有些键把 target/action 挂在内部那颗 control 上）。
+    @MainActor
+    static func nearestControl(_ view: UIView) -> UIControl? {
+        var current: UIView? = view
+        var hops = 0
+        while let candidate = current, hops < 6 {
+            if let control = candidate as? UIControl { return control }
+            current = candidate.superview
+            hops += 1
+        }
+        var queue: [UIView] = view.subviews
+        var visited = 0
+        while !queue.isEmpty, visited < 32 {
+            let candidate = queue.removeFirst()
+            visited += 1
+            if let control = candidate as? UIControl { return control }
+            queue.append(contentsOf: candidate.subviews)
+        }
+        return nil
     }
 
     // MARK: - 收尾

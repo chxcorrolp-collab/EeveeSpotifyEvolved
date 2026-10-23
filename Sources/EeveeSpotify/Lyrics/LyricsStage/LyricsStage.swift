@@ -69,6 +69,19 @@ enum LyricsStageEntry {
             LyricsStage.shared.dismiss()
         }
     }
+
+    /// 兜底入口：**不看实验开关**，直接开我们自己的歌词页。
+    ///
+    /// 用途只有一个：iOS 27 听歌页左下那颗歌词气泡在"实验关着"时先转发 Spotify 的
+    /// `lyrics-expand-button`，那颗键要是不动（卡片被挤成 0 高时很常见），就退到这儿 ——
+    /// 用户要的是"点得开"，不是"转发成功"。见 `NowPlayingIOS27+Footer.lyricsAction`。
+    static func presentAsFallback() {
+        guard #available(iOS 26.0, *) else { return }
+        Task { @MainActor in
+            writeDebugLog("[LyricsStage] opening as the lyrics fallback (experiment switch is off)")
+            LyricsStage.shared.present(ignoringSwitch: true)
+        }
+    }
 }
 
 // MARK: - 舞台本体
@@ -136,9 +149,14 @@ final class LyricsStage {
 
     // MARK: - 打开 / 关闭
 
-    func present() {
+    func present(ignoringSwitch: Bool = false) {
         guard !isPresented else { return }
-        guard LyricsStageEntry.isEnabled else {
+        // ★ 2026-10-24（用户：「不开启实验性 fo 的情况下，歌词功能是点不了的」）：
+        //   实验开关现在**只决定"歌词气泡优先开哪个"**（见 `NowPlayingIOS27+Footer`）：
+        //   开着 ⇒ 直接来这扇窗口；关着 ⇒ 先试 Spotify 自己的全屏歌词页，
+        //   那颗键不动（9.1.88 的卡片被挤成 0 高时就这样）再退到这儿 ⇒ `ignoringSwitch: true`。
+        //   ⚠️ 别把这个口子用来"绕过实验开关"做别的事：它只服务"歌词点得开"这一条。
+        if !ignoringSwitch, !LyricsStageEntry.isEnabled {
             writeDebugLog("[\(Self.logTag)] present ignored — the experiment switch is off")
             return
         }

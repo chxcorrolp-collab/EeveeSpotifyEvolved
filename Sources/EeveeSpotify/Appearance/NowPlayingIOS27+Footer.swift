@@ -233,7 +233,14 @@ extension NowPlayingIOS27 {
         let lyricsTarget: UIView? = stageEnabled
             ? nil
             : (lyricsEntryTarget(in: page) ?? lyricsEntryView)
-        footerLyricsAvailable = stageEnabled || lyricsTarget != nil
+        // ★★ 2026-10-24（用户：「不开启实验性 fo 的情况下，歌词功能是点不了的」）：
+        //   **这颗键永远可点**。三条路，按优先级：
+        //     ① 舞台开着 → 我们的窗口；
+        //     ② 找到原生 `lyrics-expand-button` → `sendActions` 转发，**0.8s 后核对**
+        //        Spotify 的全屏歌词页有没有起来，没起来就退到 ①；
+        //     ③ 连原生那颗都没找到（9.1.88 的卡片会被挤成 0 高）→ 直接走 ①。
+        //   ⇒ 再也不会出现"按下去没反应"或"变暗的死键"。
+        footerLyricsAvailable = stageEnabled || lyricsTarget != nil || canOpenOwnLyricsPage
 
         // 页面换了（或上一份的宿主没了）⇒ 先把旧字形拆干净，别留在上一页上。
         if footerRelay == nil || footerRelay?.superview !== page {
@@ -301,8 +308,8 @@ extension NowPlayingIOS27 {
             footerRelay = fresh
             changed = true
         }
-        var zones: [(rect: CGRect, target: UIView)] = []
         var actionZones: [(rect: CGRect, action: () -> Void)] = []
+        var zones: [(rect: CGRect, target: UIView)] = []
         let tapSide = footerTapSide
         func tapRect(_ frame: CGRect) -> CGRect {
             CGRect(
@@ -312,15 +319,31 @@ extension NowPlayingIOS27 {
                 height: tapSide
             )
         }
-        // ★ 2026-10-24：舞台开着时左中那颗走**自己的动作**（替身的 `actionZones`），
-        //   不再把触摸转发给原生 `ShowLyricsButton`；其余两颗永远是转发。
+        // ★★ 2026-10-24：**一律走 `sendActions`**（`tapAction`），不再把触摸 hitTest 到
+        //   原生键上 —— 那颗键不在手指底下，UIKit 算出来的点落在它 bounds 之外，
+        //   控件发的是 `.touchUpOutside`（用户报的"iOS 27 下歌词点不了"就是它）。
+        //   只有实在找不到 `UIControl` 时才退回 `zones`（至少不把触摸吞掉）。
+        func addZone(_ frame: CGRect, target: UIView?, label: String) {
+            guard let target else { return }
+            if let action = tapAction(for: target, label: label) {
+                actionZones.append((tapRect(frame), action))
+            } else {
+                zones.append((tapRect(frame), target))
+            }
+        }
         if stageEnabled {
             actionZones.append((tapRect(frames[0]), { LyricsStageEntry.present() }))
         } else if let target = lyricsTarget {
-            zones.append((tapRect(frames[0]), target))
+            actionZones.append((tapRect(frames[0]), lyricsAction(target: target)))
+        } else if canOpenOwnLyricsPage {
+            // 原生那颗根本没找出来（卡片 0 高时很常见）⇒ 直接开我们自己的歌词页。
+            actionZones.append((tapRect(frames[0]), {
+                writeDebugLog("[\(logTag)] lyrics: no native button — opening our own lyrics page")
+                LyricsStageEntry.presentAsFallback()
+            }))
         }
-        if let target = connect { zones.append((tapRect(frames[1]), target)) }
-        if let target = queue { zones.append((tapRect(frames[2]), target)) }
+        addZone(frames[1], target: connect, label: "connect")
+        addZone(frames[2], target: queue, label: "queue")
         relay.zones = zones
         relay.actionZones = actionZones
         // ★ 2026-10-24（用户：「点右下角那颗，还是 Spotify 原生弹窗」）：循环那颗是**另一块替身**，
@@ -350,6 +373,7 @@ extension NowPlayingIOS27 {
                         ? " = our lyrics stage (LyricsStageEntry)"
                         : (footerLyricsAvailable
                             ? " = \(name(lyricsTarget))"
+                                + (lyricsTarget == nil ? " (or our own page)" : "")
                             : " missing (left glyph hidden)"))
             )
         }
@@ -408,6 +432,66 @@ extension NowPlayingIOS27 {
             }
         }
         return nil
+    }
+
+    /// 我们自己的歌词页能不能开（`LyricsStage` 是 iOS 26+ 的门）。
+    static var canOpenOwnLyricsPage: Bool {
+        if #available(iOS 26.0, *) { return true }
+        return false
+    }
+
+    /// 点歌词气泡：先转发给 Spotify 那颗 `lyrics-expand-button`，**再核对**它到底起没起来。
+    ///
+    /// 为什么必须核对：那颗键住在被挤成 0 高的歌词卡片里（日志 13：`CardView … 374,0`），
+    /// 它到底还有没有绑动作，我们只能试。0.8s 后如果没看到任何全屏歌词页，就退到我们自己的
+    /// 歌词窗口 —— 用户要的是"点得开"，不是"转发成功"。
+    @MainActor
+    private static func lyricsAction(target: UIView) -> () -> Void {
+        let targetClass = NSStringFromClass(type(of: target))
+        return {
+            writeDebugLog("[\(logTag)] lyrics: sendActions → \(targetClass)")
+            // ⚠️ 这个闭包是**非隔离**类型（`() -> Void`，替身存的就是它），里面调 `@MainActor`
+            //    的静态函数要显式用 `onMainThreadSync` 包一层 —— 不靠"闭包继承外围隔离"那条
+            //    推断，免得某个调用点被判成非隔离就编译不过。
+            onMainThreadSync {
+                guard let control = NowPlayingIOS27.nearestControl(target) else { return }
+                control.sendActions(for: .touchDown)
+                control.sendActions(for: .touchUpInside)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                onMainThreadSync {
+                    guard !NowPlayingIOS27.spotifyLyricsPageIsOpen() else { return }
+                    writeDebugLog(
+                        "[\(logTag)] lyrics: the native expand button did nothing"
+                            + " — opening our own lyrics page instead"
+                    )
+                    LyricsStageEntry.presentAsFallback()
+                }
+            }
+        }
+    }
+
+    /// 屏幕上有没有 Spotify 自己的全屏歌词页（`Lyrics_FullscreenElementPageImpl.FullscreenElementViewController`）。
+    @MainActor
+    static func spotifyLyricsPageIsOpen() -> Bool {
+        var roots: [UIViewController] = []
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows {
+                if let root = window.rootViewController { roots.append(root) }
+            }
+        }
+        var queue = roots
+        var visited = 0
+        while !queue.isEmpty, visited < 200 {
+            let controller = queue.removeFirst()
+            visited += 1
+            let name = NSStringFromClass(type(of: controller))
+            if name.contains("Lyrics"), name.lowercased().contains("fullscreen") { return true }
+            if let presented = controller.presentedViewController { queue.append(presented) }
+            queue.append(contentsOf: controller.children)
+        }
+        return false
     }
 
     private static func footerSymbol(named name: String) -> UIImage? {

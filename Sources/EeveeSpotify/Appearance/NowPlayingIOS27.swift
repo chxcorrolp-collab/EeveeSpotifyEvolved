@@ -27,15 +27,15 @@
 // ## 这一版（v1）做什么
 //
 //   ① **封面满血**：`(0, 0, W, W)` 的方图（`scaleAspectFill`、无圆角），从屏幕最顶上开始画；
-//   ② 封面**下沿柔和过渡**：`(0, W−2, W, bandHeight)` 铺一张高斯模糊的同一张图 +
-//      透明→黑渐变，把方图"融"进整页取色底；
+//   ② 封面**下沿柔和过渡**（无硬边）：封面自己下沿一条渐变 mask 淡出 → 底下垫同图的
+//      高斯模糊（0.50W…1.35W，它自己也用 mask 淡出）→ 再压一条透明→黑的 scrim；
 //   ③ **标题叠在过渡带上**（原生标题行挪到 `W + 56`、左缩进 16pt）；
 //   ④ 底部细音量条（两端小喇叭）—— 复用 `NowPlayingPageOverlay`；
 //   ⑤ 极细进度条 / 底部工具行 / ☆ 与 ⋯ —— 留 v2（见 `HANDOFF_2026-10-23_…`）。
 //
 // ## 几何（按页宽推，不写死像素）
 //
-//   封面方块：`(0, 0, W, W)`；模糊带：`(0, W−2, W, bandHeight)`（bandHeight = 0.36W ≈ 149）；
+//   封面方块：`(0, 0, W, W)`；模糊底：`(0, 0.50W, W, 0.85W)`（两条 mask 淡出，无硬边）；
 //   标题行  ：顶边 = `W + 56`（≈470 on 414×896），左边 = 16pt；先夹在进度条之上。
 //
 // ## 时序
@@ -63,14 +63,28 @@ enum NowPlayingIOS27 {
     static let titleTopGap: CGFloat = 56
     /// 标题行左边距（AM 16pt；Spotify 原生 28pt）。
     static let titleLeadInset: CGFloat = 16
-    /// 模糊带高度占页宽的比例（0.36 ⇒ 414pt 上 ≈ 149pt）。
-    static let bandHeightRatio: CGFloat = 0.36
+    /// 模糊背景的上下沿（占页宽）：0.50W 起、1.35W 止（414pt 上 ≈ 207…559）。
+    ///
+    /// 为什么不是原来那条"从封面底边往下 149pt 的硬边带子"（照片 163 里那条一眼能看出
+    /// 接缝的灰带）：专辑/歌单/艺人页的封面过渡是**模糊底 + 渐变压暗**，没有硬边
+    /// （`EntityPageAppearance` 那一套是这个观感）。这里照同一个观感重做：
+    ///   · 封面**自己的下沿**用一条渐变 mask 淡出（0.86W 之后），
+    ///   · 底下垫一张同图的模糊拷贝（从 0.50W 起），它又被一条 mask 淡出到页面的取色底，
+    ///   · 上面再压一条"透明 → 黑"的 scrim（AM 的封面下半段是越来越沉的）。
+    /// 三层叠起来就没有硬边了。
+    static let blurTopRatio: CGFloat = 0.50
+    static let blurBottomRatio: CGFloat = 1.35
+    /// 封面自己下沿淡出的起点（占封面高度）。
+    static let artworkFadeStart: CGFloat = 0.86
     /// **底部那一坨整体上移**多少（占页高）。AM：进度条 550 / 控件 623 / 工具行 802；
     /// 我们原生 703 / 752 / 840 ⇒ 上移 130（896×0.145）后是 573 / 622 ⇒ 控件那一档正好对上，
     /// 而工具行得**单独留在原地**（否则页面底下空一大块）。
     static let bottomLiftRatio: CGFloat = 0.145
-    /// 高斯模糊半径。
-    static let blurRadius: CGFloat = 24
+    /// 高斯模糊半径**按原图宽度的比例**算（专辑/歌单/艺人页那条实测规矩：3.5%）。
+    ///
+    /// 固定 24pt 在 366pt 的封面上会把细节糊成一片纯色（`EntityPageAppearance` 的
+    /// 文件头记过同一件事）；按比例算才能"看得出是哪张图"。
+    static let blurRadiusRatio: CGFloat = 0.035
 
     /// 这颗开关自己就是全部条件（旧的"歌词进播放器"在它那边让位，见文件头）。
     static var isEnabled: Bool { UserDefaults.nowPlayingIOS27 }
@@ -103,10 +117,12 @@ enum NowPlayingIOS27 {
     static var unclippedOriginals: [ObjectIdentifier: Bool] = [:]
     static var didLogMenu = false
 
-    /// 我们那层"模糊带 + 渐变"（挂在同一个整页 cell 的最底层）。
+    /// 我们那层"模糊背景 + 渐变"（挂在同一个整页 cell 的最底层）。
     static weak var bandHost: UIView?
     static weak var bandImage: UIImageView?
     static weak var scrim: UIView?
+    /// 封面自己下沿的渐变 mask（让它淡进下面的模糊层）。
+    static weak var artworkMask: CAGradientLayer?
 
     /// 顶部导航那三件的 id（真机树：`108.log:1735-1736`）。
     ///
@@ -195,6 +211,7 @@ enum NowPlayingIOS27 {
     static func coverDidLayOut(from tilt: UIView) {
         guard isEnabled, let page = lastPage, page.window != nil, tilt.window != nil else { return }
         guard tilt.bounds.width >= 200, tilt.isDescendant(of: page) else { return }
+        guard isOnScreen(tilt, in: page) else { return }
         guard let shell = shell(in: tilt) else { return }
         _ = updateArtwork(shell, in: page)
     }
@@ -203,13 +220,10 @@ enum NowPlayingIOS27 {
 
     @discardableResult
     private static func layout(in page: UIView) -> Bool {
-        guard let list = NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingLyricsPlate.listIdentifier,
-            in: page
-        ), let shell = NowPlayingLyricsPlate.visibleCover(in: list, page: page) else {
+        guard let shell = resolvedShell(in: page) else {
             if !didLogMissingCover {
                 didLogMissingCover = true
-                writeDebugLog("[\(logTag)] no visible artwork yet — nothing to draw this tick")
+                writeDebugLog("[\(logTag)] no on-screen artwork yet — nothing to draw this tick")
             }
             return false
         }
@@ -229,15 +243,56 @@ enum NowPlayingIOS27 {
         return changed
     }
 
+    /// 这一拍该用哪张封面。
+    ///
+    /// **为什么不能每拍只靠 `visibleCover`**（日志 888 的一次实证）：我们自己把原生壳
+    /// `alpha = 0` 之后，`visibleCover` 的判据（`alpha > 0.01 || isHiddenByUs`）不再认它
+    /// —— 于是**每一拍都报 "no visible artwork"、整页的复查全部早退**。
+    /// 所以：先认**上一次画过的那张**（它还在窗口里、还在屏幕中间就用它），
+    /// 只有它没了才重新去树里挑。
+    ///
+    /// 另外还要**挡住"挑到离屏那张"**：日志 888 里出现过 `at 399,161` 和 `at -138252,161`
+    /// （横向翻页转场中途），画进那种格子里 = 屏幕上什么都没有（照片 162 就是）。
+    private static func resolvedShell(in page: UIView) -> UIView? {
+        if let shell = artworkShell, shell.window != nil, isOnScreen(shell, in: page) {
+            return shell
+        }
+        guard let list = NowPlayingLyricsPlate.findByIdentifier(
+            NowPlayingLyricsPlate.listIdentifier,
+            in: page
+        ), let picked = NowPlayingLyricsPlate.visibleCover(in: list, page: page),
+           isOnScreen(picked, in: page) else { return nil }
+        return picked
+    }
+
+    /// 这张封面的横向中线落在页面中间那一半里吗（转场中途的离屏格子会被挡掉）。
+    private static func isOnScreen(_ view: UIView, in page: UIView) -> Bool {
+        let rect = view.convert(view.bounds, to: page)
+        guard rect.width > 1, rect.height > 1 else { return false }
+        return rect.midX > page.bounds.width * 0.2 && rect.midX < page.bounds.width * 0.8
+    }
+
     /// 把"我们要画的那张封面"摆上去 —— 有图就画我们的、把原生的按下去；
     /// 没图就让原生那张先露着（**绝不空白**）。
     @discardableResult
     private static func updateArtwork(_ shell: UIView, in page: UIView) -> Bool {
+        artworkShell = shell
         let trackId = NowPlayingLyricsPlate.currentTrackId() ?? ""
+        let trackChanged = trackId != lastTrackId
 
         // 图：缓存优先（按曲目 id），再退回树里真实那张。
         var image: UIImage? = NowPlayingLyricsPlate.rememberArtworkIfNeeded(in: page)
-        if image == nil { image = NowPlayingLyricsPlate.firstImage(in: shell) }
+        if image == nil {
+            // ★ 换歌那一两拍，`rememberArtworkIfNeeded` 会**故意**返回 nil（树里还是上一首的图）。
+            //   这一拍就**不要**退回 `firstImage` —— 那会拿上一首的封面画到新壳的位置上
+            //   （闪一下别人的专辑）。让原生那张先露着，等图的下一拍。
+            if trackChanged {
+                revealShells()
+                if let view = artworkView { view.isHidden = true }
+                return false
+            }
+            image = NowPlayingLyricsPlate.firstImage(in: shell)
+        }
 
         guard let image, let host = fullPageAncestor(of: shell, in: page) else {
             // 还没有可用图（换歌那一两拍）：原生壳先露着、我们那张藏起来。
@@ -292,8 +347,37 @@ enum NowPlayingIOS27 {
             imageView.frame = wanted
             changed = true
         }
+        if applyArtworkFadeMask(to: imageView) { changed = true }
         // 我们的封面在原生那张**上面**（同一个 cell 里），原生那张必须按下去。
         hideShell(shell)
+        return changed
+    }
+
+    /// 封面自己下沿的淡出：一条"白 → 白 → 透明"的渐变 mask（无硬边）。
+    @discardableResult
+    private static func applyArtworkFadeMask(to imageView: UIImageView) -> Bool {
+        let mask: CAGradientLayer
+        if let existing = artworkMask {
+            mask = existing
+        } else {
+            let fresh = CAGradientLayer()
+            fresh.colors = [
+                UIColor.white.cgColor,
+                UIColor.white.cgColor,
+                UIColor.clear.cgColor,
+            ]
+            fresh.locations = [0, NSNumber(value: Double(artworkFadeStart)), 1]
+            fresh.startPoint = CGPoint(x: 0.5, y: 0)
+            fresh.endPoint = CGPoint(x: 0.5, y: 1)
+            artworkMask = fresh
+            imageView.layer.mask = fresh
+            mask = fresh
+        }
+        var changed = false
+        if mask.frame != imageView.bounds {
+            mask.frame = imageView.bounds
+            changed = true
+        }
         return changed
     }
 
@@ -582,7 +666,6 @@ enum NowPlayingIOS27 {
 
         let width = page.bounds.width
         let height = page.bounds.height
-        let bandHeight = (width * bandHeightRatio).rounded()
 
         if let existing = bandHost, existing.superview === host {
             var changed = false
@@ -591,7 +674,7 @@ enum NowPlayingIOS27 {
                 changed = true
             }
             if let image = bandImage, updateBandImage(image, shell: shell) { changed = true }
-            if let scrim { layoutBandLayers(in: existing, scrim: scrim, bandHeight: bandHeight) }
+            if let scrim { layoutBandLayers(in: existing, scrim: scrim) }
             return changed
         }
 
@@ -608,17 +691,30 @@ enum NowPlayingIOS27 {
         imageView.accessibilityIdentifier = "eevee-ios27-band-image"
         wrapper.addSubview(imageView)
 
+        // 模糊底自己的淡出（上不透明、下透明）—— 这是"没有硬边"的关键。
+        let blurMask = CAGradientLayer()
+        blurMask.name = "eevee-ios27-blur-mask"
+        blurMask.colors = [
+            UIColor.white.cgColor,
+            UIColor.white.cgColor,
+            UIColor.clear.cgColor,
+        ]
+        blurMask.locations = [0, 0.55, 1]
+        blurMask.startPoint = CGPoint(x: 0.5, y: 0)
+        blurMask.endPoint = CGPoint(x: 0.5, y: 1)
+        imageView.layer.mask = blurMask
+
         let scrimView = UIView(frame: .zero)
         scrimView.isUserInteractionEnabled = false
         scrimView.accessibilityIdentifier = "eevee-ios27-scrim"
         let gradient = CAGradientLayer()
         gradient.name = "eevee-ios27-scrim-gradient"
         gradient.colors = [
-            UIColor.black.withAlphaComponent(0.05).cgColor,
+            UIColor.black.withAlphaComponent(0.10).cgColor,
             UIColor.black.withAlphaComponent(0.45).cgColor,
-            UIColor.black.withAlphaComponent(0.88).cgColor,
+            UIColor.black.withAlphaComponent(0.92).cgColor,
         ]
-        gradient.locations = [0, 0.6, 1]
+        gradient.locations = [0, 0.55, 1]
         scrimView.layer.addSublayer(gradient)
         wrapper.addSubview(scrimView)
 
@@ -627,32 +723,34 @@ enum NowPlayingIOS27 {
         bandHost = wrapper
         bandImage = imageView
         scrim = scrimView
-        layoutBandLayers(in: wrapper, scrim: scrimView, bandHeight: bandHeight)
+        layoutBandLayers(in: wrapper, scrim: scrimView)
         _ = updateBandImage(imageView, shell: shell)
 
         if !didLogBand {
             didLogBand = true
             writeDebugLog(
-                "[\(logTag)] band mounted in \(NSStringFromClass(type(of: host)))"
-                    + " — blurred strip \(Int(width))×\(Int(bandHeight)) under the square"
+                "[\(logTag)] blurred backdrop mounted in \(NSStringFromClass(type(of: host)))"
+                    + " — masked blur from \(Int(width * blurTopRatio))"
+                    + " to \(Int(width * blurBottomRatio))"
             )
         }
         return true
     }
 
-    /// 我们那两个子视图各自的框（wrapper 是整页坐标，省得每次换算）。
-    private static func layoutBandLayers(
-        in wrapper: UIView,
-        scrim scrimView: UIView,
-        bandHeight: CGFloat
-    ) {
+    /// 模糊底与 scrim 的框（同一个矩形：0.50W…1.35W），以及它俩自己那条 mask 的尺寸。
+    private static func layoutBandLayers(in wrapper: UIView, scrim scrimView: UIView) {
         let width = wrapper.bounds.width
-        let coverSide = width
-        // 上沿压在封面里 2pt：接缝被我们自己那张不透明的封面盖住。
-        let strip = CGRect(x: 0, y: coverSide - 2, width: width, height: bandHeight + 2)
+        let top = (width * blurTopRatio).rounded()
+        let bottom = (width * blurBottomRatio).rounded()
+        let rect = CGRect(x: 0, y: top, width: width, height: max(40, bottom - top))
 
-        if let image = bandImage, image.frame != strip { image.frame = strip }
-        if scrimView.frame != strip { scrimView.frame = strip }
+        if let image = bandImage {
+            if image.frame != rect { image.frame = rect }
+            if let mask = image.layer.mask as? CAGradientLayer, mask.frame != image.bounds {
+                mask.frame = image.bounds
+            }
+        }
+        if scrimView.frame != rect { scrimView.frame = rect }
         if let gradient = scrimView.layer.sublayers?.first as? CAGradientLayer,
            gradient.frame != scrimView.bounds {
             gradient.frame = scrimView.bounds
@@ -791,9 +889,11 @@ enum NowPlayingIOS27 {
     }
 
     private static func teardownArtwork() {
+        artworkView?.layer.mask = nil
         artworkView?.removeFromSuperview()
         artworkView = nil
         artworkHost = nil
+        artworkMask = nil
     }
 
     // MARK: - 小工具
@@ -889,8 +989,9 @@ enum NowPlayingIOS27 {
         guard let cgImage = image.cgImage else { return nil }
         let input = CIImage(cgImage: cgImage)
         guard let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
+        let radius = min(40, max(8, image.size.width * blurRadiusRatio))
         filter.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
-        filter.setValue(blurRadius, forKey: kCIInputRadiusKey)
+        filter.setValue(radius, forKey: kCIInputRadiusKey)
         guard let output = filter.outputImage else { return nil }
         let context = CIContext(options: nil)
         guard let rendered = context.createCGImage(output, from: input.extent) else { return nil }

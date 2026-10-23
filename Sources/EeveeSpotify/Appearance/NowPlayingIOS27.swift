@@ -57,12 +57,17 @@ enum NowPlayingIOS27 {
 
     /// 标题行左边距（AM 16pt；Spotify 原生 28pt）。**只改横向**。
     static let titleLeadInset: CGFloat = 16
-    /// 封面自己下沿从哪一档开始淡出（占封面高度）。**长一点**，淡进底色才看不出接缝。
-    static let artworkFadeStart: CGFloat = 0.78
+    /// 封面自己下沿从哪一档开始淡出（占封面高度）。
+    ///
+    /// ★ 2026-10-23 第六轮（用户：「AM 的渐变做的长度挺长的」）：0.78 → **0.45**。
+    /// 也就是说封面从 45% 高度就开始往下淡，到底边完全化成底色 ——
+    /// 过渡带占整张封面的一半（约 230pt），才是 AM 那种“没有明确边界”的感觉。
+    static let artworkFadeStart: CGFloat = 0.45
     /// 取"字段色"时裁封面下沿多少（占封面边长）。
     static let stripFraction: CGFloat = 0.30
-    /// 压黑渐变：pw 的 `kBlackFrom = 0.55` / `kBlackTo = 1`（按**窗口高度**算）。
-    static let blackFromRatio: CGFloat = 0.55
+    /// 压黑渐变：从页面 60% 起渐到纯黑（pw 的 `kBlackFrom` 是 0.55；这里推后一点，
+    /// 让封面淡出来的那块颜色多留一会儿，过渡更长）。
+    static let blackFromRatio: CGFloat = 0.60
     /// 字段颜色：pw 的 `SGRPalette` 两条上限（饱和度 0.55、线性亮度 0.07 ⇒ sRGB ≈ 0.29）。
     static let maxFieldSaturation: CGFloat = 0.55
     static let maxFieldBrightness: CGFloat = 0.30
@@ -232,14 +237,18 @@ enum NowPlayingIOS27 {
         let trackId = NowPlayingLyricsPlate.currentTrackId() ?? ""
         let trackChanged = trackId != lastTrackId
 
-        // 图：缓存优先（按曲目 id），再退回树里真实那张。
-        var image: UIImage? = NowPlayingLyricsPlate.rememberArtworkIfNeeded(in: page)
+        // ★★ 2026-10-23 第六轮（用户：「图片可能不是当前专辑封面，而是上一首的艺人图 / 上一首的专辑页」）：
+        //   **图只认"播放页自己那张壳里的图"**——`firstImage(in: shell)`。
+        //
+        //   原来是缓存优先（`rememberArtworkIfNeeded`）：它按**曲目 id** 存图，
+        //   而从艺人页 / 专辑页进来时，转场那一两拍封面格里可能还是**那个页面的头图** ⇒
+        //   它会把那张图当成"这一首的封面"存进缓存，之后整个会话都用错图。
+        //   现在：当前壳里没图就**等**（旧图继续顶着），不去缓存里拿"可能是别人的那张"。
+        var image: UIImage? = NowPlayingLyricsPlate.firstImage(in: shell)
         if image == nil {
-            // 换歌那一两拍，`rememberArtworkIfNeeded` 会**故意**返回 nil（树里还是上一首的图）。
-            // 这一拍**不要**退回 `firstImage` —— 那会把上一首的封面画到新壳的位置上。
             if trackChanged {
-                // ★ 2026-10-23 第五轮（照片 2：切歌闪过 Spotify 原生大封面）：
-                //   **换歌时不要把自己那张收起来** —— 旧图继续顶着（底色也先不换），
+                // ★ 第五轮（照片 2：切歌闪过原生大封面）：
+                //   **换歌时不要把自己那张收起来** —— 旧图继续顶着，
                 //   新图一到就原地替换；只有"这一次进来还没有任何图"才让原生露出来。
                 if artworkView != nil {
                     hideShell(shell)
@@ -248,7 +257,8 @@ enum NowPlayingIOS27 {
                 }
                 return false
             }
-            image = NowPlayingLyricsPlate.firstImage(in: shell)
+            // 刚进页面的头几拍：允许缓存兜底（那时还没有"上一首"的问题）。
+            image = NowPlayingLyricsPlate.rememberArtworkIfNeeded(in: page)
         }
 
         guard let image, let host = fullPageAncestor(of: shell, in: page) else {
@@ -437,8 +447,7 @@ enum NowPlayingIOS27 {
         let trackId = NowPlayingLyricsPlate.currentTrackId() ?? ""
         if trackId == lastFieldTrackId, fieldSolid != nil { return false }
         guard let shell = artworkShell,
-              let image = NowPlayingLyricsPlate.firstImage(in: shell)
-                  ?? NowPlayingLyricsPlate.rememberArtworkIfNeeded(in: page) else { return false }
+              let image = NowPlayingLyricsPlate.firstImage(in: shell) else { return false }
 
         let colour = fieldColour(from: image)
         lastFieldTrackId = trackId

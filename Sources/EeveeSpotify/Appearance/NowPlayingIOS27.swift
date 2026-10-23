@@ -69,6 +69,18 @@ enum NowPlayingIOS27 {
     /// 高斯模糊半径**按原图宽度比例**（专辑/歌单/艺人页实测的 3.5%）。
     static let blurRadiusRatio: CGFloat = 0.035
 
+    /// 顶部导航那三件的 id（真机树：`108.log:1735-1736`）。
+    ///
+    ///   · `now-playing-minimize-button` —— 左上那颗向下箭头（48×48，`Tertiary`）；
+    ///   · `now-playing-navigation-unit-title-label` —— 中间那个歌单名（30×48 的 stack）；
+    ///   · `Context menu` —— 右上那个 ⋯（48×48，`Tertiary`）。
+    ///
+    /// AM 的播放页顶部**只有一根小横条**（下拉把手）⇒ 前两件藏起来；⋯ 搬到工具行正中间。
+    static let navTitleIdentifier = "now-playing-navigation-unit-title-label"
+    static let contextMenuIdentifier = "Context menu"
+    /// 我们自己画的那根小横条。
+    static let grabberIdentifier = "eevee-ios27-grabber"
+
     /// 这颗开关自己就是全部条件（旧的"歌词进播放器"在它那边让位，见文件头）。
     static var isEnabled: Bool { UserDefaults.nowPlayingIOS27 }
 
@@ -495,20 +507,43 @@ enum NowPlayingIOS27 {
     /// 从封面取"字段色"：封面**下沿**的平均色，再压到 pw 的两条上限（白字一定读得清）。
     private static func fieldColour(from image: UIImage) -> UIColor {
         let strip = bottomStrip(of: image) ?? image
-        let size = CGSize(width: 1, height: 1)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        let flat = renderer.image { _ in
-            strip.draw(in: CGRect(origin: .zero, size: size))
-        }
-        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        flat.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        guard let average = averageColour(of: strip) else { return .black }
         var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0
-        UIColor(red: red, green: green, blue: blue, alpha: 1)
-            .getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
+        average.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
         return UIColor(
             hue: hue,
             saturation: min(saturation, maxFieldSaturation),
             brightness: min(max(brightness, 0.08), maxFieldBrightness),
+            alpha: 1
+        )
+    }
+
+    /// 一张图的**平均色**（`CIAreaAverage` 渲染到 1×1 再读那一个像素）。
+    ///
+    /// ⚠️ 不要用 `UIImage.getRed(_:green:blue:alpha:)` —— 那是 `UIColor` 的方法；
+    /// `UIImage` 只能经 `CGContext` 读像素（这里用 Core Image 一步到位）。
+    private static func averageColour(of image: UIImage) -> UIColor? {
+        guard let cgImage = image.cgImage else { return nil }
+        let input = CIImage(cgImage: cgImage)
+        guard let filter = CIFilter(name: "CIAreaAverage") else { return nil }
+        filter.setValue(input, forKey: kCIInputImageKey)
+        filter.setValue(CIVector(cgRect: input.extent), forKey: kCIInputExtentKey)
+        guard let output = filter.outputImage else { return nil }
+
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let context = CIContext(options: nil)
+        context.render(
+            output,
+            toBitmap: &pixel,
+            rowBytes: 4,
+            bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+            format: .RGBA8,
+            colorSpace: nil
+        )
+        return UIColor(
+            red: CGFloat(pixel[0]) / 255,
+            green: CGFloat(pixel[1]) / 255,
+            blue: CGFloat(pixel[2]) / 255,
             alpha: 1
         )
     }

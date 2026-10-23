@@ -44,7 +44,11 @@ enum NeteaseTimingOffset {
     static let stepMs = 50
     /// 单曲覆盖最多保留多少条。超过就按 key 排序丢掉最早的几条 ——
     /// 没有时间戳可排序，但至少行为是确定的，不会悄悄无限增长。
-    static let maxTrackOverrides = 300
+    ///
+    /// ★ 2026-10-23（用户：「如果歌曲多了起来」）：上限从 300 提到 1000。
+    ///    300 首对"经常用这个功能的人"不算多，而超限时的丢弃是**静默**的（按 id 排序丢），
+    ///    用户只会觉得"某几首的偏移莫名其妙没了"。1000 条 JSON 也就几十 KB，放 UserDefaults 没问题。
+    static let maxTrackOverrides = 1000
 
     /// 备份 / 全局重置 / 本页重置要认识的键。
     static var ownedKeys: [String] { [trackOffsetsKey, trackTitlesKey] }

@@ -65,6 +65,10 @@ enum NowPlayingIOS27 {
     static let titleLeadInset: CGFloat = 16
     /// 模糊带高度占页宽的比例（0.36 ⇒ 414pt 上 ≈ 149pt）。
     static let bandHeightRatio: CGFloat = 0.36
+    /// **底部那一坨整体上移**多少（占页高）。AM：进度条 550 / 控件 623 / 工具行 802；
+    /// 我们原生 703 / 752 / 840 ⇒ 上移 130（896×0.145）后是 573 / 622 ⇒ 控件那一档正好对上，
+    /// 而工具行得**单独留在原地**（否则页面底下空一大块）。
+    static let bottomLiftRatio: CGFloat = 0.145
     /// 高斯模糊半径。
     static let blurRadius: CGFloat = 24
 
@@ -88,6 +92,18 @@ enum NowPlayingIOS27 {
     static weak var bandHost: UIView?
     static weak var bandImage: UIImageView?
     static weak var scrim: UIView?
+
+    /// 底部那一坨（`npv.bottomStackView`）与它的工具行（footer）。
+    ///
+    /// 做法：整坨往上抬 `bottomLiftRatio×页高`，再把工具行**单独往下平移同样多** ⇒
+    /// 视觉上只有"进度条/控件"上来了、工具行留在底部（AM 的比例）。
+    /// ⚠️ 工具行移出去之后**不在那一坨的 bounds 里**了 ⇒ 点击必须靠一个替身转发
+    /// （与 `NowPlayingTitleRelayView` 同一套做法）。
+    static weak var bottomStack: UIView?
+    static var bottomStackBase: (ObjectIdentifier, CGAffineTransform)?
+    static weak var footerRow: UIView?
+    static var footerBase: (ObjectIdentifier, CGAffineTransform)?
+    static weak var footerRelay: NowPlayingTitleRelayView?
 
     /// 被我们挪下去的标题行，以及它原来的 `transform` 与**原生位置**。
     static weak var titleRow: UIView?
@@ -173,6 +189,7 @@ enum NowPlayingIOS27 {
         artworkShell = shell
 
         var changed = updateArtwork(shell, in: page)
+        if placeBottomBlock(in: page) { changed = true }
         if placeTitleRow(in: page) { changed = true }
         if mountBand(in: page) { changed = true }
         if !didLogFrames {
@@ -248,6 +265,89 @@ enum NowPlayingIOS27 {
         // 我们的封面在原生那张**上面**（同一个 cell 里），原生那张必须按下去。
         hideShell(shell)
         return changed
+    }
+
+    /// 把底部那一坨往上抬、工具行留在原地（见 `bottomStack` 那段注释）。
+    ///
+    /// 为什么值得动它：AM 的进度条/控件在 550/623，而我们原生在 703/752 —— 标题挪到 470 之后，
+    /// 中间会空出一大片（照片 161 那块空就是这么来的）。整坨上移 130 之后，控件正好落到 622，
+    /// 标题行也一起上来（≈465，正好是我们想要的位置，`placeTitleRow` 只再补几 pt 的 x/微调）。
+    ///
+    /// 风险与兜底：工具行找不到（量不到 `ShareButtonNowPlayingView` 的祖先）就**不动任何东西**
+    /// —— 宁可还是旧比例，也不要出现"工具行飘在半空、又点不到"的页面。
+    @discardableResult
+    private static func placeBottomBlock(in page: UIView) -> Bool {
+        guard let stack = NowPlayingLyricsPlate.findByIdentifier(
+            NowPlayingLyricsPlate.bottomStackIdentifier,
+            in: page
+        ) else { return false }
+
+        // 工具行 = 分享键在 stack 里的那一层祖先。
+        let share = NowPlayingLyricsPlate.findByIdentifier(
+            NowPlayingLyricsPlate.shareButtonIdentifier,
+            in: page
+        )
+        var footer: UIView?
+        if let share {
+            var current: UIView? = share
+            while let view = current, view !== stack, view.superview !== nil {
+                if view.superview === stack { footer = view; break }
+                current = view.superview
+            }
+        }
+        guard let footer else { return false }
+
+        let lift = (page.bounds.height * bottomLiftRatio).rounded()
+        guard lift > 1 else { return false }
+
+        bottomStack = stack
+        var changed = applyLift(to: stack, lift: -lift, record: &bottomStackBase, key: "stack")
+        footerRow = footer
+        if applyLift(to: footer, lift: lift, record: &footerBase, key: "footer") { changed = true }
+
+        // 工具行现在在那一坨外面 ⇒ 点击靠替身（只覆盖工具行那一块，别处照常穿透）。
+        let relay: NowPlayingTitleRelayView
+        if let existing = footerRelay, existing.superview === page {
+            relay = existing
+        } else {
+            footerRelay?.removeFromSuperview()
+            let view = NowPlayingTitleRelayView(frame: page.bounds)
+            view.backgroundColor = .clear
+            view.accessibilityIdentifier = "eevee-ios27-footer-relay"
+            page.addSubview(view)
+            page.bringSubviewToFront(view)
+            footerRelay = view
+            relay = view
+        }
+        relay.row = footer
+        if relay.frame != page.bounds { relay.frame = page.bounds; changed = true }
+        return changed
+    }
+
+    /// 只对"第一次接管"记原 `transform`，之后每拍按同一笔账重写（幂等）。
+    private static func applyLift(
+        to view: UIView,
+        lift: CGFloat,
+        record: inout (ObjectIdentifier, CGAffineTransform)?,
+        key: String
+    ) -> Bool {
+        let identifier = ObjectIdentifier(view)
+        let base: CGAffineTransform
+        if let recorded = record, recorded.0 == identifier {
+            base = recorded.1
+        } else {
+            base = view.transform
+            record = (identifier, base)
+        }
+        let wanted = base.concatenating(CGAffineTransform(translationX: 0, y: lift))
+        guard view.transform != wanted else { return false }
+        view.transform = wanted
+        if !didLogTitle {
+            writeDebugLog(
+                "[\(logTag)] bottom block \(key) shifted \(Int(lift))pt (v2 spacing)"
+            )
+        }
+        return true
     }
 
     /// 把标题行挪到封面下沿那条带上。
@@ -418,7 +518,7 @@ enum NowPlayingIOS27 {
     /// 关开关 / 离开页面：把写过的每一处写回去，拆掉我们自己的视图。
     static func restore(reason: String) {
         let hadState = bandHost != nil || artworkView != nil || titleRowBase != nil
-            || !shellAlphas.isEmpty
+            || bottomStackBase != nil || footerRelay != nil || !shellAlphas.isEmpty
         if didLogRestore || !hadState {
             clearState()
             return
@@ -430,6 +530,7 @@ enum NowPlayingIOS27 {
            recorded.0 == ObjectIdentifier(row), row.transform != recorded.1 {
             row.transform = recorded.1
         }
+        teardownBottomBlock()
         teardownBand()
         teardownArtwork()
 
@@ -444,6 +545,11 @@ enum NowPlayingIOS27 {
         titleRow = nil
         titleRowBase = nil
         titleRowBaseRect = nil
+        bottomStack = nil
+        bottomStackBase = nil
+        footerRow = nil
+        footerBase = nil
+        footerRelay = nil
         hiddenShells.removeAllObjects()
         shellAlphas.removeAll()
         lastTrackId = ""
@@ -452,6 +558,19 @@ enum NowPlayingIOS27 {
         didLogBand = false
         didLogFrames = false
         didLogRestore = false
+    }
+
+    private static func teardownBottomBlock() {
+        if let stack = bottomStack, let recorded = bottomStackBase,
+           recorded.0 == ObjectIdentifier(stack), stack.transform != recorded.1 {
+            stack.transform = recorded.1
+        }
+        if let footer = footerRow, let recorded = footerBase,
+           recorded.0 == ObjectIdentifier(footer), footer.transform != recorded.1 {
+            footer.transform = recorded.1
+        }
+        footerRelay?.removeFromSuperview()
+        footerRelay = nil
     }
 
     private static func teardownBand() {

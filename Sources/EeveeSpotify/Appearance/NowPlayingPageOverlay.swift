@@ -436,7 +436,9 @@ enum NowPlayingPageOverlay {
         let playFrame = untransformed(play, in: page)
         let shareFrame = untransformed(share, in: page)
         guard playFrame.maxY > 0, shareFrame.minY > playFrame.maxY else { return nil }
-        let top = min(playFrame.maxY + 2, shareFrame.minY - volumeRowHeight - 2)
+        // 摆在那段空隙的**正中**（AM：控件 623 / 音量 742 / 工具行 802；我们新版把这坨抬上去、
+        // 工具行留在原地之后，空隙是 686…789 ⇒ 这一行落在 ≈723，正好在两者之间）。
+        let top = (playFrame.maxY + shareFrame.minY) / 2 - volumeRowHeight / 2
         return max(0, top)
     }
 

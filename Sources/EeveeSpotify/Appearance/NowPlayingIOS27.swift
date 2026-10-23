@@ -63,8 +63,13 @@ enum NowPlayingIOS27 {
 
     // MARK: - 几何 / 配色
 
-    /// 标题行左边距（AM 16pt；Spotify 原生 28pt）。**只改横向**。
-    static let titleLeadInset: CGFloat = 16
+    /// 标题行左边距。**只改横向**。
+    ///
+    /// ★ 2026-10-24（用户拿 `C:\dsh\am\1.jpg` 对比：「歌曲名字/艺人名字往右移，对比挺明显」）：
+    ///   16 → **28**。28 就是**进度条自己的左边距**（日志 `ProgressBarUnitNowPlaying=28,660`）——
+    ///   AM 那张图里曲名与进度条是同一条左边线，我们原来是 16 vs 28，一眼就能看出没对齐。
+    ///   再往右就得连进度条一起挪（那是原生控件），单独算一笔。
+    static let titleLeadInset: CGFloat = 28
     /// 封面自己下沿从哪一档开始淡出（占封面高度）。
     ///
     /// ★ 2026-10-23 第六轮（用户：「AM 的渐变做的长度挺长的」）：0.78 → **0.45**。
@@ -103,6 +108,11 @@ enum NowPlayingIOS27 {
     /// 压黑渐变：从页面 60% 起渐到纯黑（pw 的 `kBlackFrom` 是 0.55；这里推后一点，
     /// 让封面淡出来的那块颜色多留一会儿，过渡更长）。
     static let blackFromRatio: CGFloat = 0.60
+    /// 压黑渐变终点的**不透明度**。
+    ///
+    /// ★ 2026-10-24（用户选 A）：终点原来是 1.0（纯黑）⇒ 下半屏死黑。现在背景里铺了
+    /// "封面的模糊延续"，这条纱只负责压暗（0.62），颜色的层次能透出来。
+    static let blackScrimAlpha: CGFloat = 0.62
     /// 字段颜色：pw 的 `SGRPalette` 两条上限（饱和度 0.55、线性亮度 0.07 ⇒ sRGB ≈ 0.29）。
     static let maxFieldSaturation: CGFloat = 0.55
     static let maxFieldBrightness: CGFloat = 0.30
@@ -154,7 +164,12 @@ enum NowPlayingIOS27 {
     /// 背景 field（挂在封面那个整页 cell 里、我们封面下面）。
     static weak var fieldHost: UIView?
     static weak var fieldSolid: UIView?
+    /// 封面的**模糊延续**（下半屏那块）：AM 的背景不是纯黑，是同一张封面的模糊拷贝再压暗。
+    static weak var fieldBackdrop: UIImageView?
     static weak var fieldBlack: UIView?
+    /// 上一次做模糊底用的源图 + 结果（同一张只算一次）。
+    static var lastBackdropSource: UIImage?
+    static var lastBackdropImage: UIImage?
 
     /// 被我们改了左边距的标题行，以及它原来的 `transform` 与原生位置。
     static weak var titleRow: UIView?
@@ -549,12 +564,15 @@ enum NowPlayingIOS27 {
 
     // MARK: - 背景 field（pw 的配方）
 
-    /// 字段色底 + 压黑渐变（`_solid + _black` 那两半，与专辑/歌单/艺人页同一套）。
+    /// 字段色底 + 封面的模糊延续 + 压暗纱。
     ///
-    /// 层次（从下往上）：`solid`（字段色，整页）→ `black`（55% 起渐到纯黑，整页）
-    /// → 我们那张封面（`updateArtwork` 加的，下沿自己淡出）。
-    /// ★ 2026-10-23 第五轮：**去掉了那条模糊拷贝**（pw 的 `_backdrop`）—— 用户看了照片 1/163
-    /// 说"和 AM 不搭、回退"。现在封面下沿直接淡进字段色，没有会糊成一块的中间层。
+    /// 层次（从下往上）：
+    ///   `solid`（字段色，取封面下沿均值）→ `backdrop`（整张封面缩到 48pt 再模糊，aspectFill）
+    ///   → `black`（60% 起渐到 62% 黑）→ 我们那张锐利封面（`updateArtwork` 加的，下沿自己淡出）。
+    ///
+    /// ⚠️ 历史：2026-10-23 第五轮删过一次模糊层（那版是"封面下沿裁一条 + 固定 28pt 半径"，
+    ///   在缩略图上半径过大、糊成一块灰，用户说"和 AM 不搭"）。2026-10-24 用户选了 A 方案后
+    ///   按新做法回来：**整张**封面缩到 48pt 再模糊（没有可辨认细节，只有颜色）。
     @discardableResult
     private static func mountField(in page: UIView) -> Bool {
         guard let shell = artworkShell,
@@ -572,6 +590,10 @@ enum NowPlayingIOS27 {
         }
 
         teardownField()
+        // ⚠️ 重建了 wrapper ⇒ 新的 `fieldSolid` / `fieldBackdrop` 都是空的，必须让
+        // `updateField` **重算一遍**（否则它会因为"同一张图已经上过色"而提前返回，
+        // 新建出来的那层就停在 `solid = .black`、糊底没有图）。
+        lastFieldImage = nil
 
         let wrapper = UIView(frame: page.bounds)
         wrapper.isUserInteractionEnabled = false
@@ -582,12 +604,30 @@ enum NowPlayingIOS27 {
         solid.backgroundColor = .black
         wrapper.addSubview(solid)
 
+        // ★ 2026-10-24（用户选 A：「背景改成封面模糊延续」）：封面下方那块不再是纯黑。
+        //
+        //   之前 2026-10-23 撤回的那一版是"封面下沿的模糊条"（固定 28pt 半径 ⇒ 糊成一块灰）。
+        //   这一版换成**整页一张缩到 48pt 再模糊的封面**（`backdrop(from:)`），
+        //   它只是"颜色的延续"，没有可辨认的细节，所以不会糊成脏块。
+        //   层级：solid（字段色，兜底）→ backdrop（模糊封面，aspectFill）→ black（渐变纱）
+        //   → 我们那张锐利封面（在 wrapper 之上）。
+        let backdrop = UIImageView(frame: page.bounds)
+        backdrop.isUserInteractionEnabled = false
+        backdrop.contentMode = .scaleAspectFill
+        backdrop.clipsToBounds = true
+        backdrop.accessibilityIdentifier = "eevee-ios27-field-backdrop"
+        wrapper.addSubview(backdrop)
+
         let black = UIView(frame: page.bounds)
         black.isUserInteractionEnabled = false
         black.accessibilityIdentifier = "eevee-ios27-black"
         let blackGradient = CAGradientLayer()
         blackGradient.name = "eevee-ios27-black-gradient"
-        blackGradient.colors = [UIColor.clear.cgColor, UIColor.black.cgColor]
+        // ⚠️ 终点不再是不透明黑：模糊底要透出来（AM 那块是"暗下去"而不是"黑掉"）。
+        blackGradient.colors = [
+            UIColor.clear.cgColor,
+            UIColor.black.withAlphaComponent(blackScrimAlpha).cgColor,
+        ]
         black.layer.addSublayer(blackGradient)
         wrapper.addSubview(black)
 
@@ -600,6 +640,7 @@ enum NowPlayingIOS27 {
 
         fieldHost = wrapper
         fieldSolid = solid
+        fieldBackdrop = backdrop
         fieldBlack = black
         _ = layoutField(in: wrapper)
         _ = updateField(in: page)
@@ -608,7 +649,8 @@ enum NowPlayingIOS27 {
             didLogField = true
             writeDebugLog(
                 "[\(logTag)] field mounted in \(NSStringFromClass(type(of: host)))"
-                    + " — pw's artwork field: black from \(Int(blackFromRatio * 100))% of the page"
+                    + " — blurred-backdrop field: scrim \(Int(blackScrimAlpha * 100))% from"
+                    + " \(Int(blackFromRatio * 100))% of the page"
             )
         }
         return true
@@ -621,6 +663,10 @@ enum NowPlayingIOS27 {
         var changed = false
         if let solid = fieldSolid, solid.frame != bounds {
             solid.frame = bounds
+            changed = true
+        }
+        if let backdrop = fieldBackdrop, backdrop.frame != bounds {
+            backdrop.frame = bounds
             changed = true
         }
         if let black = fieldBlack, black.frame != bounds {
@@ -664,6 +710,11 @@ enum NowPlayingIOS27 {
         let colour = fieldColour(from: image)
         lastFieldImage = image
         lastFieldTrackId = NowPlayingLyricsPlate.currentTrackId() ?? ""
+        // 模糊底：同一张源图只算一次（换歌才重做）。
+        if lastBackdropSource !== image {
+            lastBackdropSource = image
+            lastBackdropImage = backdrop(from: image)
+        }
         // ⚠️ 必须**显式**标成 `() -> Void`。
         //
         // `fieldSolid?.backgroundColor = colour` 是**可选链赋值**，它的值类型是 `Void?`
@@ -677,6 +728,7 @@ enum NowPlayingIOS27 {
         // 类型推断跟着变 —— 而 blame 只会说这三行来自 `328c202`。修法就是把类型写死。
         let apply: () -> Void = {
             fieldSolid?.backgroundColor = colour
+            fieldBackdrop?.image = lastBackdropImage
         }
         // 只对我们自己的 wrapper 做交叉淡入（对外层 cell 做 transition 会连 Spotify 的内容一起快照）。
         if let wrapper = fieldHost, wrapper.window != nil {
@@ -696,6 +748,28 @@ enum NowPlayingIOS27 {
         let rect = CGRect(x: 0, y: height - cropHeight, width: width, height: cropHeight)
         guard let cropped = cgImage.cropping(to: rect) else { return nil }
         return UIImage(cgImage: cropped, scale: image.scale, orientation: image.imageOrientation)
+    }
+
+    /// 把封面做成"颜色的延续"：缩到 48pt 宽 → 高斯模糊 → 返回那张小图（屏幕上 `aspectFill` 铺满）。
+    ///
+    /// 为什么这么小：这块只负责"下半屏整片是同一种颜色"，任何可辨认的细节都会被读成"糊了"。
+    /// 2026-10-23 撤回的那一版是"封面下沿裁一条 + 固定 28pt 半径" ⇒ 在缩略图上半径过大、糊成灰块。
+    private static func backdrop(from image: UIImage) -> UIImage? {
+        guard let cgImage = image.cgImage else { return nil }
+        let input = CIImage(cgImage: cgImage)
+        let extent = input.extent
+        guard extent.width > 1, extent.height > 1 else { return nil }
+
+        let scale = min(1, 48 / extent.width)
+        let small = input.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
+        filter.setValue(small.clampedToExtent(), forKey: kCIInputImageKey)
+        filter.setValue(9, forKey: kCIInputRadiusKey)
+        guard let output = filter.outputImage?.cropped(to: small.extent) else { return nil }
+
+        let context = CIContext(options: [.useSoftwareRenderer: false])
+        guard let cg = context.createCGImage(output, from: small.extent) else { return nil }
+        return UIImage(cgImage: cg)
     }
 
     /// 从封面取"字段色"：封面**下沿**的平均色，再压到 pw 的两条上限（白字一定读得清）。
@@ -965,7 +1039,10 @@ enum NowPlayingIOS27 {
         grabber = nil
         fieldHost = nil
         fieldSolid = nil
+        fieldBackdrop = nil
         fieldBlack = nil
+        lastBackdropSource = nil
+        lastBackdropImage = nil
         lastTrackId = ""
         lastFieldTrackId = ""
         lastFieldImage = nil
@@ -996,6 +1073,7 @@ enum NowPlayingIOS27 {
         fieldHost?.removeFromSuperview()
         fieldHost = nil
         fieldSolid = nil
+        fieldBackdrop = nil
         fieldBlack = nil
     }
 

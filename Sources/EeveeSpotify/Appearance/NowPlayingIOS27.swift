@@ -197,6 +197,9 @@ enum NowPlayingIOS27 {
         if mountField(in: page) { changed = true }
         if placeTitleRow(in: page) { changed = true }
         if placeNavChrome(in: page) { changed = true }
+        // 待办 T1：进度条（4pt 轨 + 藏圆钮 + 等宽时间），见 `NowPlayingIOS27+Progress.swift`。
+        // 它只换 UISlider 的三张图与两颗标签的字体，不碰几何、不碰手势。
+        if placeProgress(in: page) { changed = true }
         if !didLogFrames {
             didLogFrames = true
             logFrames(in: page)
@@ -643,6 +646,7 @@ enum NowPlayingIOS27 {
     static func restore(reason: String) {
         let hadState = fieldHost != nil || artworkView != nil || titleRowBase != nil
             || grabber != nil || !shellAlphas.isEmpty || !chromeAlphas.isEmpty
+            || progressStyledSlider != nil || progressTimeLabelViews.count > 0
         if didLogRestore || !hadState {
             clearState()
             return
@@ -659,6 +663,7 @@ enum NowPlayingIOS27 {
         }
         teardownField()
         teardownArtwork()
+        teardownProgress()
 
         writeDebugLog("[\(logTag)] restored (\(reason)) — native cover, title row and our views are back")
         clearState()
@@ -688,6 +693,7 @@ enum NowPlayingIOS27 {
         didLogFrames = false
         didLogMissingCover = false
         didLogRestore = false
+        clearProgressState()
     }
 
     private static func revealChrome() {

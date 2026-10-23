@@ -286,6 +286,16 @@ extension NowPlayingIOS27 {
         if let target = queue { zones.append((tapRect(frames[2]), target)) }
         relay.zones = zones
         relay.actionZones = actionZones
+        // ★ 2026-10-24（用户：「点右下角那颗，还是 Spotify 原生弹窗」）：循环那颗是**另一块替身**，
+        //   它的框和这里的"队列"可点区（44pt，必须盖住藏在下面的原生分享键）必然重叠。
+        //   谁先收到触摸取决于 subviews 顺序（这一层每拍 bringToFront 一次）⇒ 同一处时而开队列、
+        //   时而循环。现在把循环那颗的框从**本层**命中范围里排除：那一小块会让给下面那块替身，
+        //   与顺序无关。（循环还没摆出来的那一两拍，`repeatPill` 为 nil，就不排除。）
+        if let pill = repeatPill, pill.superview === page {
+            relay.excludedRects = [pill.frame]
+        } else {
+            relay.excludedRects = []
+        }
         if relay.frame != page.bounds { relay.frame = page.bounds }
         if page.subviews.last !== relay { page.bringSubviewToFront(relay) }
 

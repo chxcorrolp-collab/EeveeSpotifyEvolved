@@ -218,6 +218,17 @@ enum NowPlayingIOS27 {
         if placeFooter(in: page) { changed = true }
         // 待办 T2（用户拍板 A）：藏随机/循环，循环挪到工具行右上方，见 `NowPlayingIOS27+Transport.swift`。
         if placeTransport(in: page) { changed = true }
+        // ★ 2026-10-24：传输行那块替身（循环钮）必须**最后**抬到最前。
+        //
+        // `placeFooter` 每拍都会把自己的替身 bringToFront 一次；`placeTransport` 排在它后面、
+        // 本来也该轮到循环钮 —— 但 `placeTransport` 有几条提前返回（量不到锚 / 传输行缺一颗），
+        // 那些拍里 footer 的替身就压在上面，于是同一处触摸"时而开队列、时而循环"
+        // （用户报的就是这个）。这一句把"循环钮在最上"变成**每拍都成立**的事实；
+        // footer 那边还有一道 `excludedRects` 兜底，两者互不依赖。
+        if let repeatRelay, repeatRelay.superview === page,
+           page.subviews.last !== repeatRelay {
+            page.bringSubviewToFront(repeatRelay)
+        }
         if !didLogFrames {
             didLogFrames = true
             logFrames(in: page)

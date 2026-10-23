@@ -60,6 +60,22 @@ final class NowPlayingIOS27RemoteRelayView: UIView {
     var zones: [(rect: CGRect, target: UIView)] = []
     var actionZones: [(rect: CGRect, action: () -> Void)] = []
 
+    /// **不接**的区域：让给叠在同一页上的**另一块替身**。
+    ///
+    /// ★ 2026-10-24（用户：「点右下角那颗，还是 Spotify 原生弹窗」）：工具行的"队列"可点区
+    ///   是 44pt（必须盖住藏在下面的原生分享键），而"循环"那颗是**另一块替身**、框只有 26pt
+    ///   ⇒ 两者必然重叠。谁先收到触摸取决于 `page.subviews` 的顺序（footer 每拍都
+    ///   `bringSubviewToFront` 一次），于是同一处时而开队列、时而循环。
+    ///   现在 footer 这块替身把"循环那颗的框"从自己的命中范围里**排除**，触摸会自然落到
+    ///   下面那块替身上 —— 与顺序无关。
+    var excludedRects: [CGRect] = []
+
+    private func accepts(_ point: CGPoint) -> Bool {
+        guard !excludedRects.contains(where: { $0.contains(point) }) else { return false }
+        return zones.contains { $0.rect.contains(point) }
+            || actionZones.contains { $0.rect.contains(point) }
+    }
+
     /// 抬手时才执行动作（与原生按钮的 `.touchUpInside` 同一时机；
     /// `UIControl` 那条路本来就是"命中即转发"，两者手感一致）。
     private var actionTap: UITapGestureRecognizer?
@@ -91,20 +107,24 @@ final class NowPlayingIOS27RemoteRelayView: UIView {
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return false }
-        return zones.contains { $0.rect.contains(point) }
-            || actionZones.contains { $0.rect.contains(point) }
+        return accepts(point)
     }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return nil }
-        if let zone = zones.first(where: { $0.rect.contains(point) }) {
+        if let zone = zones.first(where: { $0.rect.contains(point) }),
+           !excludedRects.contains(where: { $0.contains(point) }) {
             let target = zone.target
             guard target.window != nil, target.alpha > 0.01, !target.isHidden else { return nil }
             let centre = CGPoint(x: target.bounds.midX, y: target.bounds.midY)
-            return target.hitTest(centre, with: event)
+            // ⚠️ `hitTest` 可能返回 nil（目标把整棵子树按 alpha 藏了的时候）——
+            //   那时**退回目标本身**：触摸仍然落在原生控件上（就是我们要的转发），
+            //   而不是"掉到下面那块替身上、开了别的面板"（2026-10-24 的现场）。
+            return target.hitTest(centre, with: event) ?? target
         }
         // 自己执行动作的那一块：返回自己，手势识别器接住这一下。
-        if actionZones.contains(where: { $0.rect.contains(point) }) {
+        if actionZones.contains(where: { $0.rect.contains(point) }),
+           !excludedRects.contains(where: { $0.contains(point) }) {
             return self
         }
         return nil
@@ -126,20 +146,11 @@ extension NowPlayingIOS27 {
     /// 我们自己画的那颗循环钮。
     static let repeatPillIdentifier = "eevee-ios27-repeat"
     static let repeatRelayIdentifier = "eevee-ios27-repeat-relay"
-    /// 可点方框边长。
-    ///
-    /// ★ 2026-10-24（真机照片 2）：30pt **带底色**的圆钮在 414pt 宽的机器上正好压在
-    ///   队列字形（26pt、中心 328,811）的右肩上 —— 那颗绿圆盘看起来像"把队列键盖住了"。
-    ///   AM 参考图（`C:\dsh\am\1.jpg`）里那里**没有圆盘**，只有一颗裸图标，位置是
-    ///   队列中心**右上 ~13 / ~18pt**。所以：方框收到 26（只为触摸面积），**底色去掉**，
-    ///   偏移改成 +13 / −18。视觉上回到 AM 那种"两颗图标错开叠着"的样子。
+    /// 可点方框边长（只为触摸面积，视觉上就是一颗裸图标）。
     static let repeatPillSide: CGFloat = 26
-    /// 中心相对**队列那颗中心**的偏移（AM 参考图量的：右 ≈13、上 ≈18）。
-    static let repeatPillOffsetX: CGFloat = 13
-    static let repeatPillOffsetY: CGFloat = -18
-    /// 字形大小（SF Symbol pointSize）。AM 那颗 ≈14。
+    /// 字形大小（SF Symbol pointSize）。AM/Spotify 那颗 ≈14。
     static let repeatGlyphSize: CGFloat = 14
-    /// 底色：**透明**（见 `repeatPillSide` 那段；AM 那里没有盘子）。
+    /// 底色：**透明**。
     /// 留这个常量是为了不让 `mountRepeatPill` 里多一条"为什么没有底色"的谜。
     static let repeatPillFill = UIColor.clear
     /// 「循环开着」时字形用的 Spotify 绿。
@@ -180,12 +191,26 @@ extension NowPlayingIOS27 {
                 guard let view else { return "missing" }
                 return "hidden (\(NSStringFromClass(type(of: view))))"
             }
-            let pill = repeatPill.map {
-                "\(Int($0.frame.minX)),\(Int($0.frame.minY))"
+            // 把"谁压着谁"需要的三个框一次打全（2026-10-24：上一份日志里没有这三行，
+            // 只能靠照片猜重叠；下一次直接看数）。
+            func rect(_ view: UIView?) -> String {
+                guard let view else { return "missing" }
+                let r = view.convert(view.bounds, to: page)
+                return "\(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))×\(Int(r.height))"
+            }
+            func rect(_ identifier: String) -> String {
+                rect(NowPlayingLyricsPlate.findByIdentifier(identifier, in: page))
+            }
+            let pill = repeatPill.map { view -> String in
+                "\(Int(view.frame.minX)),\(Int(view.frame.minY))"
+                    + " \(Int(view.frame.width))×\(Int(view.frame.height))"
             } ?? "not placed"
             writeDebugLog(
                 "[\(logTag)] transport — shuffle \(describe(row.shuffle))"
-                    + ", repeat \(describe(row.repeat)), pill \(pill)"
+                    + ", repeat \(describe(row.repeat)) @\(rect(row.repeat)), pill \(pill)"
+                    + "; queue glyph \(rect(queueButtonIdentifier))"
+                    // 音量行是我们自己那层（`NowPlayingPageOverlay`）的 id，这里直接查字面量。
+                    + "; volume row \(rect("eevee-npv-volume-row"))"
                     + " (AM's three-button row; both stay reachable from the context menu)"
             )
         }
@@ -248,12 +273,19 @@ extension NowPlayingIOS27 {
 
     @discardableResult
     private static func mountRepeatPill(in page: UIView, forwardingTo repeatKey: UIView) -> Bool {
-        guard let anchor = footerAnchorFrame(in: page) else { return false }
+        // 落点：**原生循环键自己的中心**（Spotify 传输行的最右端）。
+        //
+        // ⚠️ 2026-10-24 改口径（用户：「点右下角那颗，还是 Spotify 原生弹窗，而且互相遮挡」）：
+        //   原来按 AM 参考图把它当"队列右上角的徽标"（+13/−18）。真机照片 2 + 日志证明那个
+        //   位置根本放不下：`[iOS27] frames` 里传输行底 = 781、工具行顶（share.minY）= 789
+        //   ⇒ 两行之间只剩 **8pt**，而音量行本身高 28pt（`gapBelowAnchor = 4` ⇒ 785…813），
+        //   于是徽标必然压在音量滑杆和队列字形上。要让 AM 那个位置成立，得把工具行整体
+        //   下移约 30pt —— 那是搬原生行，另算一笔账。这里先回到"传输行右端"，
+        //   就是 Spotify 自己那颗循环键的位置，只是字形换成我们的。
+        let anchor = repeatKey.convert(repeatKey.bounds, to: page)
+        guard anchor.width > 1, anchor.height > 1 else { return false }
         let side = repeatPillSide
-        let centre = CGPoint(
-            x: anchor.midX + repeatPillOffsetX,
-            y: anchor.midY + repeatPillOffsetY
-        )
+        let centre = CGPoint(x: anchor.midX, y: anchor.midY)
         // 夹在页面里：贴边的机型上"右 8"会出屏。
         let origin = CGPoint(
             x: min(max(centre.x - side / 2, 4), page.bounds.width - side - 4),
@@ -319,26 +351,6 @@ extension NowPlayingIOS27 {
         if relay.frame != page.bounds { relay.frame = page.bounds }
         if page.subviews.last !== relay { page.bringSubviewToFront(relay) }
         return changed
-    }
-
-    /// 循环圆钮的锚：**我们画的那颗队列字形**（T3 之后它才在 AM 的位置上）；
-    /// 还没有字形（第一拍 / T3 没跑）就退到原生队列那颗、再退到分享那颗。
-    private static func footerAnchorFrame(in page: UIView) -> CGRect? {
-        let identifiers = [
-            footerGlyphIdentifierPrefix + "queue",
-            queueButtonIdentifier,
-            NowPlayingLyricsPlate.shareButtonIdentifier,
-        ]
-        for identifier in identifiers {
-            guard let view = NowPlayingLyricsPlate.findByIdentifier(identifier, in: page) else {
-                continue
-            }
-            let rect = NowPlayingLyricsPlate.untransformed(view, in: page)
-            guard rect.width > 8, rect.height > 8 else { continue }
-            guard rect.midX > 0, rect.midX < page.bounds.width else { continue }
-            return rect
-        }
-        return nil
     }
 
     /// 循环开着就把字形染绿。只用来决定颜色 —— 判别式见下面的注释。

@@ -149,6 +149,22 @@ struct EeveeExperimentsSettingsView: View {
         }
     }
 
+    /// 开关下方那段说明：开关关闭时只讲"这是什么"，打开后再追加"怎么拿令牌"。
+    ///
+    /// ⚠️ 2026-10-24：删 `lyricsStageFooter` 时这段被**连带删掉**过（两处 doc 注释都以
+    ///   "开关下方那段说明" 开头，按前缀找区间的脚本认错了起点），CI 报
+    ///   `cannot find 'appleMusicOfficialTtmlFooter' in scope`。恢复时别再按前缀切区间。
+    private var appleMusicOfficialTtmlFooter: String {
+        var text = "apple_music_official_ttml_description".localized
+
+        if experimentsOptions.appleMusicOfficialTtml {
+            text.append("\n\n")
+            text.append("apple_music_official_ttml_token_hint".localized)
+        }
+
+        return text
+    }
+
     /// `media-user-token` 输入框（开关打开时才出现）。
     ///
     /// ⚠️ 它是**账号级凭据**：不内置、不外传，只存在本机的 UserDefaults 里

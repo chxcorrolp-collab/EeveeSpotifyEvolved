@@ -204,14 +204,15 @@ extension NowPlayingLyricsPlate {
         let frame = label.convert(label.bounds, to: page)
         var widths: [CGFloat] = []
 
-        // ★★ 2026-10-23（用户：`（NetEase）` 会**慢慢把歌手名吞掉**，照片 31 最后只剩 `（NetEase）`）：
-        //    **不能**无条件把 `label.bounds.width` 当上限。Spotify 那一行是"按内容撑开"的
-        //    （`bounds.width == intrinsicContentSize.width`）—— 我们把它写短一点，它自己就跟着
-        //    变窄 ⇒ 下一拍量到更小的上限、再裁得更短 …… 0.3s 一拍，歌手名被一点一点吃光。
-        //    判据：`bounds ≈ intrinsic` ⇒ 自撑开 ⇒ 它的宽度是**我们写进去的文本的结果**，不是约束；
-        //    真正的上限是页边与裁剪祖先（它们不会因为我们改文本而变）。
+        // ★★ 2026-10-23（用户：长名字"感觉没滚动完"）：歌手那一行是 Spotify 的
+        //    **`MarqueeLabel`**（dump 里 `MarqueeLabel@0,24,308,22,id=now-playing-subtitle-label`），
+        //    我们拼上「（提供商）」后一旦比它的**视口宽**（308pt），它就开始 marquee 滚动 ——
+        //    长名字看起来就是"滚到一半停住 / 被切掉"。所以对 MarqueeLabel **必须**用
+        //    `bounds.width`（那是视口宽），而且写进去的文本要严格落在它里面。
+        //    自撑开的普通 `UILabel` 才用页边/祖先那一路（它的 bounds 是文本的结果，不是约束）。
+        let isMarquee = NSStringFromClass(type(of: label)).contains("Marquee")
         let intrinsic = label.intrinsicContentSize.width
-        let selfSizing = intrinsic > 1 && abs(label.bounds.width - intrinsic) <= 1.5
+        let selfSizing = !isMarquee && intrinsic > 1 && abs(label.bounds.width - intrinsic) <= 1.5
         if !selfSizing, label.bounds.width > 1 { widths.append(label.bounds.width) }
 
         let byPage = page.bounds.width - frame.minX
@@ -266,8 +267,9 @@ extension NowPlayingLyricsPlate {
             (text as NSString).size(withAttributes: attributes).width
         }
 
-        // 留 2pt：UILabel 自己还会做一次舍入/字距，量到"刚好等于宽度"时仍可能把最后一个字裁掉。
-        let limit = maxWidth - 2
+        // 留 4pt：UILabel 自己还会做一次舍入/字距，量到"刚好等于宽度"时仍可能把最后一个字裁掉；
+        // MarqueeLabel 更敏感 —— 只要比视口宽一点点，它就开始滚动（用户看到的"没滚动完"）。
+        let limit = maxWidth - 4
         if width(full) <= limit { return full }
 
         let ellipsis = "…"

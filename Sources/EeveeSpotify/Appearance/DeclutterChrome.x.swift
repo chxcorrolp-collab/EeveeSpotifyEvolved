@@ -554,6 +554,10 @@ enum DeclutterChrome {
         // ★ 2026-10-23：「iOS 27 听歌页」的重算节拍。开关关着时成本 = 一次 bool 读。
         onMainThreadSync { _ = NowPlayingIOS27.reconcile() }
 
+        // ★ 2026-10-24：「队列页」（Spotify 自己的队列卡片 → MeloX 形状）。
+        //   开关关着 / 没弹卡片时成本 = 一次 bool 读 + 一次 presented 链检查。
+        onMainThreadSync { _ = QueuePage.reconcile() }
+
         // ★ 2026-10-04：「控制键换成本地字形」的保活（Spotify 换帧会重排那一排的 subviews）。
         //   没开开关时成本 = 一次 bool 读。
         onMainThreadSync { _ = NowPlayingControlsPlate.reconcile() }

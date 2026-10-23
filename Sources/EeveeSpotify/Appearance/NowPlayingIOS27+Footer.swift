@@ -74,6 +74,13 @@ extension NowPlayingIOS27 {
     /// 没有歌词入口时左边那颗的暗度。
     static let footerGlyphDisabledAlpha: CGFloat = 0.35
 
+    /// 工具行三颗字形**相对原生那一行**下移多少。
+    ///
+    /// 原生那一行的中线是 811（日志 `frames`），而它上面挤着：传输行底 781 + 音量行 28pt（785…813）。
+    /// 下移 34 ⇒ 845：音量行与字形之间留 19pt，循环徽标才有地方待（见 `placeFooter` 那段）。
+    /// ⚠️ 只影响**我们自己画的**字形与替身；原生按钮不动。
+    static let footerRowYOffset: CGFloat = 34
+
     // MARK: - 状态（T2/T3 共用"藏字形"的一套表）
 
     /// 被我们藏掉的**原生字形子树**（按钮本身还活着，替身要能命中它们）。
@@ -154,7 +161,18 @@ extension NowPlayingIOS27 {
         for button in [connect, share, queue].compactMap({ $0 }) {
             if hideGlyphSubtree(button) { changed = true }
         }
-        if mountFooterGlyphs(in: page, midY: rowMidY, connect: connect, share: share, queue: queue) {
+        // ★ 2026-10-24（用户拿 MeloX 的播放页做对照：「我感觉应该是放得下的吧」）：对，放得下 ——
+        //   只是**原生那一行太靠上**：日志里它的中线是 811，而音量行（28pt）落在 785…813、
+        //   传输行底 781 ⇒ 三件挤在 30pt 里，任何"循环徽标"都会压上去。
+        //   这一行（工具行字形 + 可点区）整体**下移 34pt ⇒ 845**：
+        //     · 音量行下沿 813 → 字形框顶 832，中间留 19pt；
+        //     · 框底 858 仍在安全区（862）以内；
+        //     · 循环徽标（24pt、中心 = 队列中心右上 13/−20 ⇒ 825）落在 813…837，
+        //       既不碰音量行（813 起）、也不碰队列的**字形墨迹**（836 起）——
+        //       就是 AM / MeloX 那种"小图标压在队列右上"的样子。
+        //   只挪**我们自己画的**三颗与替身，原生那三颗一个字都不动（它们本来就被藏了字形）。
+        let glyphMidY = rowMidY + footerRowYOffset
+        if mountFooterGlyphs(in: page, midY: glyphMidY, connect: connect, share: share, queue: queue) {
             changed = true
         }
         return changed

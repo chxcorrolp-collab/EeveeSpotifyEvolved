@@ -146,10 +146,17 @@ extension NowPlayingIOS27 {
     /// 我们自己画的那颗循环钮。
     static let repeatPillIdentifier = "eevee-ios27-repeat"
     static let repeatRelayIdentifier = "eevee-ios27-repeat-relay"
-    /// 可点方框边长（只为触摸面积，视觉上就是一颗裸图标）。
-    static let repeatPillSide: CGFloat = 26
-    /// 字形大小（SF Symbol pointSize）。AM/Spotify 那颗 ≈14。
-    static let repeatGlyphSize: CGFloat = 14
+    /// 循环徽标：面积（只为触摸）。
+    ///
+    /// ★ 2026-10-24（用户拿 MeloX 播放页对照：「我感觉应该是放得下的吧」）：放得下 —— 关键是
+    ///   工具行三颗已经整体下移到 845（`NowPlayingIOS27.footerRowYOffset`），音量行下沿是 813，
+    ///   队列字形墨迹从 836 起 ⇒ 813…836 这 23pt 正好放一颗 24pt 的徽标（中心 825）。
+    static let repeatPillSide: CGFloat = 24
+    /// 徽标中心相对**队列字形中心**的偏移（AM 参考图：右 ≈13、上 ≈20）。
+    static let repeatPillOffsetX: CGFloat = 13
+    static let repeatPillOffsetY: CGFloat = -20
+    /// 字形大小（SF Symbol pointSize）。AM 那颗 ≈12。
+    static let repeatGlyphSize: CGFloat = 12
     /// 底色：**透明**。
     /// 留这个常量是为了不让 `mountRepeatPill` 里多一条"为什么没有底色"的谜。
     static let repeatPillFill = UIColor.clear
@@ -273,19 +280,21 @@ extension NowPlayingIOS27 {
 
     @discardableResult
     private static func mountRepeatPill(in page: UIView, forwardingTo repeatKey: UIView) -> Bool {
-        // 落点：**原生循环键自己的中心**（Spotify 传输行的最右端）。
+        // 落点：**队列字形的右上角**（AM 参考图 / MeloX 都是这个关系：小徽标压在队列右肩）。
         //
-        // ⚠️ 2026-10-24 改口径（用户：「点右下角那颗，还是 Spotify 原生弹窗，而且互相遮挡」）：
-        //   原来按 AM 参考图把它当"队列右上角的徽标"（+13/−18）。真机照片 2 + 日志证明那个
-        //   位置根本放不下：`[iOS27] frames` 里传输行底 = 781、工具行顶（share.minY）= 789
-        //   ⇒ 两行之间只剩 **8pt**，而音量行本身高 28pt（`gapBelowAnchor = 4` ⇒ 785…813），
-        //   于是徽标必然压在音量滑杆和队列字形上。要让 AM 那个位置成立，得把工具行整体
-        //   下移约 30pt —— 那是搬原生行，另算一笔账。这里先回到"传输行右端"，
-        //   就是 Spotify 自己那颗循环键的位置，只是字形换成我们的。
-        let anchor = repeatKey.convert(repeatKey.bounds, to: page)
-        guard anchor.width > 1, anchor.height > 1 else { return false }
+        // ⚠️ 2026-10-24 的两轮反复，结论记在这里：
+        //   · 第一版按 AM 量了 +13/−18，但当时工具行还停在**原生中线 811**，而它上面挤着
+        //     传输行底 781 + 音量行 785…813 ⇒ 徽标必然压到滑杆和队列字形（用户：「互相遮挡」）；
+        //   · 于是先退到"传输行右端"（能点、不挤，但不是 AM 的样子）；
+        //   · 用户拿 MeloX 的播放页对照后确认**放得下** ⇒ 正解是把**我们画的**工具行整体
+        //     下移 34pt（`NowPlayingIOS27.footerRowYOffset`，原生行不动），腾出 813…836 这一段。
+        //   现在徽标 24pt、中心 = 队列中心 +（13, −20）⇒ 813…837：上不碰音量行、下不碰字形墨迹。
+        guard let anchor = queueAnchorRect(in: page) else { return false }
         let side = repeatPillSide
-        let centre = CGPoint(x: anchor.midX, y: anchor.midY)
+        let centre = CGPoint(
+            x: anchor.midX + repeatPillOffsetX,
+            y: anchor.midY + repeatPillOffsetY
+        )
         // 夹在页面里：贴边的机型上"右 8"会出屏。
         let origin = CGPoint(
             x: min(max(centre.x - side / 2, 4), page.bounds.width - side - 4),
@@ -351,6 +360,30 @@ extension NowPlayingIOS27 {
         if relay.frame != page.bounds { relay.frame = page.bounds }
         if page.subviews.last !== relay { page.bringSubviewToFront(relay) }
         return changed
+    }
+
+    /// 循环徽标的锚：**我们画的那颗队列字形**（工具行整体下移之后它才在 845 那一档）；
+    /// 还没画出来（第一拍）就退到原生队列那颗、再退到分享那颗。
+    private static func queueAnchorRect(in page: UIView) -> CGRect? {
+        let glyphIdentifier = footerGlyphIdentifierPrefix + "queue"
+        if let glyph = footerGlyphs.allObjects.first(where: {
+            $0.accessibilityIdentifier == glyphIdentifier
+        }) {
+            let rect = NowPlayingLyricsPlate.untransformed(glyph, in: page)
+            if rect.width > 8, rect.height > 8, rect.midY > 0, rect.midY < page.bounds.height {
+                return rect
+            }
+        }
+        for identifier in [queueButtonIdentifier, NowPlayingLyricsPlate.shareButtonIdentifier] {
+            guard let view = NowPlayingLyricsPlate.findByIdentifier(identifier, in: page) else {
+                continue
+            }
+            let rect = NowPlayingLyricsPlate.untransformed(view, in: page)
+            if rect.width > 8, rect.height > 8, rect.midY > 0, rect.midY < page.bounds.height {
+                return rect
+            }
+        }
+        return nil
     }
 
     /// 循环开着就把字形染绿。只用来决定颜色 —— 判别式见下面的注释。

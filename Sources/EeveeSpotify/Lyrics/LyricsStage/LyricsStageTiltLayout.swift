@@ -60,12 +60,11 @@ struct LyricsStageTiltLayout: View {
                 // 旧句：只在上句结束后 0.30s 内出现，向上飘走。
                 if let previous, let current, previous.id != current.id {
                     let previousIndex = (focus ?? 1) - 1
-                    let exit = Self.exitProgress(
-                        previous: previous,
-                        previousIndex: previousIndex,
-                        lines: lines,
-                        at: playbackTime
-                    )
+                    // ★★ 旧句的“推出”从**新句开始的那一刻**算起，而不是旧句自己
+                    //   `lineEnd`（精确时长的行可能比下一句早结束，按 lineEnd 算会在
+                    //   下一句出现前就淡完，下一句一来直接“啪”地消失）。新句开始时
+                    //   exit = 0，0.30s 推完。
+                    let exit = Self.exitProgress(next: current, at: playbackTime)
                     if exit >= 0, exit < 1 {
                         TiltLineBlock(
                             line: previous,
@@ -121,15 +120,12 @@ struct LyricsStageTiltLayout: View {
         return fallback
     }
 
-    /// 这句唱完之后还有多少（0 = 刚结束，1 = 已经退出）。
-    private static func exitProgress(
-        previous: LyricLine,
-        previousIndex: Int,
-        lines: [LyricLine],
-        at time: TimeInterval
-    ) -> Double {
-        let end = lineEnd(previous, in: lines, index: previousIndex)
-        return (time - end) / exitDuration
+    /// 旧句的退出进度：**下一句开始时**为 0，0.30s 后为 1。
+    ///
+    /// 不能用旧句自己的 `lineEnd`：精确时长的行会比下一句早结束，按 lineEnd 算的话
+    /// 下一句出现时 exit 已经 >1，旧句直接消失（用户要的“推出”就没了）。
+    private static func exitProgress(next: LyricLine, at time: TimeInterval) -> Double {
+        (time - next.time) / exitDuration
     }
 
     /// 整句进入进度（0 = 还没开始，1 = 完全就位）。
@@ -220,10 +216,14 @@ private struct TiltLineBlock: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .opacity(outgoing ? 1 - exit : enter)
-        .offset(y: CGFloat(outgoing ? -24 * exit : (1 - enter) * 28))
-        .scaleEffect(CGFloat(outgoing ? 1 - 0.02 * exit : 0.97 + 0.03 * enter))
+        // 旧句向上“推出去”的幅度要够大，否则两句大字会叠在屏幕中央（0.30s 里
+        // 两套字互相糊住）。Folia 的段 exit 只有 -16pt，但它是逐段进出、且旧段
+        // 会从布局里移除；我们整块保留，所以用 -140pt 把旧句推出画面中心。
+        .offset(y: CGFloat(outgoing ? -140 * exit : (1 - enter) * 10))
+        .scaleEffect(CGFloat(outgoing ? 1 - 0.06 * exit : 0.98 + 0.02 * enter))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(line.text))
+        .accessibilityHidden(outgoing)
     }
 }
 
@@ -242,6 +242,10 @@ private struct TiltSegmentRow: View {
         let size = TiltLayout.fontSize(for: segment, availableWidth: availableWidth)
         let tracking = TiltLayout.tracking(for: segment)
         let spacing = size * tracking
+        // ★ 每一行（段）自己也有“推进”感：Folia 的段容器 initial
+        //   `{ opacity: 0, y: 24, scale: 0.92 }` → animate `{ opacity: 1, y: 0, scale: 1 }`。
+        //   段内每个字再按 0.04s 错开浮入（见 `revealProgress`），两者叠加才是 Folia 的落位。
+        let row = outgoing ? 1 : min(max((playbackTime - (segment.startTime - 0.15)) / 0.45, 0), 1)
 
         HStack(alignment: .center, spacing: spacing) {
             ForEach(segment.chars.indices, id: \.self) { index in
@@ -250,7 +254,9 @@ private struct TiltSegmentRow: View {
         }
         .fixedSize()
         .frame(maxWidth: .infinity, alignment: .center)
-        .offset(x: segment.horizontalOffset)
+        .opacity(row)
+        .offset(x: segment.horizontalOffset, y: CGFloat((1 - row) * 24))
+        .scaleEffect(CGFloat(0.92 + 0.08 * row))
     }
 
     @ViewBuilder
@@ -457,7 +463,9 @@ private enum TiltLayout {
                 }
             }
             let expected = characters.filter { !$0.isWhitespace }
-            if timed.map({ $0.character }) == expected {
+            // 只比**数量**：大小写/标点归一化可能让 Character 不完全相等，但顺序和数量
+            // 一致时按顺序映射仍然是对的（比整句均分准得多）。
+            if timed.count == expected.count {
                 var result: [TiltChar] = []
                 result.reserveCapacity(characters.count)
                 var cursor = 0
@@ -535,7 +543,9 @@ private enum TiltLayout {
             + tracking(for: segment) * CGFloat(max(segment.chars.count - 1, 0))
         guard widthUnits > 0 else { return base }
         let fitted = (availableWidth - 10) / widthUnits * 0.96
-        return max(20, min(base, fitted))
+        // 下限 14（原来 20）：20pt 时 25 字 CJK 就已经 500pt 宽，长句会直接冲出屏幕；
+        // 14pt 能兜住 ~25 字/段的一行。正常歌词几乎不会落到这一档。
+        return max(14, min(base, fitted))
     }
 
     /// 字距（em）：tilt 段宽一些，normal 段略宽（Folia 的 0.08 / 0.15em 的近似）。

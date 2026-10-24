@@ -52,9 +52,29 @@ func currentLyricsPlateCreditText() -> String {
 /// 单独抽出来是因为它现在有两个去处：完整署名（`lyricsCreditText`）与底沿那条
 /// （`currentLyricsPlateCreditText`）—— 两处各拼一份的话，将来条款相关的措辞只会改一处。
 private func lyricsRoleText() -> String {
-    currentLyricsContributors
-        .map { $0.role.label + " " + $0.name }
-        .joined(separator: " · ")
+    combinedLyricsContributorText()
+}
+
+/// 把贡献者按**人**合并后再拼：同一个人既是上传者又是翻译者时，不要写成
+/// `上传者 X · 翻译者 X`（网易云的 `lyricUser` / `transUser` 经常是同一位）。
+///
+/// 输出形如 `上传者/翻译者 gurantouw`（不同的人仍是 `上传者 A · 制作者 B`）。
+func combinedLyricsContributorText(
+    _ contributors: [LyricsContributor] = currentLyricsContributors
+) -> String {
+    guard !contributors.isEmpty else { return "" }
+    var order: [String] = []
+    var rolesByName: [String: [String]] = [:]
+    for contributor in contributors {
+        let name = contributor.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { continue }
+        if rolesByName[name] == nil { order.append(name) }
+        rolesByName[name, default: []].append(contributor.role.label)
+    }
+    return order.compactMap { name in
+        guard let roles = rolesByName[name], !roles.isEmpty else { return nil }
+        return roles.joined(separator: "/") + " " + name
+    }.joined(separator: " · ")
 }
 
 /// 上面两个入口共用的拼接。

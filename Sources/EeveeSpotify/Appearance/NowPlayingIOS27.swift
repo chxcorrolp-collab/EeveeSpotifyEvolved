@@ -268,7 +268,20 @@ enum NowPlayingIOS27 {
     /// 在容器还透明的时候就已经画完了。
     static var lyricsModeRevealed = false
     /// 开歌词时"封面先动、歌词后到"的延迟。
-    static let lyricsRevealDelay: TimeInterval = 0.20
+    ///
+    /// ★★ 2026-10-24（用户图片 3/4：歌词出现的动画里有"残留"和黑边）：
+    ///   0.20 → **0.36** —— 原来歌词在封面还没缩完（0.36s）时就淡进来，
+    ///   于是那半秒里是"一张大封面 + 一块歌词卡片"叠着（截图里的残留就是它）。
+    ///   等封面落到 64pt 缩略图之后再挂歌词/署名。
+    static let lyricsRevealDelay: TimeInterval = 0.36
+    /// 打开时"该露面"被推迟了，等 `layout` 量到标题已经在缩略图旁边再亮（见 `setLyricsMode`）。
+    static var lyricsRevealPending = false
+    /// 歌词容器底部为那两行「来源 / 提供者」让出的高度。
+    ///
+    /// ★★ 2026-10-24（用户图片 1：`NetEase` 和译文叠在一起）：署名原来被摆在
+    ///   容器**里面**的下沿（`stage.maxY − 42`），而当前行一旦滚到底、译文就会
+    ///   落到同一块。现在容器缩短这么多，署名落在容器**下面**、进度条上面。
+    static let lyricsCreditReserve: CGFloat = 50
 
     /// 缩略图边长 / 圆角 / 左边距 / 离安全区顶的距离。
     static let lyricsThumbSide: CGFloat = 64
@@ -366,6 +379,7 @@ enum NowPlayingIOS27 {
             lyricsDissolveView?.removeFromSuperview()
             lyricsDissolveView = nil
             lyricsModeRevealed = false
+            lyricsRevealPending = false
             // ★ 2026-10-24（用户：「从歌词页面到全溶封面的过渡不是很好」）：
             //   **不要在第一帧就把歌词抽走** —— 它和封面长回去同一段 0.30s 淡出，
             //   淡完再拆容器。快速重开时 `generation` 对不上，这次拆作废（歌词接着淡入）。
@@ -380,10 +394,23 @@ enum NowPlayingIOS27 {
             // 宿主视图从挂上到真正画完内容还有一两帧；这段时间容器保持透明（见
             // `NowPlayingLyricsPlate.lyricsOnlyFadeInDelay`），别让那一帧深色跟着淡入。
             NowPlayingLyricsPlate.lyricsOnlyFadeInDelay = 0.10
-            // 封面先缩、歌词后到：延迟这一小段再挂容器与署名。
+            // 封面先缩、歌词后到：延迟这一段（≥ 封面的 0.36s 动画）再挂容器与署名。
             lyricsModeRevealed = false
+            lyricsRevealPending = false
             DispatchQueue.main.asyncAfter(deadline: .now() + lyricsRevealDelay) {
                 guard generation == lyricsModeGeneration, lyricsModeActive else { return }
+                // ★ 先跑一拍 `layout`：它负责把封面缩完、把标题挪到缩略图旁边。
+                _ = layout(in: page)
+                // ★★ 2026-10-24（用户图片 1：「歌曲名字/艺人名字不会动」）：
+                //   标题还没量到 / 还留在原生 y（换歌转场、页还没建完）时**先不亮歌词**，
+                //   否则容器会把原位标题盖住，看起来就是"名字不会动"。下一拍再试。
+                guard lyricsSceneReady(in: page) else {
+                    lyricsRevealPending = true
+                    writeDebugLog(
+                        "[\(logTag)] lyrics reveal deferred — the cover/title is not ready yet"
+                    )
+                    return
+                }
                 lyricsModeRevealed = true
                 UIView.animate(
                     withDuration: 0.26,
@@ -552,6 +579,14 @@ enum NowPlayingIOS27 {
         //    前提（标题行就长在这个 stack 里）。
         if placeBottomStack(in: page) { changed = true }
         if placeTitleRow(in: page) { changed = true }
+        // ★★ 2026-10-24（图片 1）：`setLyricsMode` 那一拍标题还没量到（换歌转场/页面重建）
+        //   ⇒ 它把"亮歌词"挂起；这里每一拍重试，标题真到缩略图旁边了才铺歌词。
+        if lyricsModeActive, !lyricsModeRevealed, lyricsRevealPending,
+           lyricsSceneReady(in: page) {
+            lyricsRevealPending = false
+            lyricsModeRevealed = true
+            changed = true
+        }
         if placeNavChrome(in: page) { changed = true }
         // 待办 T1：进度条（4pt 轨 + 藏圆钮 + 等宽时间），见 `NowPlayingIOS27+Progress.swift`。
         // 它只换 UISlider 的三张图与两颗标签的字体，不碰几何、不碰手势。
@@ -625,10 +660,35 @@ enum NowPlayingIOS27 {
         )
     }
 
+    /// 页内歌词**内容容器**的框：完整 stage 再扣掉底部署名的 50pt。
+    ///
+    /// ★★ 2026-10-24（用户图片 1：`NetEase` 与译文叠在一起）：署名在 stage 的下沿，
+    ///   而歌词滚到底时最后一行/译文也会落到那里。容器缩短后，署名落在容器**下面**、
+    ///   进度条上面，两者不再共用一块区域（`placeLyricsCredit` 仍按完整 stage 定位）。
+    private static func lyricsContainerFrame(in page: UIView) -> CGRect? {
+        guard var frame = lyricsStageFrame(in: page) else { return nil }
+        guard frame.height - Self.lyricsCreditReserve > 120 else { return frame }
+        frame.size.height -= Self.lyricsCreditReserve
+        return frame
+    }
+
     /// 页内歌词的容器。只铺歌词（`mountLyricsOnly`），不碰控件条 / 底部按钮。
     @discardableResult
     private static func updateLyricsStage(in page: UIView) -> Bool {
-        guard let frame = lyricsStageFrame(in: page) else {
+        // ★★ 2026-10-24（图片 1）：标题还没挪到缩略图旁边时**不要铺** —— 容器会盖住
+        //   还留在原生 y=550 的歌名/艺人。把"已露面"退回去、下一拍标题到位后重新淡入；
+        //   署名也跟着 alpha 0，不会单独飘着。
+        guard titleRowPlaced(in: page) else {
+            if lyricsModeRevealed {
+                lyricsModeRevealed = false
+                lyricsRevealPending = true
+            }
+            if NowPlayingLyricsPlate.lastContainer != nil {
+                NowPlayingLyricsPlate.unmountLyricsOnly()
+            }
+            return false
+        }
+        guard let frame = lyricsContainerFrame(in: page) else {
             NowPlayingLyricsPlate.unmountLyricsOnly()
             return false
         }
@@ -862,6 +922,11 @@ enum NowPlayingIOS27 {
             }
             if imageView.layer.mask != nil {
                 imageView.layer.mask = nil
+                // ★★ 2026-10-24（用户图片 2：收起歌词后封面下沿是**硬切**、没有淡进底子）：
+                //   这里只摘了 `layer.mask`，`artworkMask` 还指着那块 gradient ⇒
+                //   收起时 `applyArtworkFadeMask` 以为"已经有 mask"，只改 frame、**不重新挂**，
+                //   于是封面下沿永远硬切。现在把账一起清掉。
+                artworkMask = nil
                 changed = true
             }
         } else {
@@ -943,7 +1008,8 @@ enum NowPlayingIOS27 {
             view.frame = wanted
             changed = true
         }
-        if view.layer.mask == nil, applyArtworkFadeMask(to: view) { changed = true }
+        // 与 `updateArtwork` 同一条：mask 可能在歌词模式里被摘掉，必须按身份重新挂。
+        if applyArtworkFadeMask(to: view) { changed = true }
         return changed
     }
 
@@ -1024,10 +1090,16 @@ enum NowPlayingIOS27 {
             fresh.startPoint = CGPoint(x: 0.5, y: 0)
             fresh.endPoint = CGPoint(x: 0.5, y: 1)
             artworkMask = fresh
-            imageView.layer.mask = fresh
             mask = fresh
         }
         var changed = false
+        // ★★ 2026-10-24（用户图片 2）：mask 可能**已经被摘掉**（歌词模式的缩略图那一向
+        //   `imageView.layer.mask = nil`），而 `artworkMask` 还是旧的。以前这里只在
+        //   "新建"那一支挂 mask ⇒ 收起歌词后永远不重新挂、封面下沿硬切。每次都比一下身份。
+        if imageView.layer.mask !== mask {
+            imageView.layer.mask = mask
+            changed = true
+        }
         if mask.frame != imageView.bounds {
             mask.frame = imageView.bounds
             changed = true
@@ -1415,10 +1487,13 @@ enum NowPlayingIOS27 {
         let dx: CGFloat
         let dy: CGFloat
         if lyricsModeActive {
-            // 页内歌词：标题/艺人贴到缩略图右边、与缩略图顶对齐（图 2 的关系）。
+            // 页内歌词：标题/艺人贴到缩略图右边、与缩略图**竖直居中**（图 2 的关系）。
+            // ★★ 2026-10-24（用户：「封面右边的歌手名字/歌曲名字不太对称」）：
+            //   原来按**顶边**对齐（`thumb.minY`）—— 缩略图 64pt、标题行 46pt，
+            //   文字块会偏上，右边留白比下边多。改成按中线对齐。
             let thumb = lyricsThumbFrame(in: page)
             dx = (thumb.maxX + 12 - natural.minX).rounded()
-            dy = (thumb.minY - natural.minY).rounded()
+            dy = (thumb.midY - natural.midY).rounded()
         } else {
             dx = (titleLeadInset - natural.minX).rounded()
             dy = 0
@@ -1597,6 +1672,7 @@ enum NowPlayingIOS27 {
         lyricsCreditView?.removeFromSuperview()
         lyricsCreditView = nil
         lyricsModeRevealed = false
+        lyricsRevealPending = false
         if lyricsModeActive {
             lyricsModeActive = false
             NowPlayingLyricsPlate.unmountLyricsOnly()
@@ -1644,6 +1720,7 @@ enum NowPlayingIOS27 {
         lyricsCreditView?.removeFromSuperview()
         lyricsCreditView = nil
         lyricsModeRevealed = false
+        lyricsRevealPending = false
         metadataArtworkTrackId = ""
         metadataArtworkImage = nil
         metadataArtworkLoading = false
@@ -1751,6 +1828,40 @@ enum NowPlayingIOS27 {
         )
         guard let label else { return nil }
         return label.superview?.superview
+    }
+
+    /// 标题行是不是**已经**被我们挪到缩略图旁边（而且还在窗口里）。
+    ///
+    /// ★★ 2026-10-24（用户图片 1：「按下歌词后歌曲名字/艺人名字不会动」）：
+    ///   换歌 / 页面重建的头一两拍 `titleRowView` 可能还找不到；标题留在原生 y=550，
+    ///   而歌词容器正好盖住 174…569 ⇒ 名字被整块吃掉。用它当"能不能亮歌词"的闸门：
+    ///   标题真到了缩略图中线附近再挂容器，下一拍再试。
+    private static func titleRowPlaced(in page: UIView) -> Bool {
+        guard let row = titleRow, row.window != nil else { return false }
+        let rect = row.convert(row.bounds, to: page)
+        guard rect.width > 1, rect.height > 1 else { return false }
+        let thumb = lyricsThumbFrame(in: page)
+        // 中线在缩略图上下各 16pt 以内，且**没有**还停在原生 y（两者差 300+pt 一眼能分开）。
+        return abs(rect.midY - thumb.midY) < 16
+    }
+
+    /// 我们那张封面是不是**真的落在当前页面上**。
+    ///
+    /// ★★ 2026-10-24（用户图片 1：按下歌词后"溶底封面不会动"）：换歌时封面可能还挂在
+    ///   上一格 cell 上（日志 19：`eevee-ios27-artwork@-386,94`，宿主偏了一整页），
+    ///   屏幕上只剩模糊底。这时开歌词只会得到"一块歌词卡片 + 没有封面"的半成品。
+    ///   等封面回到页面上再亮歌词（下一拍重试）。
+    private static func artworkOnPage(in page: UIView) -> Bool {
+        guard let view = artworkView, view.window != nil, view.superview != nil else { return false }
+        let rect = view.convert(view.bounds, to: page)
+        guard rect.width > 8, rect.height > 8 else { return false }
+        return rect.midX > 0 && rect.midX < page.bounds.width
+            && rect.midY > 0 && rect.midY < page.bounds.height
+    }
+
+    /// 页内歌词"可以亮出来"的完整条件：标题已经在缩略图旁边 + 封面真的在当前页上。
+    private static func lyricsSceneReady(in page: UIView) -> Bool {
+        titleRowPlaced(in: page) && artworkOnPage(in: page)
     }
 
     /// 工具行：分享键在 `npv.bottomStackView` 里的那一层祖先。

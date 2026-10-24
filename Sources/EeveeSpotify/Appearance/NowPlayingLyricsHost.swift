@@ -116,6 +116,22 @@ final class NowPlayingLyricsHost {
             hosting.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
 
+        // ★★ 2026-10-24（用户图片 4：歌词区是一块**比底子暗一档的矩形** + 上下"黑边"）：
+        //   SwiftUI 的 `HostingScrollView` 在 iOS 26 上带系统 `ScrollEdgeEffect`，
+        //   它会在滚动区上盖一层暗色/模糊；我们的宿主又是透明的 ⇒ 看起来就是一块
+        //   残留的卡片。这里把宿主的 scroll background 清掉、把上下 edge effect 藏掉
+        //   （只影响这一层，不碰 Spotify 自己的滚动视图）。
+        clearScrollChrome(in: hosting.view)
+        DispatchQueue.main.async { [weak hosting] in
+            guard let hosting else { return }
+            self.clearScrollChrome(in: hosting.view)
+            // 再补一拍：SwiftUI 在第一次布局之后才把 `HostingScrollView` 建出来。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak hosting] in
+                guard let hosting else { return }
+                self.clearScrollChrome(in: hosting.view)
+            }
+        }
+
         hostingController?.view.removeFromSuperview()
         hostingController = hosting
         renderedVersion = version
@@ -132,7 +148,51 @@ final class NowPlayingLyricsHost {
         renderedTrackId = trackId
         renderedStatic = isStatic
         renderedRomanization = Self.romanizationFingerprint()
+        // SwiftUI 偶尔会重建内部滚动视图 ⇒ 每一程都再清一次（幂等）。
+        clearScrollChrome(in: hosting.view)
     }
+
+    // MARK: - 宿主的滚动视图（iOS 26 的 ScrollEdgeEffect）
+
+    /// 把宿主里那个 SwiftUI `HostingScrollView` 的**底色**与**系统 scroll edge effect** 清掉。
+    ///
+    /// 为什么：这一层是"只有歌词"的透明层，宿主/容器都是 clear；但 iOS 26 的
+    /// `UIScrollView` 自带 `topEdgeEffect` / `bottomEdgeEffect`，会在滚动区上画一层
+    /// 暗色 + 模糊 ⇒ 屏幕上就是一块**比底子暗一档的矩形**（用户图片 4 的"残留"）
+    /// 和上下两条"黑边"（图片 3/4 的截图）。只碰这一棵子树，不 hook 全局 UIScrollView。
+    private func clearScrollChrome(in root: UIView) {
+        var queue: [UIView] = [root]
+        var visited = 0
+        var scrollCount = 0
+        while !queue.isEmpty, visited < 400 {
+            let view = queue.removeFirst()
+            visited += 1
+            // 兜底：宿主里如果混进了系统的边缘模糊视图 / 歌词背景层，也一并藏掉
+            // （这一层只该有歌词文字；背景由播放器自己的 field 负责）。
+            let className = NSStringFromClass(type(of: view))
+            if className.contains("ScrollEdgeEffect") || className.contains("LyricsBackdrop") {
+                if !view.isHidden { view.isHidden = true }
+            }
+            if let scroll = view as? UIScrollView {
+                scrollCount += 1
+                if scroll.backgroundColor != UIColor.clear { scroll.backgroundColor = .clear }
+                if scroll.isOpaque { scroll.isOpaque = false }
+                if #available(iOS 26.0, *) {
+                    if !scroll.topEdgeEffect.isHidden { scroll.topEdgeEffect.isHidden = true }
+                    if !scroll.bottomEdgeEffect.isHidden { scroll.bottomEdgeEffect.isHidden = true }
+                }
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        guard !Self.didLogScrollChrome else { return }
+        Self.didLogScrollChrome = true
+        writeDebugLog(
+            "[\(NowPlayingLyricsPlate.logTag)] lyrics host — cleared \(scrollCount) scroll view(s)"
+                + " (background clear / isOpaque off / scroll edge effects hidden)"
+        )
+    }
+
+    private static var didLogScrollChrome = false
 
     func tick(seconds: TimeInterval?) {
         guard isAttached else { return }

@@ -194,6 +194,7 @@ extension NowPlayingLyricsPlate {
         // 每次挂都重申一次，防止上一程留下的状态。
         container.backgroundColor = .clear
         container.layer.backgroundColor = UIColor.clear.cgColor
+        container.isOpaque = false
         if lyricsOnlyNeedsFadeIn { container.alpha = 0 }
         applyEdgeFade(to: container)
         applyNoticeLabel(notice, in: container)

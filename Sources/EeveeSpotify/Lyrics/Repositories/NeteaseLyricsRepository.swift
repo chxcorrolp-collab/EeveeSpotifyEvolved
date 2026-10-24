@@ -526,8 +526,16 @@ class NeteaseLyricsRepository: LyricsRepository {
             lrc: lrcBlock?["lyric"] as? String,
             tlyric: tlyricBlock?["lyric"] as? String,
             romalrc: (json["romalrc"] as? [String: Any])?["lyric"] as? String,
-            lyricUser: Self.userNickname(lrcBlock?["lyricUser"]),
-            transUser: Self.userNickname(tlyricBlock?["transUser"])
+            // ★★ 2026-10-24（用户：「网易云感觉不展示歌词提供者/翻译提供者」）：
+            //   真机回包（`/weapi/song/lyric`，id 3366973885）里 `lyricUser` / `transUser`
+            //   是 **lrc / tlyric 的同级字段**，不在块里面：
+            //     top keys = [sgc, sfy, qfy, transUser, lyricUser, lrc, klyric, tlyric, code]
+            //   上一版读的是 `lrc.lyricUser` / `tlyric.transUser` ⇒ 永远 nil（署名只剩
+            //   "NetEase"）。现在先读顶层，再退回块内（别的版本/代理可能嵌一层）。
+            lyricUser: Self.userNickname(json["lyricUser"])
+                ?? Self.userNickname(lrcBlock?["lyricUser"]),
+            transUser: Self.userNickname(json["transUser"])
+                ?? Self.userNickname(tlyricBlock?["transUser"])
         )
     }
 
@@ -1613,6 +1621,11 @@ class NeteaseLyricsRepository: LyricsRepository {
         // ★ 2026-10-24：把网易云回包里的"贡献歌词 / 贡献翻译"带给显示层
         //（页内歌词署名第二行、自绘歌词页页脚）。
         dto.providerContributors = contributors(from: rawLyrics)
+        writeDebugLog(
+            "[NetEase] credits — lyricUser=\(rawLyrics.lyricUser ?? "nil"),"
+                + " transUser=\(rawLyrics.transUser ?? "nil")"
+                + " → \(dto.providerContributors.count) contributor(s)"
+        )
 
         writeDebugLog("[NetEase] Synced lyrics — \(lines.count) line(s)")
         // 缓存**原始** dto；时间轴偏移只在返回时施加（见上面 cache hit 那条注释）。

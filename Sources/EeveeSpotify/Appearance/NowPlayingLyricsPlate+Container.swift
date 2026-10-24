@@ -17,6 +17,7 @@ extension NowPlayingLyricsPlate {
             if existing.frame != frame { existing.frame = frame }
             // 歌词要能点（点行跳转），但**容器之外不吃触摸**；容器本身只占歌词区。
             existing.isUserInteractionEnabled = true
+            existing.isOpaque = false
             applyContainerPassThrough(to: existing, frame: frame)
             page.bringSubviewToFront(existing)
             lastContainer = existing
@@ -25,6 +26,9 @@ extension NowPlayingLyricsPlate {
 
         let container = NowPlayingLyricsContainerView(frame: frame)
         container.backgroundColor = .clear
+        // ★★ 2026-10-24：容器是透明层，`isOpaque` 必须显式关掉（默认 true 在 clear 底色上
+        //   可能合成出一层暗底 —— 图片 4 那块"残留矩形"的候选之一）。
+        container.isOpaque = false
         container.clipsToBounds = true
         container.accessibilityIdentifier = "eevee-npv-lyrics-container"
         container.isAccessibilityElement = false

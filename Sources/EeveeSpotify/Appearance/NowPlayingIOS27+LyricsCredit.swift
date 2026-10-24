@@ -87,9 +87,11 @@ enum NowPlayingLyricsCreditInfo {
 
     /// 第二行：有 contributors 就按角色拼；没有就退回 `providerCredit` 里 provider 之后的那段。
     static var rolesText: String {
-        let roles = currentLyricsContributors
-            .map { $0.role.label + " " + $0.name }
-            .joined(separator: " · ")
+        // ★★ 2026-10-24（用户：「网易云感觉不展示歌词提供者/翻译提供者」）：
+        //   同一人既是上传者又是翻译者时合并成 `上传者/翻译者 X`（网易云常见），
+        //   不同的人仍是 `上传者 A · 制作者 B`。拼接规则只留一份 —— 与听歌页底沿、
+        //   自绘歌词页页脚共用 `combinedLyricsContributorText()`。
+        let roles = combinedLyricsContributorText()
         if !roles.isEmpty { return roles }
 
         // AMLL 这一类没有 `providerContributors`：仓库把作者拼进 `providerCredit`

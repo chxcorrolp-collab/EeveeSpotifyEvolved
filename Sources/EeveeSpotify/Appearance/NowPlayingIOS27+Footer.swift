@@ -209,10 +209,14 @@ extension NowPlayingIOS27 {
         }
 
         var changed = false
-        // ★ 2026-10-24（用户：「点击 雷达 按钮没反应」）：Connect **不再藏字形**，
-        // 也不再走 `sendActions` 转发（那颗 EncoreButton 收到 sendActions 什么都不做）。
-        // 它由 `mountFooterGlyphs` 搬到中间那颗字形的位置，真触摸直接落到原生键上。
-        for button in [share, queue].compactMap({ $0 }) {
+        // ★★ 2026-10-24（用户：「跨设备连接 这个按钮会抽搐」）：
+        //   上一版把原生 Connect 用 `transform` **搬**到中间（207）—— 它住在
+        //   `UIStackView` 里，栈每次布局写 `frame` 都会把 transform 的位移吃掉/叠加
+        //   （日志 19 里它的 frame 从 171,68 一路漂到 -55,-55 ⇒ 抽搐）。
+        //   现在**不搬**：原生键留在原地（x≈38），只把它的字形藏掉；中间那颗自绘
+        //   airplay 字形的可点区交给替身的 `zones`（真触摸转发到原生键中心）。
+        //   真按钮始终在 38，不需要跨半屏 hitTest。
+        for button in [connect, share, queue].compactMap({ $0 }) {
             // ★ 2026-10-24（照片 1）：这里**只传按钮自己**。以前传的是
             //   `nearestControl(button)`（会向上爬 6 跳），一旦爬到 footer 以上的容器，
             //   就会把 bottomStack 里标题/进度/传输/收藏的叶子一起按掉 ⇒ 整块控件消失。
@@ -322,13 +326,11 @@ extension NowPlayingIOS27 {
             }
             // ★ 2026-10-24：舞台关着 + 找不到原生键 ⇒ **不画**（见 `footerGlyphDisabledAlpha`）。
             //   这一档叫不上“变暗”了，就是真的没有歌词入口。
-            //   Connect 那颗：原生键被搬到这个位置、它的字形直接露出（见下面的
-            //   `moveConnectHolder`）⇒ 我们自画的那颗要透明，否则两个图标叠在一起。
+            //   ★★ Connect 那颗现在**由我们画**（原生键留在 38、字形被藏）⇒ 这一颗
+            //   必须是 alpha 1，否则中间就空了（上一版是 0，因为原生字形被搬过来露着）。
             let wantedAlpha: CGFloat
             if name == "lyrics" && !footerLyricsAvailable {
                 wantedAlpha = footerGlyphDisabledAlpha
-            } else if name == "connect" {
-                wantedAlpha = 0
             } else {
                 wantedAlpha = 1
             }
@@ -338,10 +340,10 @@ extension NowPlayingIOS27 {
             }
         }
 
-        // ★ 2026-10-24（用户：「点击 雷达 按钮没反应」）：
-        // 把**原生 Connect 按钮**搬到中间那颗字形的位置（207），不藏它的字形、也不做转发。
-        // 真触摸会落到它身上 —— `sendActions` 对这颗 EncoreButton 是无效的（日志 18）。
-        if moveConnectHolder(connect, to: frames[1], in: page) { changed = true }
+        // ★★ 2026-10-24（用户：「跨设备连接 这个按钮会抽搐」）：
+        //   **不再搬**原生 Connect。它留在 `UIStackView` 的原始槽位（x≈38），
+        //   字形被 `placeFooter` 藏掉；中间那颗是自绘的 airplay 字形，
+        //   触摸由下面的 `zones` 真转发过去（原生键始终在 38，hitTest 不跨屏）。
 
         // 替身：三个互不相交的 zone，各指向一颗原生键。
         let relay: NowPlayingIOS27RemoteRelayView
@@ -431,8 +433,21 @@ extension NowPlayingIOS27 {
             // iOS 26 以下没有我们自己的歌词页：退回 Spotify 那颗键。
             actionZones.append((tapRect(frames[0]), action))
         }
-        // ⚠️ Connect **不在这里加替身**：它已经被搬到 frames[1]，真触摸直接落在原生键上。
-        //    替身如果还盖一块，就等于把真按钮又挡住了（而且 sendActions 对它无效）。
+        // ★★ 2026-10-24（用户：「不是有自己画按键、功能交给被隐藏的原生按键吗，
+        //   Connect 这个不行吗」）：
+        //   **模式是对的，但 Connect 这颗不能用 `zones` 的"真触摸转发"** —— 它在
+        //   x≈38，我们画的在 207；`zones` 交给原生键的 `UITouch` 仍带着**手指的真实
+        //   坐标**，换算到原生键里落在 bounds 之外 ⇒ `.touchUpOutside`，动作不触发
+        //   （`NowPlayingIOS27RemoteRelayView` 头注里写明的那条）。
+        //   `sendActions` 对它也无效（日志 18：连刷 8 秒，面板没出来）。
+        //   ⇒ 这里走**动作级**的第三条路：`accessibilityActivate()` —— 它不依赖手指
+        //   坐标，走控件自己的"我该干什么"。`activateConnect` 里会依次试
+        //   ViewHolder / 子树里的每一个 view / UIControl，最后才退回 sendActions。
+        if let connect {
+            actionZones.append((tapRect(frames[1]), {
+                NowPlayingIOS27.activateConnect(connect)
+            }))
+        }
         addZone(frames[2], target: queue, label: "queue")
         relay.zones = zones
         relay.actionZones = actionZones
@@ -540,12 +555,56 @@ extension NowPlayingIOS27 {
             .withRenderingMode(.alwaysTemplate)
     }
 
+    /// 点我们画的中间那颗 airplay 字形 = 激活**原生 Connect**（它还在 38，字形被藏）。
+    ///
+    /// 为什么不是 `zones` / `sendActions`：见 `mountFooterGlyphs` 里那段 —— 替身的
+    /// `zones` 把 `UITouch` 的真实坐标交给原生键，跨 170pt 必然 `.touchUpOutside`；
+    /// 而日志 18 里 `sendActions` 到 EncoreButton 连刷 8 秒也没打开面板。
+    /// 这里把**动作级**的三条路都试一遍：
+    ///   ① `accessibilityActivate()`（由内到外）—— 不依赖位置，对 SwiftUI/Encore 包装层
+    ///      比 target/action 稳；
+    ///   ② `sendActions(for: .primaryActionTriggered)` / `.touchUpInside` —— 经典
+    ///      target/action 兜底；
+    ///   ③ 都没有接受时只打日志，**不假装成功**；下一招才是把原生键真的摆到 207
+    ///      （重排 stack / 加占位），那会动布局，先留到这一招被真机否掉之后。
+    static func activateConnect(_ holder: UIView) {
+        var all: [UIView] = []
+        var controls: [UIControl] = []
+        var queue: [UIView] = [holder]
+        var visited = 0
+        while !queue.isEmpty, visited < 64 {
+            let view = queue.removeFirst()
+            visited += 1
+            all.append(view)
+            if let control = view as? UIControl { controls.append(control) }
+            queue.append(contentsOf: view.subviews)
+        }
+        // 先内后外：最内层的 EncoreButton / ConnectButtonView 更可能是 accessibility element。
+        for view in all.reversed() {
+            if view.accessibilityActivate() {
+                writeDebugLog(
+                    "[\(logTag)] connect: accessibilityActivate handled the tap"
+                        + " (\(NSStringFromClass(type(of: view))))"
+                )
+                return
+            }
+        }
+        for control in controls {
+            control.sendActions(for: .primaryActionTriggered)
+            control.sendActions(for: .touchUpInside)
+        }
+        writeDebugLog(
+            "[\(logTag)] connect: no action accepted the tap —"
+                + " the native button still needs a real touch"
+        )
+    }
+
     /// 把**原生 Connect 按钮**搬到目标中心（`frames[1]`）。
     ///
-    /// 用 `transform` 平移（与标题行同一条纪律）：StackView 会写 `frame`，但不会重置
-    /// `transform`；每拍按"当前 convert 到的中心 → 目标中心"补差值，所以 Spotify 再排一次
-    /// 布局也能自己跟上。**不藏它的字形**——搬过去露出来的就是原生那颗（雷达）图标，
-    /// 真触摸落在它身上，不再依赖对 EncoreButton 无效的 `sendActions`。
+    /// ⚠️ **2026-10-24 起不再调用**：它在 `UIStackView` 里，栈每次布局写 `frame` 会把
+    /// transform 的位移吃掉/叠加（日志 19：171,68 → 206,103 → -55,-55 ⇒ 抽搐）。
+    /// 保留函数只是给"以后真要把原生键摆到 207"那条路留参考；正式方案见
+    /// `activateConnect` 的 ①②③。
     @discardableResult
     static func moveConnectHolder(_ holder: UIView?, to frame: CGRect, in page: UIView) -> Bool {
         guard let holder else { return false }

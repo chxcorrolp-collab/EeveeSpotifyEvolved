@@ -169,6 +169,7 @@ enum NowPlayingIOS27 {
     static var metadataArtworkTrackId = ""
     static var metadataArtworkImage: UIImage?
     static var metadataArtworkLoading = false
+    static var metadataArtworkAttempts = 0
     static var metadataArtworkCache: [String: UIImage] = [:]
     static var metadataArtworkOrder: [String] = []
     static let metadataArtworkCacheLimit = 8
@@ -710,17 +711,24 @@ enum NowPlayingIOS27 {
     /// `SPTPlayerTrack.metadata()["image_url"]` 是这首曲目的专辑封面，
     /// `LyricsArtworkResolver` 已经把它翻译成 `i.scdn.co` 地址（歌词背景在用同一条链）。
     private static func refreshMetadataArtwork(trackId: String) {
-        guard trackId != metadataArtworkTrackId else { return }
-        metadataArtworkTrackId = trackId
-        metadataArtworkImage = nil
-        metadataArtworkLoading = false
-        guard !trackId.isEmpty else { return }
+        if trackId != metadataArtworkTrackId {
+            metadataArtworkTrackId = trackId
+            metadataArtworkImage = nil
+            metadataArtworkLoading = false
+            metadataArtworkAttempts = 0
+        }
+        guard !trackId.isEmpty,
+              !metadataArtworkLoading,
+              metadataArtworkImage == nil else { return }
         if let cached = metadataArtworkCache[trackId] {
             metadataArtworkImage = cached
             return
         }
-        guard let track = statefulPlayer?.currentTrack(),
+        // 最多试 6 次（≈1.8s）：metadata 有时比播放器晚一两拍才就绪，失败也不无限刷。
+        guard metadataArtworkAttempts < 6,
+              let track = statefulPlayer?.currentTrack(),
               let url = LyricsArtworkResolver.artworkURL(for: track) else { return }
+        metadataArtworkAttempts += 1
         metadataArtworkLoading = true
         URLSession.shared.dataTask(with: url) { data, _, _ in
             let image = data.flatMap { UIImage(data: $0) }
@@ -1639,6 +1647,7 @@ enum NowPlayingIOS27 {
         metadataArtworkTrackId = ""
         metadataArtworkImage = nil
         metadataArtworkLoading = false
+        metadataArtworkAttempts = 0
         artworkShell = nil
         artworkHost = nil
         artworkView = nil

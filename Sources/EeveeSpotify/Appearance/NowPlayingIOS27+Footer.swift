@@ -42,6 +42,14 @@ import Foundation
 import UIKit
 import ObjectiveC.runtime
 
+/// 工具行字形整体下移多少（**nonisolated**：`NowPlayingPageOverlay` 不是 `@MainActor`，
+/// 读不了 `NowPlayingIOS27` 里的静态常量，所以真值放在这里）。
+///
+/// 34 → **64**（2026-10-24，用户：「下面还空了很大一块（即呼吸感）」）：原生行中线 811，
+/// 被底部那一坨一起上移 55 后是 756；+34 = 790，离屏幕底还有 ~90pt，而音量行在 730…758。
+/// +64 ⇒ 字形中线 820、框 807…833 —— 音量行与它之间约 26pt，底部只留安全区。
+let nowPlayingIOS27FooterRowYOffset: CGFloat = 64
+
 @MainActor
 extension NowPlayingIOS27 {
 
@@ -88,12 +96,16 @@ extension NowPlayingIOS27 {
     ///   打开舞台（这颗开关）它就回来。
     static let footerGlyphDisabledAlpha: CGFloat = 0
 
-    /// 工具行三颗字形**相对原生那一行**下移多少。
+    /// 工具行字形整体下移多少。
     ///
-    /// 原生那一行的中线是 811（日志 `frames`），而它上面挤着：传输行底 781 + 音量行 28pt（785…813）。
-    /// 下移 34 ⇒ 845：音量行与字形之间留 19pt，循环徽标才有地方待（见 `placeFooter` 那段）。
-    /// ⚠️ 只影响**我们自己画的**字形与替身；原生按钮不动。
-    static let footerRowYOffset: CGFloat = 34
+    /// ★ 2026-10-24（用户：「下面还空了很大一块（即呼吸感）」）：34 → **64**。
+    ///   原生那一行中线在 811，被底部那一坨一起上移 55 之后是 756；再 +34 = 790。
+    ///   790 到屏幕底（896）还剩 ~90pt 空档，而音量行就在 730…758 —— 上下都挤。
+    ///   现在 +64 ⇒ 字形中线 820、框 807…833：音量行与它之间约 26pt，底部只留安全区那一档。
+    ///   ⚠️ 只挪**我们自己画的**字形与替身（原生按钮全是 `sendActions` 转发，与位置无关）。
+    ///   ⚠️ 真实值在文件顶部那个 **nonisolated** 的全局常量里（`NowPlayingPageOverlay` 不是
+    ///   `@MainActor`，读不了本 enum 的静态属性）。
+    static let footerRowYOffset: CGFloat = nowPlayingIOS27FooterRowYOffset
 
     // MARK: - 状态（T2/T3 共用"藏字形"的一套表）
 
@@ -318,10 +330,36 @@ extension NowPlayingIOS27 {
         //   只有实在找不到 `UIControl` 时才退回 `zones`（至少不把触摸吞掉）。
         func addZone(_ frame: CGRect, target: UIView?, label: String) {
             guard let target else { return }
-            if let action = tapAction(for: target, label: label) {
+            let action = tapAction(for: target, label: label)
+            // ★ 2026-10-24（用户：「下面那个雷达点不动」）：中间那颗是 Spotify 的
+            //   Connect / 输出切换（`ConnectButtonOutputSwitcher`）。它在 9.1.88 上是
+            //   Encore 包出来的，`sendActions` 到最内层 `UIControl` 有时什么都不做 ——
+            //   这里先试**无障碍激活**（`accessibilityActivate`），它走的是控件自己的
+            //   "我该干什么"那条路，对 SwiftUI/Encore 包装层比 target/action 稳。
+            //   失败了再退回 `sendActions`（其它两颗维持原路）。
+            if label == "connect" {
+                actionZones.append((tapRect(frame), {
+                    if target.accessibilityActivate() {
+                        writeDebugLog("[\(logTag)] connect: accessibilityActivate handled the tap")
+                        return
+                    }
+                    if let action {
+                        action()
+                        return
+                    }
+                    (target as? UIControl)?.sendActions(for: .touchUpInside)
+                }))
+                return
+            }
+            if let action {
                 actionZones.append((tapRect(frame), action))
             } else {
-                zones.append((tapRect(frame), target))
+                // 没有 target/action 的包装层：也走一次无障碍激活（比 hitTest 到远处可靠）。
+                actionZones.append((tapRect(frame), {
+                    if !target.accessibilityActivate() {
+                        (target as? UIControl)?.sendActions(for: .touchUpInside)
+                    }
+                }))
             }
         }
         if canOpenOwnLyricsPage {

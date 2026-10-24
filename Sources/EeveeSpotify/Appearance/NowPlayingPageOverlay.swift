@@ -447,7 +447,12 @@ enum NowPlayingPageOverlay {
         }
         guard frames.count == 3 else { return nil }
         let transportBottom = frames[0].maxY
-        let footerTop = min(frames[1].minY, frames[2].minY)
+        // ★ 2026-10-24（用户：「功能之间留的间隔不够，下面还空了很大一块」）：
+        //   工具行那三颗**我们自己画**的字形整体下移了 `footerRowYOffset`（见
+        //   `NowPlayingIOS27+Footer.placeFooter`），而原生那三颗还留在原位 ⇒ 音量条
+        //   不能再按"原生工具行上沿"居中，否则它会被挤在传输行下面 4pt。
+        //   这里把同一段偏移加上去，音量条就落在**传输行与看得见的字形之间**的正中。
+        let footerTop = min(frames[1].minY, frames[2].minY) + nowPlayingIOS27FooterRowYOffset
         let gap = footerTop - transportBottom
         guard gap > volumeRowHeight + 8 else { return transportBottom + gapBelowAnchor }
         return transportBottom + (gap - volumeRowHeight) / 2

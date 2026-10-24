@@ -477,6 +477,10 @@ enum EntityPageAppearance {
                 || scrim != nil || concealedNativeCover != nil {
                 restore(reason: "left the page")
             }
+            // ★ 2026-10-24（用户：「艺人页右上角的三点功能按钮可能会有残留」）：
+            //   `⋯` 挂在 **window** 上（见 `pinMoreButton`），不跟页头一起走。这一拍没有
+            //   实体页时无条件收一次（有就摘、没有是空操作），别让它留在下一个页面上。
+            EntityPageHeaderManager.removePinnedMore(reason: "no entity page")
             // 底色拦截器也一起松手（照片 103 的那条硬边就是它要治的：Spotify 重画底色 ⇒ 丢这次写入）。
             EntityPageRepaint.root = nil
             return

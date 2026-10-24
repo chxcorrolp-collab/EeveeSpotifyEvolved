@@ -339,17 +339,42 @@ enum NowPlayingIOS27 {
         //   门禁改成"真的是听歌页封面 cell 里的 tilt"（`isInsideCoverCell`），不会误伤列表封面。
         guard tilt.bounds.width >= 200 else { return }
         guard NowPlayingLyricsPlate.isInsideCoverCell(tilt) else { return }
+        // ★ 2026-10-24（用户：「首次进入专辑页面可能不会加载专辑图片」）：
+        //   上面"不要求 tilt 已在本页"是为了抓换歌时**新的 contentlayer cell**；但同样一条
+        //   也会把**别的页面**里长得像封面的 tilt 按掉（专辑页页头）。这里补一道更精确的判据：
+        //   祖先里必须有 `nowplaying-contentlayer-cell` 那一格 —— 只有听歌页的封面会命中。
+        guard isNowPlayingCoverCell(tilt) else { return }
 
-        if artworkView != nil || lastArtworkImage != nil {
-            if let cover = NowPlayingLyricsPlate.sameSizeChild(of: tilt) {
-                hideShell(cover)
-            }
-            hideShell(tilt)
+        // ★ 2026-10-24（用户：「进入听歌页的时候，可能会展示一小会 Spotify 原生大封面」）：
+        //   **只要这一页是我们在管，就先按下去**，不再要求"我们自己已经有一张图"——
+        //   首次进页面时那张图正是还没读到的时刻；等 `updateArtwork` 拿到图再画上去。
+        //   中间那几帧露的是我们的背景 field（不是一张别人的大封面）。
+        if let cover = NowPlayingLyricsPlate.sameSizeChild(of: tilt) {
+            hideShell(cover)
         }
+        hideShell(tilt)
         guard tilt.isDescendant(of: page) else { return }
         guard let shell = shell(in: tilt) else { return }
         _ = updateArtwork(shell, in: page)
         _ = updateField(in: page)
+    }
+
+    /// 这个 tilt 是不是**听歌页 contentlayer** 里的那一格（`nowplaying-contentlayer-cell-*`）。
+    ///
+    /// 换歌时新 cell 可能还没挂到 `lastPage` 底下，所以不能要求它在页面子树里；但也不能
+    /// 只认 `CoverArtCellImpl`（专辑页页头也用 `ArtworkImage` 那一族）。这条按 id 走祖先链，
+    /// 只命中听歌页。
+    private static func isNowPlayingCoverCell(_ view: UIView) -> Bool {
+        var node: UIView? = view
+        var hops = 0
+        while let current = node, hops < 10 {
+            if let id = current.accessibilityIdentifier, id.contains("nowplaying-contentlayer-cell") {
+                return true
+            }
+            node = current.superview
+            hops += 1
+        }
+        return false
     }
 
     // MARK: - 布局
@@ -358,11 +383,10 @@ enum NowPlayingIOS27 {
     private static func layout(in page: UIView) -> Bool {
         guard !lyricsSessionActive else { return false }
         guard let shell = resolvedShell(in: page) else {
-            // ★ 2026-10-24（切歌闪过原生大封面）：这一拍没认出"要画的那张"，但原生封面
-            //   可能正露着（换歌转场里 `visibleCover` 会把它筛掉）。只要我们自己已经有一张，
-            //   就按 id 兜底找一次、按下去 —— 宁可这一拍是底色，也不闪一张别人的大封面。
-            if artworkView != nil || lastArtworkImage != nil,
-               let fallback = fallbackCoverShell(in: page) {
+            // ★ 2026-10-24（切歌 / 进页面闪过原生大封面）：这一拍没认出"要画的那张"，
+            //   但原生封面可能正露着 ⇒ 兜底找一次、按下去。宁可这一拍是背景 field，
+            //   也不闪一张别人的大封面。
+            if let fallback = fallbackCoverShell(in: page) {
                 hideShell(fallback)
             }
             if !didLogMissingCover {
@@ -372,6 +396,9 @@ enum NowPlayingIOS27 {
             return false
         }
         didLogMissingCover = false
+        // 认出来了就先按下去（不等 `updateArtwork` 的图）—— 首次进页面时图往往比壳晚一拍，
+        // 这一拍不按，用户看到的就是"Spotify 原生大封面闪一下"。
+        hideShell(shell)
         artworkShell = shell
 
         var changed = updateArtwork(shell, in: page)
@@ -391,19 +418,12 @@ enum NowPlayingIOS27 {
         // 待办 T3 + T6：工具行排成 AM 的三颗（歌词 / 隔空播放 / 队列），见 `NowPlayingIOS27+Footer.swift`。
         // ⚠️ 必须排在 T2 前面：循环那颗圆钮是**按我们画的那颗队列字形**定位的。
         if placeFooter(in: page) { changed = true }
-        // 待办 T2（用户拍板 A）：藏随机/循环，循环挪到工具行右上方，见 `NowPlayingIOS27+Transport.swift`。
-        if placeTransport(in: page) { changed = true }
-        // ★ 2026-10-24：传输行那块替身（循环钮）必须**最后**抬到最前。
-        //
-        // `placeFooter` 每拍都会把自己的替身 bringToFront 一次；`placeTransport` 排在它后面、
-        // 本来也该轮到循环钮 —— 但 `placeTransport` 有几条提前返回（量不到锚 / 传输行缺一颗），
-        // 那些拍里 footer 的替身就压在上面，于是同一处触摸"时而开队列、时而循环"
-        // （用户报的就是这个）。这一句把"循环钮在最上"变成**每拍都成立**的事实；
-        // footer 那边还有一道 `excludedRects` 兜底，两者互不依赖。
-        if let repeatRelay, repeatRelay.superview === page,
-           page.subviews.last !== repeatRelay {
-            page.bringSubviewToFront(repeatRelay)
-        }
+        // ★ 2026-10-24（用户：「那个自画的小切换随机播放按钮也回退」）：
+        //   `placeTransport`（藏随机/循环 + 把循环画成工具行右上角的小圆钮）**整条停用**。
+        //   现在随机 / 循环回到 Spotify 原生的传输行里 —— 左右各一颗，天然对称；
+        //   不再有"自画那颗被点、原生图标漏出来"的问题。
+        //   代码还留在 `NowPlayingIOS27+Transport.swift`，要恢复时把这一句接回来即可。
+        // if placeTransport(in: page) { changed = true }
         if !didLogFrames {
             didLogFrames = true
             logFrames(in: page)
@@ -490,9 +510,10 @@ enum NowPlayingIOS27 {
         }
         if image == nil {
             if trackChanged {
-                // 连上次那张都没有（这次是**第一次**进页面）：让原生封面先露着 ——
-                // 没有东西可铺的时候藏起来只会得到一块黑。
-                revealShells()
+                // ★ 2026-10-24（用户：「进入听歌页可能会展示一小会 Spotify 原生大封面」）：
+                //   这里原来 `revealShells()` 把原生封面放出来等图 —— 但"等图"的那一两拍
+                //   正是用户看到的那张原生大封面。现在**保持按下去**，露我们自己的背景 field；
+                //   图一到 `updateArtwork` 的下一拍就画上来。
                 return false
             }
             // 刚进页面的头几拍：允许缓存兜底（那时还没有"上一首"的问题）。
@@ -503,8 +524,6 @@ enum NowPlayingIOS27 {
             // 有图但量不到宿主：**别把原生封面放出来**（那正是"闪一下"），先等下一拍。
             if artworkView != nil || lastArtworkImage != nil {
                 hideShell(shell)
-            } else {
-                revealShells()
             }
             if let view = artworkView { view.isHidden = true }
             return false

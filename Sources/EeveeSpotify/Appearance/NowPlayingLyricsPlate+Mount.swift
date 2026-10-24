@@ -171,6 +171,52 @@ extension NowPlayingLyricsPlate {
         return true
     }
 
+    /// ★ 2026-10-24（用户：「点击歌词之后……只想要封面/歌名/艺人动，按钮别改」）：
+    /// iOS 27 听歌页专用 —— **只铺歌词**，不碰封面、不碰标题、不加自己的键、不动控件条。
+    /// 容器/宿主/滚动/逐词时钟都复用这一层现成的东西；位置由调用方给。
+    @discardableResult
+    static func mountLyricsOnly(in page: UIView, frame: CGRect) -> Bool {
+        guard #available(iOS 26.0, *) else { return false }
+        let notice = noticeText()
+        guard let trackId = currentTrackId() else { return false }
+        let timedLines = currentLines() ?? []
+        let staticTexts = currentUntimedLines()
+        let isStatic = timedLines.isEmpty && staticTexts != nil
+        let lines = isStatic ? staticLines(from: staticTexts ?? []) : timedLines
+        if lines.isEmpty, notice == nil { return false }
+
+        let container = ensureContainer(in: page, frame: frame)
+        applyEdgeFade(to: container)
+        applyNoticeLabel(notice, in: container)
+
+        guard let host = currentHost(for: page) else { return false }
+        let version = currentLyricsVersion
+        if host.isCurrent(version: version, trackId: trackId, isStatic: isStatic) {
+            // 最新：只驱动时间轴。
+        } else if host.isAttached {
+            host.updateLines(lines, version: version, trackId: trackId, isStatic: isStatic)
+        } else {
+            host.mount(
+                in: container,
+                lines: lines,
+                version: version,
+                trackId: trackId,
+                isStatic: isStatic,
+                onSeek: { seconds in seekToTappedLyricLine(seconds) }
+            )
+        }
+        host.tick(seconds: WordByWordPositionResolver.shared.currentPositionSeconds())
+        host.usePerFrameClockIfAvailable()
+        return true
+    }
+
+    /// 收掉 `mountLyricsOnly` 铺的东西（不碰任何原生视图、不动 `door`）。
+    static func unmountLyricsOnly() {
+        (host as? NowPlayingLyricsHost)?.detach()
+        lastContainer?.removeFromSuperview()
+        lastContainer = nil
+    }
+
     /// 全部还原：封面动画回原位后拿走、标题位移撤销、我们自己的层拿走。
     ///
     /// - Parameter animated: 收起封面时**要不要放动画**。

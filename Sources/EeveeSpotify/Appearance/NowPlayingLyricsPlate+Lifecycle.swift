@@ -121,29 +121,6 @@ extension NowPlayingLyricsPlate {
         apply(in: page)
     }
 
-    /// iOS 27 的歌词键进来（2026-10-24 用户：「点击歌词之后是图 2 的样子」）。
-    ///
-    /// 调用顺序由 `NowPlayingIOS27.enterLyricsMode(in:)` 保证：它先把整页交还给 Spotify
-    /// （撤满屏封面 / 标题 / 底排），这里才按原本的几何铺开。
-    /// ⚠️ `ios27Session` 必须先立起来，否则 `apply` 里那道 `isEnabled` 会把它当成"该让位"。
-    static func startIOS27Session(in page: UIView) {
-        ios27Session = true
-        lastPage = page
-        writeDebugLog(
-            "[\(logTag)] iOS 27 session — page handed back, mounting the in-player lyrics"
-        )
-        apply(in: page)
-        if !door.isOpen, !isAnythingLive {
-            toggle()
-        }
-    }
-
-    /// iOS 27 这一程结束（页面走了 / 用户把开关关了）。只清会话旗标，收尾由 `apply` 的
-    /// `isEnabled` 分支或 `NowPlayingIOS27` 那侧负责。
-    static func endIOS27Session() {
-        ios27Session = false
-    }
-
     /// 蹭 `DeclutterChrome` 的 0.3s 复查节拍：**展开期间**每拍把几何重新施加一遍
     /// （pw：`The geometry is re-applied on every layout pass of the units` —— 换歌会重建元素）。
     @discardableResult
@@ -320,12 +297,6 @@ extension NowPlayingLyricsPlate {
             rememberExpanded(false)
             // 图标当场换回"歌词"，不等 0.5s 的复查节拍。
             ensureToggleZone(in: page)
-            // ★ 2026-10-24：iOS 27 借来的这一程到此结束 —— 交给 `NowPlayingIOS27` 重新接管
-            //   （下一条 0.3s 节拍会等这边收完动画再铺满屏封面）。
-            if ios27Session {
-                ios27Session = false
-                NowPlayingIOS27.lyricsSessionEnded()
-            }
             return
         }
         guard canShow(for: page) else {

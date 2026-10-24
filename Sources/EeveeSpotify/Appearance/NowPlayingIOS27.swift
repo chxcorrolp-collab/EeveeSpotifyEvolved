@@ -200,14 +200,23 @@ enum NowPlayingIOS27 {
     /// 立刻收尾就等于把原生封面放回来 = 用户看到的那一闪）。
     static var pageMissingTicks = 0
 
-    /// ★ 2026-10-24（用户：「点击歌词之后是图 2 的样子」）：
-    /// iOS 27 的歌词键借走整页的这段时间。开着时这一层**什么都不重铺** ——
-    /// 页面已经交还给 Spotify，由 `NowPlayingLyricsPlate` 按它原本的几何铺歌词。
-    static var lyricsSessionActive = false
-    /// 歌词收起来之后等 `NowPlayingLyricsPlate` 的收场动画走完，再把满屏封面铺回来。
-    static var resumingAfterLyrics = false
-    /// 收场动画的最短等待（墙钟；`closeEverything` 的动画是 0.45s）。
-    static var resumeAfterLyricsAt: CFAbsoluteTime = 0
+    /// ★ 2026-10-24（用户：「只想要封面/歌名/艺人像之前那样动，展示歌词；为什么连按钮也改了」）：
+    /// iOS 27 自己的**页内歌词模式** —— 只缩封面、移标题、在中间铺歌词，
+    /// **进度条 / 传输行 / 音量 / 底排三颗一颗都不动**（不借用旧布局的
+    /// `NowPlayingLyricsPlate` 整套版式）。
+    static var lyricsModeActive = false
+    /// 开合动画令牌：连点两次时后一次作废前一次的回调。
+    static var lyricsModeGeneration = 0
+
+    /// 缩略图边长 / 圆角 / 左边距 / 离安全区顶的距离。
+    static let lyricsThumbSide: CGFloat = 64
+    static let lyricsThumbCorner: CGFloat = 8
+    static let lyricsThumbLeading: CGFloat = 28
+    static let lyricsThumbTopInset: CGFloat = 46
+    /// 歌词区左右内边距 / 顶部与缩略图之间的空隙 / 底部与进度条之间的空隙。
+    static let lyricsStageSideInset: CGFloat = 26
+    static let lyricsStageTopGap: CGFloat = 16
+    static let lyricsStageBottomGap: CGFloat = 18
 
     // MARK: - 对外入口
 
@@ -267,66 +276,48 @@ enum NowPlayingIOS27 {
             pageMissingTicks = 0
         }
 
-        // ★ 2026-10-24（歌词借页）：这一程由 `NowPlayingLyricsPlate` 全权负责，
-        //   这一层不重铺任何东西（否则两套几何每拍互相覆盖）。
-        //   页面真的走了才把会话结束掉（回收的 cell 不能留着 alpha = 0）。
-        if lyricsSessionActive {
-            guard lastPage?.window != nil else {
-                lyricsSessionActive = false
-                resumingAfterLyrics = false
-                NowPlayingLyricsPlate.endIOS27Session()
-                return false
-            }
-            return false
-        }
-        // 歌词收起来了：等那一层把退场动画走完（`isAnythingLive` 变假 + 最短 0.55s）
-        // 再铺回满屏封面，否则会在封面"飞回去"的半路把整张满屏封面盖上来。
-        if resumingAfterLyrics {
-            if NowPlayingLyricsPlate.isAnythingLive
-                || CFAbsoluteTimeGetCurrent() < resumeAfterLyricsAt {
-                return false
-            }
-            resumingAfterLyrics = false
-        }
+        // ★ 2026-10-24：页内歌词模式**不接管整页** —— 这一层照常每拍重铺，
+        //   只是 `updateArtwork` / `placeTitleRow` / `updateLyricsStage` 按模式换几何。
+        //   所以这里没有"让位/恢复"的分支。
 
         guard isEnabled else { return false }
         guard let page = lastPage, page.window != nil else { return false }
         return layout(in: page)
     }
 
-    /// ★ 2026-10-24（用户：「点击歌词之后是图 2 的样子」）：
-    /// 把整页交还给 Spotify（撤掉满屏封面 / 标题 / 底排），再让 `NowPlayingLyricsPlate`
-    /// 按它原本的几何铺开。这样得到的就是旧布局里「歌词进播放器」的那一屏（用户照片 2）。
-    static func enterLyricsMode(in page: UIView) {
-        guard !lyricsSessionActive else { return }
-        guard page.window != nil else { return }
-        lyricsSessionActive = true
-        resumingAfterLyrics = false
-        writeDebugLog("[\(logTag)] lyrics mode — handing the page back to Spotify for the in-player lyrics")
-        // 交还页面：把写过 alpha / transform 的原生视图写回，拆掉我们自己的层。
-        // ⚠️ 封面缓存要留过这一程：`restore` 会清 `lastArtworkImage`，而歌词关掉后
-        //    重铺满屏封面时正是靠它顶着（否则新图没到的那几拍会闪原生封面）。
-        let cachedArtwork = lastArtworkImage
-        let cachedTrackId = lastTrackId
-        restore(reason: "lyrics mode")
-        lastArtworkImage = cachedArtwork
-        lastTrackId = cachedTrackId
-        NowPlayingLyricsPlate.startIOS27Session(in: page)
+    /// ★ 2026-10-24：点底排那颗歌词气泡 = **开/关页内歌词**。
+    ///
+    /// 只做三件事：封面缩成 64pt 缩略图、标题行挪到缩略图右边、歌词铺在中间；
+    /// 底部按钮（进度/传输/音量/三颗字形）全部保持 iOS 27 的样子。
+    static func toggleLyricsMode(in page: UIView) {
+        setLyricsMode(!lyricsModeActive, in: page)
     }
 
-    /// 歌词那一层收起之后由 `NowPlayingLyricsPlate.toggle()` 调回来。
-    /// 这里只落旗标；真正重铺由下一条 0.3s 节拍在它的退场动画结束后做。
-    static func lyricsSessionEnded() {
-        guard lyricsSessionActive else { return }
-        lyricsSessionActive = false
-        resumingAfterLyrics = true
-        resumeAfterLyricsAt = CFAbsoluteTimeGetCurrent() + 0.55
-        writeDebugLog("[\(logTag)] lyrics mode ended — the iOS 27 page will come back after the close animation")
+    static func setLyricsMode(_ on: Bool, in page: UIView) {
+        guard on != lyricsModeActive else { return }
+        guard page.window != nil else { return }
+        lyricsModeActive = on
+        lyricsModeGeneration += 1
+        if !on {
+            NowPlayingLyricsPlate.unmountLyricsOnly()
+        }
+        writeDebugLog(
+            "[\(logTag)] lyrics mode \(on ? "on" : "off") — "
+                + "cover/title move, the bottom controls stay as they are"
+        )
+        // 只在这一拍放动画；之后每拍的重铺都是幂等的。
+        UIView.animate(
+            withDuration: 0.36,
+            delay: 0,
+            options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction]
+        ) {
+            _ = layout(in: page)
+        }
     }
 
     /// 封面自己被布局的那一刻（`CoverArtTiltLayoutHook` 转发进来）。
     static func coverDidLayOut(from tilt: UIView) {
-        guard isEnabled, !lyricsSessionActive,
+        guard isEnabled,
               let page = lastPage, page.window != nil, tilt.window != nil else { return }
         // ★ 2026-10-24（用户：「切歌还是会有 Spotify 原生大封面闪过」）：
         //   旧布局（`NowPlayingLyricsPlate.coverDidLayOut`）早就解决了同一件事，这里照它的做法：
@@ -353,10 +344,26 @@ enum NowPlayingIOS27 {
             hideShell(cover)
         }
         hideShell(tilt)
-        guard tilt.isDescendant(of: page) else { return }
-        guard let shell = shell(in: tilt) else { return }
+        // ★ 2026-10-24（用户：切歌后**不展示自画封面**）：换歌时新 cell 还没挂到 `lastPage`
+        //   底下，原来那道 `tilt.isDescendant(of: page)` 会让这一拍直接返回 —— 而我们刚把
+        //   原生 tilt 按成 alpha 0，`resolvedShell` 的 `visibleCover` 又因 alpha 0 认不出它
+        //   ⇒ 接下来十几秒都"no on-screen artwork"（真机日志 16：02:53:52 → 02:54:08）。
+        //   现在把壳**记下来**（`artworkShell`）并立即尝试画；`updateArtwork` 拿不到宿主也
+        //   没关系，下一拍 `resolvedShell` 会直接用这个记录继续试。
+        let shell = shell(in: tilt) ?? tilt
+        artworkShell = shell
         _ = updateArtwork(shell, in: page)
         _ = updateField(in: page)
+    }
+
+    /// 页内歌词模式里封面缩略图的框（页面坐标）。
+    private static func lyricsThumbFrame(in page: UIView) -> CGRect {
+        CGRect(
+            x: Self.lyricsThumbLeading,
+            y: page.safeAreaInsets.top + Self.lyricsThumbTopInset,
+            width: Self.lyricsThumbSide,
+            height: Self.lyricsThumbSide
+        )
     }
 
     /// 这个 tilt 是不是**听歌页 contentlayer** 里的那一格（`nowplaying-contentlayer-cell-*`）。
@@ -381,7 +388,6 @@ enum NowPlayingIOS27 {
 
     @discardableResult
     private static func layout(in page: UIView) -> Bool {
-        guard !lyricsSessionActive else { return false }
         guard let shell = resolvedShell(in: page) else {
             // ★ 2026-10-24（切歌 / 进页面闪过原生大封面）：这一拍没认出"要画的那张"，
             //   但原生封面可能正露着 ⇒ 兜底找一次、按下去。宁可这一拍是背景 field，
@@ -418,6 +424,9 @@ enum NowPlayingIOS27 {
         // 待办 T3 + T6：工具行排成 AM 的三颗（歌词 / 隔空播放 / 队列），见 `NowPlayingIOS27+Footer.swift`。
         // ⚠️ 必须排在 T2 前面：循环那颗圆钮是**按我们画的那颗队列字形**定位的。
         if placeFooter(in: page) { changed = true }
+        // ★ 2026-10-24（页内歌词）：封面/标题由上面两条按模式摆；歌词容器在
+        //   「缩略图下沿 → 进度条上沿」之间，**只在歌词模式**铺。
+        if lyricsModeActive, updateLyricsStage(in: page) { changed = true }
         // ★ 2026-10-24（用户：「那个自画的小切换随机播放按钮也回退」）：
         //   `placeTransport`（藏随机/循环 + 把循环画成工具行右上角的小圆钮）**整条停用**。
         //   现在随机 / 循环回到 Spotify 原生的传输行里 —— 左右各一颗，天然对称；
@@ -429,6 +438,31 @@ enum NowPlayingIOS27 {
             logFrames(in: page)
         }
         return changed
+    }
+
+    /// 页内歌词的容器：**缩略图下沿 + 16 → 进度条上沿 − 18**。
+    ///
+    /// 只铺歌词（`NowPlayingLyricsPlate.mountLyricsOnly`），不碰控件条 / 底部按钮。
+    @discardableResult
+    private static func updateLyricsStage(in page: UIView) -> Bool {
+        guard let progress = NowPlayingLyricsPlate.findByIdentifier(
+            NowPlayingLyricsPlate.progressUnitIdentifier, in: page
+        ) else { return false }
+        let progressRect = progress.convert(progress.bounds, to: page)
+        let thumb = lyricsThumbFrame(in: page)
+        let top = thumb.maxY + Self.lyricsStageTopGap
+        let bottom = progressRect.minY - Self.lyricsStageBottomGap
+        guard bottom - top > 80 else {
+            NowPlayingLyricsPlate.unmountLyricsOnly()
+            return false
+        }
+        let frame = CGRect(
+            x: Self.lyricsStageSideInset,
+            y: top,
+            width: page.bounds.width - Self.lyricsStageSideInset * 2,
+            height: bottom - top
+        )
+        return NowPlayingLyricsPlate.mountLyricsOnly(in: page, frame: frame)
     }
 
     /// 兜底找原生封面壳：**不要求"在屏中间"、也不看 alpha**。
@@ -566,22 +600,45 @@ enum NowPlayingIOS27 {
             }
         }
 
-        // 封面画多大：**宽 = 页宽，高 = 页高的 58%**（不是方图）。
-        //
-        // ★ 2026-10-24（真机照片 2）：原来是 414×414 的方图，而 AM 参考图
-        //   （`C:\dsh\am\1.jpg`）里那块封面是"铺到屏幕 57% 左右的**竖长**裁切"，
-        //   标题正好压在它下沿的淡出区上。方图会在封面下面留出一大块黑（照片 2 里
-        //   从 y≈414 到标题 y≈600 那 186pt 的空白），看起来就是"排版散了"。
-        //   这里只改**我们自己那张图**的框（`scaleAspectFill` 会自己裁），不动任何原生视图。
-        let coverWidth = page.bounds.width
-        let coverHeight = max(
-            coverWidth,
-            min(page.bounds.height * Self.artworkHeightRatio, coverWidth * Self.artworkMaxAspect)
-        )
-        let wanted = host.convert(
-            CGRect(x: 0, y: 0, width: coverWidth, height: coverHeight),
-            from: page
-        )
+        // 封面画多大：
+        //   · 普通：**宽 = 页宽，高 = 页高的 58%**（AM 的竖长裁切）；
+        //   · 页内歌词模式：缩成左上角 **64pt 缩略图**（用户 2026-10-24：只动封面/标题，
+        //     底部按钮保持 iOS 27 的样子）。
+        let wanted: CGRect
+        if lyricsModeActive {
+            wanted = host.convert(lyricsThumbFrame(in: page), from: page)
+            if imageView.layer.cornerRadius != Self.lyricsThumbCorner {
+                imageView.layer.cornerRadius = Self.lyricsThumbCorner
+                imageView.layer.cornerCurve = .continuous
+                changed = true
+            }
+            if !imageView.clipsToBounds {
+                imageView.clipsToBounds = true
+                changed = true
+            }
+            if imageView.layer.mask != nil {
+                imageView.layer.mask = nil
+                changed = true
+            }
+        } else {
+            let coverWidth = page.bounds.width
+            let coverHeight = max(
+                coverWidth,
+                min(page.bounds.height * Self.artworkHeightRatio, coverWidth * Self.artworkMaxAspect)
+            )
+            wanted = host.convert(
+                CGRect(x: 0, y: 0, width: coverWidth, height: coverHeight),
+                from: page
+            )
+            if imageView.layer.cornerRadius != 0 {
+                imageView.layer.cornerRadius = 0
+                changed = true
+            }
+            if imageView.clipsToBounds {
+                imageView.clipsToBounds = false
+                changed = true
+            }
+        }
         if imageView.frame != wanted {
             imageView.frame = wanted
             changed = true
@@ -597,7 +654,7 @@ enum NowPlayingIOS27 {
                     + " · page \(Int(page.bounds.width))×\(Int(page.bounds.height))"
             )
         }
-        if applyArtworkFadeMask(to: imageView) { changed = true }
+        if !lyricsModeActive, applyArtworkFadeMask(to: imageView) { changed = true }
         if updateTopScrim(in: host, page: page) { changed = true }
         // 我们的封面在原生那张**上面**（同一个 cell 里），原生那张必须按下去。
         hideShell(shell)
@@ -1026,8 +1083,18 @@ enum NowPlayingIOS27 {
         }
         guard natural.width > 1, natural.height > 1 else { return false }
 
-        let dx = (titleLeadInset - natural.minX).rounded()
-        let wanted = base.concatenating(CGAffineTransform(translationX: dx, y: 0))
+        let dx: CGFloat
+        let dy: CGFloat
+        if lyricsModeActive {
+            // 页内歌词：标题/艺人贴到缩略图右边、与缩略图顶对齐（图 2 的关系）。
+            let thumb = lyricsThumbFrame(in: page)
+            dx = (thumb.maxX + 12 - natural.minX).rounded()
+            dy = (thumb.minY - natural.minY).rounded()
+        } else {
+            dx = (titleLeadInset - natural.minX).rounded()
+            dy = 0
+        }
+        let wanted = base.concatenating(CGAffineTransform(translationX: dx, y: dy))
         guard row.transform != wanted else { return false }
         row.transform = wanted
         if !didLogTitle {
@@ -1127,6 +1194,11 @@ enum NowPlayingIOS27 {
 
     /// 关开关 / 离开页面：把写过的每一处写回去，拆掉我们自己的视图。
     static func restore(reason: String) {
+        // 页内歌词先收（它不参与 `hadState` 的账，但必须先拆掉容器）。
+        if lyricsModeActive {
+            lyricsModeActive = false
+            NowPlayingLyricsPlate.unmountLyricsOnly()
+        }
         let hadState = fieldHost != nil || artworkView != nil || titleRowBase != nil
             || bottomStackBase != nil
             || grabber != nil || !shellAlphas.isEmpty || !chromeAlphas.isEmpty
@@ -1164,6 +1236,7 @@ enum NowPlayingIOS27 {
     }
 
     private static func clearState() {
+        lyricsModeActive = false
         artworkShell = nil
         artworkHost = nil
         artworkView = nil

@@ -338,9 +338,15 @@ extension NowPlayingIOS27 {
             //   "我该干什么"那条路，对 SwiftUI/Encore 包装层比 target/action 稳。
             //   失败了再退回 `sendActions`（其它两颗维持原路）。
             if label == "connect" {
+                // 目标可能是个 ViewHolder（`ConnectButtonOutputSwitcherViewHolder`），真正的
+                // `EncoreButton` 在它里面 —— `accessibilityActivate` 要打在**那颗**上。
+                let control = NowPlayingIOS27.nearestControl(target)
                 actionZones.append((tapRect(frame), {
-                    if target.accessibilityActivate() {
-                        writeDebugLog("[\(logTag)] connect: accessibilityActivate handled the tap")
+                    if let control, control.accessibilityActivate() {
+                        writeDebugLog(
+                            "[\(logTag)] connect: accessibilityActivate handled the tap"
+                                + " (\(NSStringFromClass(type(of: control))))"
+                        )
                         return
                     }
                     if let action {
@@ -369,23 +375,12 @@ extension NowPlayingIOS27 {
             //   不再转发 Spotify 那颗 `lyrics-expand-button` —— 它在 9.1.88 上经常是空壳，
             //   而"点得开"比"转发成功"重要。
             actionZones.append((tapRect(frames[0]), {
-                // ★ 2026-10-24（用户：「点击歌词之后是图 2 的样子」）：
-                //   默认走**播放页内**的歌词（旧布局那套「歌词进播放器」：缩封面 + 标题左上 +
-                //   歌词铺在中间），不再开独立窗口。实验里那颗「更炫酷的逐词歌词」开着时
-                //   仍然尊重它，去开 Folia 舞台。
-                if LyricsStageEntry.isEnabled {
-                    writeDebugLog("[\(logTag)] lyrics: opening the Folia stage")
-                    LyricsStageEntry.present()
-                } else {
-                    writeDebugLog("[\(logTag)] lyrics: opening the in-player lyrics page")
-                    // ⚠️ 下一拍再做：这颗闭包就挂在底部那块 relay 上，而
-                    //   `enterLyricsMode` → `restore` 会把 relay 从页面上摘掉。
-                    //   在抬手回调里立刻释放自己那块视图不稳妥，延一拍最省事。
-                    DispatchQueue.main.async {
-                        onMainThreadSync {
-                            NowPlayingIOS27.enterLyricsMode(in: page)
-                        }
-                    }
+                // ★ 2026-10-24（用户：「只想要封面/歌名/艺人动，展示歌词；为什么连按钮也改了」）：
+                //   **页内歌词模式** —— iOS 27 这一层自己缩封面、移标题、铺歌词，
+                //   进度/传输/音量/底排三颗保持原样。不再 restore 整页、也不再开独立窗口。
+                writeDebugLog("[\(logTag)] lyrics: toggling the iOS 27 in-page lyrics")
+                onMainThreadSync {
+                    NowPlayingIOS27.toggleLyricsMode(in: page)
                 }
             }))
         } else if let target = lyricsTarget, let action = tapAction(for: target, label: "lyrics") {

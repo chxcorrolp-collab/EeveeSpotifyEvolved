@@ -416,17 +416,23 @@ extension NowPlayingIOS27 {
         }
         if canOpenOwnLyricsPage {
             // ★★ 2026-10-24（用户：「歌词这部分，不能直接复用吗，iOS 27 这边只需要改动画就好了」）：
-            //   **歌词键永远开我们自己的页**（里面直接复用 `AppleMusicLyricsPage`，见
-            //   `LyricsStageView.appleMusicPage`）；实验开关只决定页内"Folia 3D / 普通滚动"。
-            //   不再转发 Spotify 那颗 `lyrics-expand-button` —— 它在 9.1.88 上经常是空壳，
-            //   而"点得开"比"转发成功"重要。
+            //   **歌词键永远开我们自己的页**；但两种"我们自己的页"分工不同：
+            //     · 实验「更炫酷的逐词歌词」**开** ⇒ 独立窗口 `LyricsStage`（仿 Folia Tilt，
+            //       `LyricsStageTiltLayout`）；
+            //     · 实验**关**（默认）⇒ iOS 27 页内歌词（缩封面、移标题、铺
+            //       `AppleMusicLyricsPage`），进度/传输/音量/底排保持原样。
+            //   ⚠️ 2026-10-24 之前这里只有页内分支 —— 实验开关实际上**开不出舞台**
+            //   （`LyricsStageEntry.present()` 没有调用点），Folia 重写等于看不到。
+            //   现在按 `stageEnabled` 分流，开关终于有用了。
             actionZones.append((tapRect(frames[0]), {
-                // ★ 2026-10-24（用户：「只想要封面/歌名/艺人动，展示歌词；为什么连按钮也改了」）：
-                //   **页内歌词模式** —— iOS 27 这一层自己缩封面、移标题、铺歌词，
-                //   进度/传输/音量/底排三颗保持原样。不再 restore 整页、也不再开独立窗口。
-                writeDebugLog("[\(logTag)] lyrics: toggling the iOS 27 in-page lyrics")
-                onMainThreadSync {
-                    NowPlayingIOS27.toggleLyricsMode(in: page)
+                if stageEnabled {
+                    writeDebugLog("[\(logTag)] lyrics: opening the Folia stage")
+                    LyricsStageEntry.present()
+                } else {
+                    writeDebugLog("[\(logTag)] lyrics: toggling the iOS 27 in-page lyrics")
+                    onMainThreadSync {
+                        NowPlayingIOS27.toggleLyricsMode(in: page)
+                    }
                 }
             }))
         } else if let target = lyricsTarget, let action = tapAction(for: target, label: "lyrics") {

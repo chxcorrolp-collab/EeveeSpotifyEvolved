@@ -212,7 +212,12 @@ extension NowPlayingLyricsPlate {
 
     /// 收掉 `mountLyricsOnly` 铺的东西（不碰任何原生视图、不动 `door`）。
     static func unmountLyricsOnly() {
-        (host as? NowPlayingLyricsHost)?.detach()
+        // ⚠️ `NowPlayingLyricsHost` 本身是 `@available(iOS 26.0, *)`；本文件所在的
+        // extension 没有整体标可用性，所以这里必须自己在 `#available` 里做那次 cast
+        //（CI 报的就是这一句：`'NowPlayingLyricsHost' is only available in iOS 26.0 or newer`）。
+        if #available(iOS 26.0, *) {
+            (host as? NowPlayingLyricsHost)?.detach()
+        }
         lastContainer?.removeFromSuperview()
         lastContainer = nil
     }

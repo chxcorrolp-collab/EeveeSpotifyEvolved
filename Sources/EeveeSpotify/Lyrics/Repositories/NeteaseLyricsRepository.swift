@@ -487,7 +487,21 @@ class NeteaseLyricsRepository: LyricsRepository {
         return songs
     }
 
-    private func fetchLyricsRaw(songId: Int) throws -> (lrc: String?, tlyric: String?, romalrc: String?) {
+    /// 网易 `/weapi/song/lyric` 一次响应的四块文本 + 两条署名。
+    ///
+    /// ★ 2026-10-24：`lyricUser` / `transUser` 是网易云回包自带的
+    /// “贡献歌词的人 / 贡献翻译的人”（`nickname`）。以前只取 `lyric`，
+    /// 于是页内歌词那块只能写 “NetEase”。现在把这两个名字交给
+    /// `LyricsContributor`（`.uploader` / `.translator`）。
+    private struct RawLyrics {
+        var lrc: String?
+        var tlyric: String?
+        var romalrc: String?
+        var lyricUser: String?
+        var transUser: String?
+    }
+
+    private func fetchLyricsRaw(songId: Int) throws -> RawLyrics {
         // os/rv 两个参数控制 romalrc（官方日语罗马音）是否下发，参考 Lyricify-Lyrics-Helper。
         let data = try performWeapi("/weapi/song/lyric", params: [
             "id": songId,
@@ -506,10 +520,36 @@ class NeteaseLyricsRepository: LyricsRepository {
             throw LyricsError.noSuchSong
         }
 
-        let lrc = (json["lrc"] as? [String: Any])?["lyric"] as? String
-        let tlyric = (json["tlyric"] as? [String: Any])?["lyric"] as? String
-        let romalrc = (json["romalrc"] as? [String: Any])?["lyric"] as? String
-        return (lrc, tlyric, romalrc)
+        let lrcBlock = json["lrc"] as? [String: Any]
+        let tlyricBlock = json["tlyric"] as? [String: Any]
+        return RawLyrics(
+            lrc: lrcBlock?["lyric"] as? String,
+            tlyric: tlyricBlock?["lyric"] as? String,
+            romalrc: (json["romalrc"] as? [String: Any])?["lyric"] as? String,
+            lyricUser: Self.userNickname(lrcBlock?["lyricUser"]),
+            transUser: Self.userNickname(tlyricBlock?["transUser"])
+        )
+    }
+
+    /// 网易云用户节点 → 昵称（空串当没有）。
+    private static func userNickname(_ raw: Any?) -> String? {
+        guard let dict = raw as? [String: Any],
+              let name = (dict["nickname"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !name.isEmpty else { return nil }
+        return name
+    }
+
+    /// 回包里的两位署名 → 显示层用的 contributors（顺序：先歌词、后翻译）。
+    private func contributors(from raw: RawLyrics) -> [LyricsContributor] {
+        var result: [LyricsContributor] = []
+        if let name = raw.lyricUser {
+            result.append(LyricsContributor(role: .uploader, name: name, url: nil))
+        }
+        if let name = raw.transUser {
+            result.append(LyricsContributor(role: .translator, name: name, url: nil))
+        }
+        return result
     }
 
     /// 逐字（yrc）走新接口 /api/song/lyric/v1（eapi 加密）；
@@ -1214,16 +1254,16 @@ class NeteaseLyricsRepository: LyricsRepository {
                 + " (\(candidates.count) candidate(s), \(searchQueries.count) query/queries)"
         )
 
-        let raw: (lrc: String?, tlyric: String?, romalrc: String?)
+        let rawLyrics: RawLyrics
         do {
-            raw = try fetchLyricsRaw(songId: chosenSongId)
+            rawLyrics = try fetchLyricsRaw(songId: chosenSongId)
         } catch {
             writeDebugLog("[NetEase] Fetch lyrics error: \(error)")
             throw error
         }
 
         // 网易「纯音乐，请欣赏」= 这首歌是纯音乐（可信分类）：直接返回纯音乐占位。
-        if let lrc = raw.lrc, lrc.contains("纯音乐") {
+        if let lrc = rawLyrics.lrc, lrc.contains("纯音乐") {
             writeDebugLog("[NetEase] Instrumental — returning empty lyrics")
             var dto = LyricsDto(lines: [], timeSynced: false, romanization: .original)
             // ★ 2026-10-11：**把"源说过这是纯音乐"记在 dto 上** —— 听歌页那层据此写
@@ -1234,7 +1274,7 @@ class NeteaseLyricsRepository: LyricsRepository {
         }
 
         // 不把上游「空歌词 → 纯音乐占位」的 bug 带过来：没有可用歌词就抛查无此歌。
-        guard let lrc = raw.lrc, !lrc.isEmpty else {
+        guard let lrc = rawLyrics.lrc, !lrc.isEmpty else {
             writeDebugLog("[NetEase] No usable lyrics")
             throw LyricsError.noSuchSong
         }
@@ -1495,7 +1535,7 @@ class NeteaseLyricsRepository: LyricsRepository {
                 // 这种情况下确实没有译文可用，如实记账，不再假装"逐字歌词不显示翻译"。
                 writeDebugLog("[NetEase] word-by-word — ytlrc absent")
             }
-        } else if let tlyric = raw.tlyric, !tlyric.isEmpty {
+        } else if let tlyric = rawLyrics.tlyric, !tlyric.isEmpty {
             translation = buildTranslation(tlyric, originalLines: lines)
         }
 
@@ -1543,7 +1583,7 @@ class NeteaseLyricsRepository: LyricsRepository {
         // ⚠️ 「修改 NetEase 日语罗马字展示方式」那个开关（`preferLocalRomaji`）**语义不变**：
         //    它仍然是"宁可要本地那份、也不用官方那份"—— 打开时这里就不存官方罗马字。
         var officialRomanizedLines: [String] = []
-        if let romalrc = raw.romalrc, !romalrc.isEmpty,
+        if let romalrc = rawLyrics.romalrc, !romalrc.isEmpty,
            languageCode == "ja",
            UserDefaults.standard.bool(forKey: "ngzhwm_japaneseRomanization"),
            !preferLocalRomaji,
@@ -1562,7 +1602,7 @@ class NeteaseLyricsRepository: LyricsRepository {
             }
         }
 
-        let dto = LyricsDto(
+        var dto = LyricsDto(
             lines: lines,
             timeSynced: timeSynced,
             romanization: romanization,
@@ -1570,6 +1610,9 @@ class NeteaseLyricsRepository: LyricsRepository {
             languageCode: languageCode,
             officialRomanizedLines: officialRomanizedLines
         )
+        // ★ 2026-10-24：把网易云回包里的"贡献歌词 / 贡献翻译"带给显示层
+        //（页内歌词署名第二行、自绘歌词页页脚）。
+        dto.providerContributors = contributors(from: rawLyrics)
 
         writeDebugLog("[NetEase] Synced lyrics — \(lines.count) line(s)")
         // 缓存**原始** dto；时间轴偏移只在返回时施加（见上面 cache hit 那条注释）。

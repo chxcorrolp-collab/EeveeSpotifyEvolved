@@ -236,6 +236,29 @@ extension NowPlayingLyricsPlate {
         return true
     }
 
+    /// 关歌词的第一段：**只把容器淡出到 0**，拆容器由调用方在动画结束后做。
+    ///
+    /// ★ 2026-10-24（用户：「从歌词页面到全溶封面的过渡不是很好」）：
+    ///   原来收起歌词的第一帧就 `unmountLyricsOnly()`（`removeFromSuperview`）——
+    ///   歌词一帧消失，而封面还要长 0.36s，中间那块直接空掉，看着就是"闪没"。
+    ///   现在它和封面长回去共用 0.30s 淡出；调用方按 `lyricsModeGeneration`
+    ///   决定动画结束后还要不要拆（快速重开时这次拆作废）。
+    static func fadeOutLyricsOnly(duration: TimeInterval, completion: @escaping () -> Void) {
+        guard let container = lastContainer, container.superview != nil else {
+            completion()
+            return
+        }
+        UIView.animate(
+            withDuration: duration,
+            delay: 0,
+            options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction]
+        ) {
+            container.alpha = 0
+        } completion: { _ in
+            completion()
+        }
+    }
+
     /// 收掉 `mountLyricsOnly` 铺的东西（不碰任何原生视图、不动 `door`）。
     static func unmountLyricsOnly() {
         // ⚠️ `NowPlayingLyricsHost` 本身是 `@available(iOS 26.0, *)`；本文件所在的

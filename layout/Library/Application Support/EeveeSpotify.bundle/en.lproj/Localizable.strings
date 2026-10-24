@@ -53,6 +53,8 @@ spicylyrics_key_invalid_popup = "Spicy Lyrics rejected the API key. Open Setting
 // `SpicyLyricsRepository.providerCredit()` 拼出来的那一串（provider + 社区贡献者）。
 lyrics_made_by = "Made by";
 lyrics_uploaded_by = "Uploaded by";
+// ★ 2026-10-24：页内歌词署名第二行用（目前只有网易云的 transUser 会给翻译者）。
+lyrics_translated_by = "Translated by";
 lyrics_source_unknown = "source unknown";
 netease_description = "NetEase: Not recommended for users outside mainland China for now — NetEase still has unresolved problems that get in the way of normal use.";
 amll_description = "AMLL: Provides high-quality word-by-word lyrics and rich lyrics structure. Visit amll.dev for more details.";

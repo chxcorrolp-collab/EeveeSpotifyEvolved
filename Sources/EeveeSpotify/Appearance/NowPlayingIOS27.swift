@@ -222,6 +222,17 @@ enum NowPlayingIOS27 {
     /// 开合动画令牌：连点两次时后一次作废前一次的回调。
     static var lyricsModeGeneration = 0
 
+    /// ★ 2026-10-24（用户：「歌曲名字的位置放歌词来源是谁，艺人名字放歌词提供者/
+    /// 翻译提供者。而这个展示只在歌词展示的时候出现」）：
+    /// 页内歌词模式下、缩略图右边那块两行署名。`placeLyricsCredit` 每拍摆位置。
+    static weak var lyricsCreditView: NowPlayingIOS27LyricsCreditView?
+    /// 页内歌词期间被我们藏掉的原生标题行（歌名 + 艺人），以及它的原 alpha。
+    ///
+    /// 用单独一份账、**不并进 `hiddenChrome`**：那一张表在 `restore()` 里会整批还原
+    ///（会把导航条那两颗也放出来），而这一行只在歌词模式里让位。
+    static weak var lyricsHiddenTitleRow: UIView?
+    static var lyricsHiddenTitleRowAlpha: CGFloat?
+
     /// 缩略图边长 / 圆角 / 左边距 / 离安全区顶的距离。
     static let lyricsThumbSide: CGFloat = 64
     static let lyricsThumbCorner: CGFloat = 8
@@ -312,8 +323,18 @@ enum NowPlayingIOS27 {
         guard page.window != nil else { return }
         lyricsModeActive = on
         lyricsModeGeneration += 1
+        let generation = lyricsModeGeneration
         if !on {
-            NowPlayingLyricsPlate.unmountLyricsOnly()
+            // 上一向（开）的化开层如果还在，先撤掉：关的时候封面自己长回去，不再叠一张。
+            lyricsDissolveView?.removeFromSuperview()
+            lyricsDissolveView = nil
+            // ★ 2026-10-24（用户：「从歌词页面到全溶封面的过渡不是很好」）：
+            //   **不要在第一帧就把歌词抽走** —— 它和封面长回去同一段 0.30s 淡出，
+            //   淡完再拆容器。快速重开时 `generation` 对不上，这次拆作废（歌词接着淡入）。
+            NowPlayingLyricsPlate.fadeOutLyricsOnly(duration: 0.30) {
+                guard generation == lyricsModeGeneration, !lyricsModeActive else { return }
+                NowPlayingLyricsPlate.unmountLyricsOnly()
+            }
         } else {
             // ★ 2026-10-24（照片 3）：每次打开都让歌词容器从透明淡进来 —— 宿主视图
             // 第一帧的底色（深色）就不会被看成"闪一下黑底"。
@@ -324,10 +345,16 @@ enum NowPlayingIOS27 {
                 + "cover/title move, the bottom controls stay as they are"
         )
         // ★ 2026-10-24（用户：「原本的修改听歌页就有自己做底子，让封面溶进底子做过渡」）：
-        //   在缩略图/标题开始动之前，先铺一层**整幅封面**（同一张图），让它在这一段动画里
-        //   慢慢化开 → 下面露出来的就是我们自己的 field（封面色 + 模糊封面 + 暗纱）。
-        beginLyricsDissolve(entering: on, in: page)
+        //   开歌词时先铺一层**整幅封面**（同一张图），让它在这一段动画里慢慢化开
+        //   → 下面露出来的就是我们自己的 field（封面色 + 模糊封面 + 暗纱）。
+        //   ⚠️ **只在"开"这一向做**：关的那一向封面本来就会从 64pt 长回满屏，
+        //   再叠一张整幅封面淡入就成了两层同图叠加（用户说的"过渡不好"的一部分）。
+        if on {
+            beginLyricsDissolve(entering: true, in: page)
+        }
         // 只在这一拍放动画；之后每拍的重铺都是幂等的。
+        // 这一拍里 `layout` 会同时改：封面 frame、标题行 alpha、歌词署名 alpha，
+        // 三个变化共用同一个 0.36s 缓动，看起来才是一段。
         UIView.animate(
             withDuration: 0.36,
             delay: 0,
@@ -477,6 +504,9 @@ enum NowPlayingIOS27 {
         // 页内歌词容器：缩略图下沿 + 16 → 进度条上沿 − 18。它也不依赖封面壳
         //（b6b4eb2 起就是这条），封面晚到也要能看词。
         if lyricsModeActive, updateLyricsStage(in: page) { changed = true }
+        // ★ 2026-10-24：缩略图右边那块「歌词来源 / 提供者」。**不在歌词模式时也摆**
+        //   —— 收起时它要跟着同一段动画淡出（alpha 0），不能凭空消失。
+        if placeLyricsCredit(in: page) { changed = true }
 
         guard let shell = resolvedShell(in: page) else {
             // ★ 2026-10-24（照片 2）：**别在没图的时候硬留一个洞**。
@@ -1210,10 +1240,29 @@ enum NowPlayingIOS27 {
     ///
     /// 为什么不抬上去：前三轮把它抬到 `W+56`，而进度条在原生那一档 —— 中间就空出一大块
     /// （照片 161）。不搬底部的前提下，唯一自洽的做法是"纵向不动"。
+    ///
+    /// ★ 2026-10-24（用户：「歌曲名字的位置放歌词来源是谁，艺人名字放歌词提供者/
+    ///   翻译提供者。而这个展示只在歌词展示的时候出现」）：
+    ///   页内歌词模式下这一行**整行让位**（alpha 0）给缩略图右边那块
+    ///   `NowPlayingIOS27LyricsCreditView`，不再把它挪到缩略图旁边 ——
+    ///   那两块内容不能同时出现（歌名/艺人与来源/提供者是两套信息）。
     @discardableResult
     private static func placeTitleRow(in page: UIView) -> Bool {
-        guard let row = titleRowView(in: page) else { return false }
+        guard let row = titleRowView(in: page) else {
+            // 收起歌词时这一拍可能还没找到新行：把**上一行**的 alpha 先还回去，
+            // 否则它会一直停在 0（下一次进歌词再被记成"原值 0"，永远不显示）。
+            if !lyricsModeActive { restoreLyricsTitleRow() }
+            return false
+        }
         titleRow = row
+
+        if lyricsModeActive {
+            hideTitleRowForLyrics(row)
+            return false
+        }
+        // 收起歌词：把 alpha 还原（这一句通常就在 `setLyricsMode` 的动画块里，
+        // 所以和封面长回去、署名淡出的时间是同一段）。
+        restoreLyricsTitleRow()
 
         let key = ObjectIdentifier(row)
         let base: CGAffineTransform
@@ -1230,18 +1279,8 @@ enum NowPlayingIOS27 {
         }
         guard natural.width > 1, natural.height > 1 else { return false }
 
-        let dx: CGFloat
-        let dy: CGFloat
-        if lyricsModeActive {
-            // 页内歌词：标题/艺人贴到缩略图右边、与缩略图顶对齐（图 2 的关系）。
-            let thumb = lyricsThumbFrame(in: page)
-            dx = (thumb.maxX + 12 - natural.minX).rounded()
-            dy = (thumb.minY - natural.minY).rounded()
-        } else {
-            dx = (titleLeadInset - natural.minX).rounded()
-            dy = 0
-        }
-        let wanted = base.concatenating(CGAffineTransform(translationX: dx, y: dy))
+        let dx = (titleLeadInset - natural.minX).rounded()
+        let wanted = base.concatenating(CGAffineTransform(translationX: dx, y: 0))
         guard row.transform != wanted else { return false }
         row.transform = wanted
         if !didLogTitle {
@@ -1252,6 +1291,73 @@ enum NowPlayingIOS27 {
             )
         }
         return true
+    }
+
+    /// 页内歌词期间把原生标题行（歌名 + 艺人）藏起来。每拍补一次（Spotify 会写回）。
+    private static func hideTitleRowForLyrics(_ row: UIView) {
+        if lyricsHiddenTitleRow !== row {
+            restoreLyricsTitleRow()
+            lyricsHiddenTitleRow = row
+            lyricsHiddenTitleRowAlpha = row.alpha > 0.01 ? row.alpha : 1
+        }
+        if row.alpha != 0 { row.alpha = 0 }
+    }
+
+    /// 把被歌词模式藏掉的那一行按原 alpha 放回来。
+    private static func restoreLyricsTitleRow() {
+        guard let row = lyricsHiddenTitleRow else { return }
+        if let original = lyricsHiddenTitleRowAlpha, row.alpha != original {
+            row.alpha = original
+        }
+        lyricsHiddenTitleRow = nil
+        lyricsHiddenTitleRowAlpha = nil
+    }
+
+    /// 缩略图右边那块「歌词来源 / 上传者·制作者·翻译者」。
+    ///
+    /// 位置与原生标题行在页内歌词模式里原本该在的位置一致：
+    /// `x = thumb.maxX + 12`、顶边与缩略图对齐。**只在歌词模式可见**；
+    /// 收起时保留视图、alpha 归 0（下一次打开直接从 0 淡入，不用重建）。
+    @discardableResult
+    private static func placeLyricsCredit(in page: UIView) -> Bool {
+        let view: NowPlayingIOS27LyricsCreditView
+        if let existing = lyricsCreditView, existing.superview === page {
+            view = existing
+        } else {
+            lyricsCreditView?.removeFromSuperview()
+            let fresh = NowPlayingIOS27LyricsCreditView(frame: .zero)
+            fresh.alpha = 0
+            page.addSubview(fresh)
+            lyricsCreditView = fresh
+            view = fresh
+        }
+
+        let thumb = lyricsThumbFrame(in: page)
+        let x = thumb.maxX + 12
+        let frame = CGRect(
+            x: x,
+            y: thumb.minY + 1,
+            width: max(0, page.bounds.width - x - 24),
+            height: 58
+        )
+        var changed = false
+        if view.frame != frame {
+            view.frame = frame
+            changed = true
+        }
+        view.update(
+            title: NowPlayingLyricsCreditInfo.sourceName,
+            subtitle: NowPlayingLyricsCreditInfo.rolesText
+        )
+        let wanted: CGFloat = lyricsModeActive ? 1 : 0
+        if view.alpha != wanted {
+            view.alpha = wanted
+            changed = true
+        }
+        if lyricsModeActive, page.subviews.last !== view {
+            page.bringSubviewToFront(view)
+        }
+        return changed
     }
 
     // MARK: - 顶部 chrome
@@ -1350,6 +1456,10 @@ enum NowPlayingIOS27 {
         // 页内歌词先收（它不参与 `hadState` 的账，但必须先拆掉容器与化开层）。
         lyricsDissolveView?.removeFromSuperview()
         lyricsDissolveView = nil
+        // ★ 2026-10-24：歌词署名视图与被藏掉的原生标题行也要一起收，别留在回收的 cell 上。
+        lyricsCreditView?.removeFromSuperview()
+        lyricsCreditView = nil
+        restoreLyricsTitleRow()
         if lyricsModeActive {
             lyricsModeActive = false
             NowPlayingLyricsPlate.unmountLyricsOnly()
@@ -1394,6 +1504,9 @@ enum NowPlayingIOS27 {
         lyricsModeActive = false
         lyricsDissolveView?.removeFromSuperview()
         lyricsDissolveView = nil
+        lyricsCreditView?.removeFromSuperview()
+        lyricsCreditView = nil
+        restoreLyricsTitleRow()
         artworkShell = nil
         artworkHost = nil
         artworkView = nil

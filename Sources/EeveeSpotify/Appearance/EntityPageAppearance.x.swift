@@ -1753,6 +1753,10 @@ enum EntityPageAppearance {
         // ★ 2026-10-18：`⋯` 现在挂在 window 上（见 `EntityPageHeaderManager.pinMoreButton`），
         // 离开实体页/关掉外观时**不会跟着页头一起消失** ⇒ 必须在这里收走。
         EntityPageHeaderManager.removePinnedMore(reason: reason)
+        // ★ 2026-10-24：专辑页首次进入时，`concealAlbumChrome` 可能把"将来装封面"的
+        // 顶层分支整支藏掉（那时 `cover` 还是 nil）。离开 / 切页时把记下来的原值写回，
+        // 别把 hidden 状态留给下一页复用。
+        EntityPageHeaderManager.restoreAlbumWashBranches(reason: reason)
         restoreCoverRounding()
         // 状态栏还回 app 自己那一档（我们只在"这个页面的取色"这件事上有意见）。
         EntityPageStatusBar.release()

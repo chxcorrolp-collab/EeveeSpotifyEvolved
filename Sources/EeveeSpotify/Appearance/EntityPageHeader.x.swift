@@ -76,6 +76,48 @@ enum EntityPageHeaderManager {
     private static var cachedAlbumParentRow: UIView?
     private static var cachedAlbumMetadata: UIView?
     private static var albumRetryKey: UInt8 = 0
+
+    /// ★★ 2026-10-24（用户：「**专辑页首次进入可能不展示封面**」）：
+    ///
+    /// `concealAlbumChrome` 的判据是"**绕开封面那一支**"，但它靠每一拍现找 `cover`。
+    /// 首次进入时封面元素往往**比页头晚一拍**才建出来 ⇒ 那一拍 `cover == nil`，于是
+    /// 顶层那个装着"封面 + 标题"的 `ElementView` 被整支 `eeveeConceal` 掉；等封面
+    /// 随后出现在这个**已经 hidden 的分支**里，后面的每一拍只会"递归进去、不整支藏"，
+    /// **不会把分支放回来** ⇒ 封面永远不显示（日志里封面视图 frame 都在、就是看不见）。
+    ///
+    /// 这里把"整支藏掉"的原值记下来；一旦未来某一拍 `cover` 落在某个记录过的分支里，
+    /// 就把它原样还回去，再走正常的递归。
+    private final class AlbumConcealedBranch {
+        weak var view: UIView?
+        private let layerHidden: Bool
+        private let mask: CALayer?
+        private let interactive: Bool
+        private let accessibilityHidden: Bool
+
+        init(_ view: UIView) {
+            self.view = view
+            layerHidden = view.layer.isHidden
+            mask = view.layer.mask
+            interactive = view.isUserInteractionEnabled
+            accessibilityHidden = view.accessibilityElementsHidden
+        }
+
+        func restore() {
+            guard let view else { return }
+            if view.layer.isHidden != layerHidden { view.layer.isHidden = layerHidden }
+            if view.layer.mask !== mask { view.layer.mask = mask }
+            if view.isUserInteractionEnabled != interactive { view.isUserInteractionEnabled = interactive }
+            if view.accessibilityElementsHidden != accessibilityHidden {
+                view.accessibilityElementsHidden = accessibilityHidden
+            }
+        }
+    }
+
+    private static var albumConcealedBranches: [AlbumConcealedBranch] = []
+    private static let albumConcealedBranchLimit = 8
+    /// "封面还没建出来就先藏了头"只报一次 —— 下一次日志能直接确认这条竞态有没有发生。
+    private static var didLogAlbumBlindConceal = false
+
     /// 艺人页那条路（见 `applyToArtistPage`）：名字、月听众那行、照片、Follow —— 同样全走缓存。
     private static var cachedArtistName: UIView?
     private static var cachedArtistMeta: UIView?
@@ -767,6 +809,9 @@ enum EntityPageHeaderManager {
             in: header,
             cache: &cachedAlbumCover
         )
+        // ★★ 2026-10-24：封面到了 ⇒ 把"当时因为它还没建出来而被整支藏掉"的分支放回来
+        //（先于下面的 `concealAlbumChrome`，那一趟会递归进这一支、只藏非封面的兄弟）。
+        if let cover { revealAlbumBranches(containing: cover) }
 
         let headerView: EntityPageHeaderView
         if let existing = objc_getAssociatedObject(header, &entityPageHeaderKey) as? EntityPageHeaderView {
@@ -779,6 +824,13 @@ enum EntityPageHeaderManager {
             header.addSubview(headerView)
         } else if header.subviews.last !== headerView {
             header.bringSubviewToFront(headerView)
+        }
+        if cover == nil, !didLogAlbumBlindConceal {
+            didLogAlbumBlindConceal = true
+            writeDebugLog(
+                "[EntityPageHeader] album: the cover element is not built yet — concealing the"
+                    + " header now; the branch that later holds it will be restored when it arrives"
+            )
         }
         concealAlbumChrome(in: header, avoiding: cover, skipping: headerView)
 
@@ -2353,8 +2405,60 @@ enum EntityPageHeaderManager {
                     continue
                 }
             }
-            eeveeConceal(sub)
+            concealAlbumBranch(sub)
         }
+    }
+
+    /// 整支藏掉一个顶层分支，并**记下原值**（`eeveeConceal` 自己不记账）。
+    private static func concealAlbumBranch(_ view: UIView) {
+        pruneAlbumConcealedBranches()
+        if !albumConcealedBranches.contains(where: { $0.view === view }),
+           albumConcealedBranches.count < albumConcealedBranchLimit {
+            albumConcealedBranches.append(AlbumConcealedBranch(view))
+        }
+        eeveeConceal(view)
+    }
+
+    private static func pruneAlbumConcealedBranches() {
+        albumConcealedBranches.removeAll { record in
+            guard let view = record.view, view.window != nil else { return true }
+            return false
+        }
+    }
+
+    /// 封面到了之后：把"当时因为找不到封面而被整支藏掉"的分支原样放回来。
+    ///
+    /// 只有**确实包含封面**的那一支会被还原；不包含封面的分支继续留着藏（那是设计）。
+    private static func revealAlbumBranches(containing cover: UIView) {
+        guard !albumConcealedBranches.isEmpty else { return }
+        var kept: [AlbumConcealedBranch] = []
+        var restored = 0
+        for record in albumConcealedBranches {
+            guard let view = record.view, view.window != nil else { continue }
+            if cover.isDescendant(of: view) {
+                record.restore()
+                restored += 1
+            } else {
+                kept.append(record)
+            }
+        }
+        albumConcealedBranches = kept
+        guard restored > 0 else { return }
+        writeDebugLog(
+            "[EntityPageHeader] album: the cover arrived inside a branch that was concealed"
+                + " while it was missing — restored \(restored) branch(es)"
+        )
+    }
+
+    /// 离开专辑页 / 关开关：把记录过的分支全部写回。`concealAlbumChrome` 本身不做还原。
+    static func restoreAlbumWashBranches(reason: String) {
+        guard !albumConcealedBranches.isEmpty else { return }
+        let count = albumConcealedBranches.count
+        for record in albumConcealedBranches { record.restore() }
+        albumConcealedBranches.removeAll()
+        writeDebugLog(
+            "[EntityPageHeader] album: restored \(count) concealed header branch(es) (\(reason))"
+        )
     }
 
     /// ★ 2026-10-17（日志 94：`followSignals isSelected=false selectedTrait=false label="-" text=""`

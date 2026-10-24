@@ -130,15 +130,31 @@ extension NowPlayingIOS27 {
     ///
     /// 为什么不是把按钮整体 `alpha = 0`：替身要靠 `hitTest` 进它，而 `alpha <= 0.01`
     /// 的视图**参与不了命中测试**（UIKit 在 `hitTest` 第一句就返回 nil）。
+    ///
+    /// ★★ 2026-10-24（照片 1：听歌中突然**标题/进度/传输/收藏整块消失**，而底排三颗字形
+    ///   和音量还在）：这个函数原来会把**一整棵子树的所有层**都写成 `alpha = 0`。
+    ///   只要传给它的不是"那颗键"，而是一个**祖先容器**（`nearestControl` 会往上爬 6 跳），
+    ///   一次就能把 bottomStack 里所有兄弟控件一起藏掉。现在两条加固：
+    ///   ① 调用方只传**按钮自己**，不再传 `nearestControl(...)` 的祖先；
+    ///   ② 这里只藏**叶子视图**（真正的字形/文字），容器与别的 `UIControl` 只向下走、
+    ///      绝不整层按掉 —— 这样最坏也只是"图标没藏干净"，不会让一整块控件消失。
     @discardableResult
     static func hideGlyphSubtree(_ view: UIView) -> Bool {
         var changed = false
+        var hidden = 0
         var queue: [UIView] = view.subviews
         var visited = 0
-        while !queue.isEmpty, visited < 64 {
-            let sub = queue.removeFirst()
+        while !queue.isEmpty, visited < 96 {
+            let sub = queue.removeLast()
             visited += 1
-            queue.append(contentsOf: sub.subviews)
+            if !sub.subviews.isEmpty {
+                // 容器：只往下走，不按掉（按掉就是照片 1 那一整块控件消失）。
+                queue.append(contentsOf: sub.subviews)
+                continue
+            }
+            // 叶子：真正的字形/文字。`UIControl` 叶子不能按 —— `alpha = 0` 会让它
+            // 连触摸都收不到（替身还要把点击转发给它）。
+            if sub is UIControl { continue }
             let key = ObjectIdentifier(sub)
             if glyphAlphas[key] == nil {
                 glyphAlphas[key] = sub.alpha > 0.01 ? sub.alpha : 1
@@ -147,7 +163,16 @@ extension NowPlayingIOS27 {
             if sub.alpha != 0 {
                 sub.alpha = 0
                 changed = true
+                hidden += 1
             }
+        }
+        if hidden > 12, !NowPlayingIOS27.didLogWideGlyphHide {
+            NowPlayingIOS27.didLogWideGlyphHide = true
+            writeDebugLog(
+                "[\(NowPlayingIOS27.logTag)] glyph hide — \(NSStringFromClass(type(of: view)))"
+                    + " hid \(hidden) leaf view(s); if a whole section is blank, this subtree"
+                    + " is the wrong target"
+            )
         }
         return changed
     }
@@ -189,10 +214,12 @@ extension NowPlayingIOS27 {
             //   `connect` 拿到的是 **ViewHolder**（`ConnectButtonOutputSwitcherViewHolder`），
             //   而真正的 `EncoreButton` 是它的子视图。直接 `hideGlyphSubtree(viewHolder)`
             //   会把**整颗按钮**的 alpha 设成 0 —— 按钮看着没了、`sendActions` / 无障碍
-            //   也不再像一颗活着的键。这里改成：先找到最近的 `UIControl`，
-            //   只藏它**里面**的字形（按钮本体 alpha 保持 1，替身才点得动）。
-            let glyphHost = NowPlayingIOS27.nearestControl(button) ?? button
-            if hideGlyphSubtree(glyphHost) { changed = true }
+            //   也不再像一颗活着的键。现在 `hideGlyphSubtree` 只藏叶子，按钮本体留下。
+            //
+            // ★★ 2026-10-24（照片 1）：这里**只传按钮自己**。以前传的是
+            //   `nearestControl(button)`（会向上爬 6 跳），一旦爬到 footer 以上的容器，
+            //   就会把 bottomStack 里标题/进度/传输/收藏的叶子一起按掉 ⇒ 整块控件消失。
+            if hideGlyphSubtree(button) { changed = true }
         }
         // ★ 2026-10-24（用户拿 MeloX 的播放页做对照：「我感觉应该是放得下的吧」）：对，放得下 ——
         //   只是**原生那一行太靠上**：日志里它的中线是 811，而音量行（28pt）落在 785…813、

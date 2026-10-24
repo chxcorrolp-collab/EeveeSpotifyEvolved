@@ -97,6 +97,9 @@ extension NowPlayingLyricsPlate {
         }
 
         let container = ensureContainer(in: page, frame: frame)
+        // ★ 2026-10-24：容器是共用的；页内歌词那一档会把它从 alpha 0 淡进来，
+        // 老布局这一档（"歌词进播放器"）必须立即是不透明的。
+        container.alpha = 1
         applyEdgeFade(to: container)
         // ★ 2026-10-13：歌词区**底沿**那条可点署名（Spicy Lyrics 条款 §6）。必须在
         //   `ensureContainer` 之后 —— 它要把自己 `bringSubviewToFront` 到容器上面才点得到。
@@ -186,6 +189,11 @@ extension NowPlayingLyricsPlate {
         if lines.isEmpty, notice == nil { return false }
 
         let container = ensureContainer(in: page, frame: frame)
+        // ★ 2026-10-24（照片 3：从满屏封面切到歌词时闪一下黑底）：
+        // 容器是复用的，底色必须是透明（下面铺的是我们自己的 field，不是黑卡片）；
+        // 每次挂都重申一次，防止上一程留下的状态。
+        container.backgroundColor = .clear
+        if lyricsOnlyNeedsFadeIn { container.alpha = 0 }
         applyEdgeFade(to: container)
         applyNoticeLabel(notice, in: container)
 
@@ -207,6 +215,24 @@ extension NowPlayingLyricsPlate {
         }
         host.tick(seconds: WordByWordPositionResolver.shared.currentPositionSeconds())
         host.usePerFrameClockIfAvailable()
+
+        // ★ 2026-10-24（照片 3）：**第一帧不直接亮出来**。
+        //
+        // 黑底不是我们画的（容器/宿主都是 clear）—— 是 `UIHostingController` 刚挂上、
+        // SwiftUI 还没画完内容那一帧的底色。打开时从 0 淡进来，0.22s 就把那一帧盖住了；
+        // 同一程后面的每拍重铺（alpha 已经是 1）不会再闪。
+        if lyricsOnlyNeedsFadeIn {
+            lyricsOnlyNeedsFadeIn = false
+            DispatchQueue.main.async {
+                UIView.animate(
+                    withDuration: 0.22,
+                    delay: 0,
+                    options: [.curveEaseOut, .allowUserInteraction]
+                ) {
+                    container.alpha = 1
+                }
+            }
+        }
         return true
     }
 
@@ -220,6 +246,8 @@ extension NowPlayingLyricsPlate {
         }
         lastContainer?.removeFromSuperview()
         lastContainer = nil
+        // 下一次打开重新淡入（照片 3 的黑底只在"新挂宿主"那一帧出现）。
+        lyricsOnlyNeedsFadeIn = true
     }
 
     /// 全部还原：封面动画回原位后拿走、标题位移撤销、我们自己的层拿走。

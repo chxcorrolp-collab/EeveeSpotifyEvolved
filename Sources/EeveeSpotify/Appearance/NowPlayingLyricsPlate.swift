@@ -225,6 +225,11 @@ enum NowPlayingLyricsPlate {
 
     static weak var lastPage: UIView?
     static weak var lastContainer: UIView?
+    /// ★ 2026-10-24（照片 3：从满屏封面切到歌词时会闪一下黑底）：
+    /// 新挂上去的 `UIHostingController` 第一帧可能还没画出内容（宿主视图在深色底上
+    /// 看起来就是一块黑）。页内歌词每一次「打开」都从 `alpha = 0` 淡进来 0.22s，
+    /// 把那一帧盖掉；同一程里后续每拍的重铺不再动 alpha。
+    static var lyricsOnlyNeedsFadeIn = true
     /// 我们自己那份封面：**外层容器**（承载 transform 与阴影）+ **里面的 imageView**（承载圆角与裁剪）。
     ///
     /// ★ 分两层是照 pw 的 `PlayerLyrics.x`：容器**永远按"Spotify 封面那个大小与位置"布局**

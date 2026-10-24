@@ -196,6 +196,17 @@ enum NowPlayingIOS27 {
     static var didLogFrames = false
     static var didLogMissingCover = false
     static var didLogRestore = false
+    /// ★ 2026-10-24（照片 2：歌词收起后专辑图不展示）：换歌 / 收歌词那一两拍里
+    /// 封面壳与宿主会对不上。这时**不能把我们上一拍已经画上去的那张图藏掉** ——
+    /// 藏了就是一个洞（原生壳也被我们按着）。只报一次，下一次日志能看到走了这条路。
+    static var didLogArtworkHold = false
+    /// 宿主选错（某一层整页祖先里含 `npv.bottomStackView`）只报一次。
+    ///
+    /// ★ 2026-10-24（照片 1：听歌中突然标题/进度/传输/收藏全没了，而底排字形还在）：
+    /// `field` 是整页大的，它一旦被插到**控件上面那一层**，就会把整块 bottomStack 盖住。
+    static var didLogCoverHostSkip = false
+    /// "一次藏了很多叶子"只报一次（照片 1 的排查线）。
+    static var didLogWideGlyphHide = false
     /// 连续多少拍"记下的那一页不在窗口里"（见 `reconcile` 里那段：换歌转场会短暂摘掉旧页，
     /// 立刻收尾就等于把原生封面放回来 = 用户看到的那一闪）。
     static var pageMissingTicks = 0
@@ -303,6 +314,10 @@ enum NowPlayingIOS27 {
         lyricsModeGeneration += 1
         if !on {
             NowPlayingLyricsPlate.unmountLyricsOnly()
+        } else {
+            // ★ 2026-10-24（照片 3）：每次打开都让歌词容器从透明淡进来 —— 宿主视图
+            // 第一帧的底色（深色）就不会被看成"闪一下黑底"。
+            NowPlayingLyricsPlate.lyricsOnlyNeedsFadeIn = true
         }
         writeDebugLog(
             "[\(logTag)] lyrics mode \(on ? "on" : "off") — "
@@ -440,36 +455,16 @@ enum NowPlayingIOS27 {
 
     @discardableResult
     private static func layout(in page: UIView) -> Bool {
-        // 页内歌词不依赖封面（封面量不到时也要能看词），先铺它。
         var changed = false
-        if lyricsModeActive, updateLyricsStage(in: page) { changed = true }
-        guard let shell = resolvedShell(in: page) else {
-            // ★ 2026-10-24（切歌 / 进页面闪过原生大封面）：这一拍没认出"要画的那张"，
-            //   但原生封面可能正露着 ⇒ 兜底找一次、按下去。宁可这一拍是背景 field，
-            //   也不闪一张别人的大封面。
-            if let fallback = fallbackCoverShell(in: page) {
-                hideShell(fallback)
-            }
-            if !didLogMissingCover {
-                didLogMissingCover = true
-                writeDebugLog("[\(logTag)] no on-screen artwork yet — nothing to draw this tick")
-            }
-            return changed
-        }
-        didLogMissingCover = false
-        // 认出来了就先按下去（不等 `updateArtwork` 的图）—— 首次进页面时图往往比壳晚一拍，
-        // 这一拍不按，用户看到的就是"Spotify 原生大封面闪一下"。
-        hideShell(shell)
-        artworkShell = shell
-
-        changed = updateArtwork(shell, in: page)
-        if mountField(in: page) { changed = true }
-        // ★ 2026-10-24（用户：「C:\dsh\am 里不是有图片 1 么，这个先做得像吧起码」）：
-        //   图片 1 里曲名**压在封面下沿**上、进度/时间紧接其下 —— 而我们曲名在 600、
-        //   封面到 414…520 就结束 ⇒ 中间 186pt 黑。这里把**底部那一坨**（`npv.bottomStackView`，
-        //   曲名 + 进度 + 传输行 + 工具行全在里面）整体上移 55pt ⇒ 曲名落到 545，
-        //   只比封面下沿（520）低 25pt，视觉上就是"贴在封面下沿"。
-        //   ⚠️ 只写这一个 transform；必须排在各"量位置"的函数**之前**，让它们量到新位置。
+        // ★★ 2026-10-24（照片 1 / 照片 2）：**先摆不依赖封面壳的那几行**。
+        //
+        // 旧顺序是"先 resolve 封面，拿不到就 return"——而换歌 / 关歌词的头一两拍，
+        // 新的封面 cell 还没挂到页面上（`resolvedShell` 返回 nil）⇒ 标题行根本不回来、
+        // 底排也不重排（照片 2 的"歌手/艺人名字不回来"）。这几样只认控件自己的 id，
+        // 与封面无关，必须先做、而且**不管封面在不在都要做**。
+        //
+        // ⚠️ 顺序不能动：`placeBottomStack` 的 -55pt 是 `placeTitleRow` 量自然位置的
+        //    前提（标题行就长在这个 stack 里）。
         if placeBottomStack(in: page) { changed = true }
         if placeTitleRow(in: page) { changed = true }
         if placeNavChrome(in: page) { changed = true }
@@ -479,13 +474,39 @@ enum NowPlayingIOS27 {
         // 待办 T3 + T6：工具行排成 AM 的三颗（歌词 / 隔空播放 / 队列），见 `NowPlayingIOS27+Footer.swift`。
         // ⚠️ 必须排在 T2 前面：循环那颗圆钮是**按我们画的那颗队列字形**定位的。
         if placeFooter(in: page) { changed = true }
-        // 页内歌词的容器在布局开头就铺了（它不依赖封面/标题）。
-        // ★ 2026-10-24（用户：「那个自画的小切换随机播放按钮也回退」）：
-        //   `placeTransport`（藏随机/循环 + 把循环画成工具行右上角的小圆钮）**整条停用**。
-        //   现在随机 / 循环回到 Spotify 原生的传输行里 —— 左右各一颗，天然对称；
-        //   不再有"自画那颗被点、原生图标漏出来"的问题。
-        //   代码还留在 `NowPlayingIOS27+Transport.swift`，要恢复时把这一句接回来即可。
-        // if placeTransport(in: page) { changed = true }
+        // 页内歌词容器：缩略图下沿 + 16 → 进度条上沿 − 18。它也不依赖封面壳
+        //（b6b4eb2 起就是这条），封面晚到也要能看词。
+        if lyricsModeActive, updateLyricsStage(in: page) { changed = true }
+
+        guard let shell = resolvedShell(in: page) else {
+            // ★ 2026-10-24（照片 2）：**别在没图的时候硬留一个洞**。
+            // 兜底找一次原生封面：
+            //   · 我们自己已经有东西可画 ⇒ 把兜底那张按下去（避免两张同屏）；
+            //   · 我们自己什么都没画出来 ⇒ **让原生封面先露着**（宁可这一拍是原生封面，
+            //     也不要一片空）。以前这里无条件 hideShell，于是原生和我们的都被藏掉。
+            if let fallback = fallbackCoverShell(in: page) {
+                if artworkView != nil || lastArtworkImage != nil {
+                    hideShell(fallback)
+                } else {
+                    revealShell(fallback)
+                }
+            }
+            // 歌词收起时被"缩成缩略图"的那张图，壳没了也要能长回满屏。
+            if restoreArtworkWithoutShell(in: page) { changed = true }
+            if !didLogMissingCover {
+                didLogMissingCover = true
+                writeDebugLog("[\(logTag)] no on-screen artwork yet — nothing new to draw this tick")
+            }
+            return changed
+        }
+        didLogMissingCover = false
+        // 认出来了就先按下去（不等 `updateArtwork` 的图）—— 首次进页面时图往往比壳晚一拍，
+        // 这一拍不按，用户看到的就是"Spotify 原生大封面闪一下"。
+        hideShell(shell)
+        artworkShell = shell
+
+        if updateArtwork(shell, in: page) { changed = true }
+        if mountField(in: page) { changed = true }
         if !didLogFrames {
             didLogFrames = true
             logFrames(in: page)
@@ -553,7 +574,8 @@ enum NowPlayingIOS27 {
     /// 2. **挡住"挑到离屏那张"**：日志 888 里出现过 `at 399,161` 和 `at -138252,161`
     ///    （横向翻页转场中途），画进那种格子 = 屏幕上什么都没有（照片 162）。
     private static func resolvedShell(in page: UIView) -> UIView? {
-        if let shell = artworkShell, shell.window != nil, isOnScreen(shell, in: page) {
+        if let shell = artworkShell, shell.window != nil, isOnScreen(shell, in: page),
+           isNowPlayingCoverCell(shell) {
             return shell
         }
         guard let list = NowPlayingLyricsPlate.findByIdentifier(
@@ -608,11 +630,25 @@ enum NowPlayingIOS27 {
         }
 
         guard let image, let host = fullPageAncestor(of: shell, in: page) else {
-            // 有图但量不到宿主：**别把原生封面放出来**（那正是"闪一下"），先等下一拍。
-            if artworkView != nil || lastArtworkImage != nil {
+            // ★ 2026-10-24（照片 2）：**不要把上一拍画上去的那张藏起来**。
+            //
+            // 旧代码这里有一句 `artworkView?.isHidden = true`：换歌时新的 cell 还没
+            // 量到宿主，这一拍把我们的封面藏掉、原生壳又早被 `coverDidLayOut` 按成 0
+            // ⇒ 用户看到的就是"专辑图片不展示"。现在保留我们那张（旧图也是同一张专辑
+            // 的图），只把原生壳按下去；等宿主出现再换新图。
+            if artworkView == nil {
+                // 我们自己**一张都没有**：让原生封面先露着，别留洞。
+                revealShell(shell)
+            } else {
                 hideShell(shell)
+                if !didLogArtworkHold {
+                    didLogArtworkHold = true
+                    writeDebugLog(
+                        "[\(logTag)] cover host not ready — keeping the previous artwork"
+                            + " instead of hiding it (no hole)"
+                    )
+                }
             }
-            if let view = artworkView { view.isHidden = true }
             return false
         }
 
@@ -711,6 +747,48 @@ enum NowPlayingIOS27 {
         if updateTopScrim(in: host, page: page) { changed = true }
         // 我们的封面在原生那张**上面**（同一个 cell 里），原生那张必须按下去。
         hideShell(shell)
+        return changed
+    }
+
+    /// 没有封面壳（换歌转场 / 新 cell 还没挂上）时，把**已经画出来的那张**从缩略图长回满屏。
+    ///
+    /// ★ 2026-10-24（照片 2：点歌词返回全溶封面后专辑图不展示）：`updateArtwork` 需要
+    /// `fullPageAncestor(of: shell)` 才肯改 frame；壳量不到时它整条跳过 ⇒ 关掉歌词之后
+    /// 我们的图还停在 64pt 缩略图（或者被藏掉）。这条只用**已经记下来的宿主**，不碰原生视图。
+    @discardableResult
+    private static func restoreArtworkWithoutShell(in page: UIView) -> Bool {
+        guard !lyricsModeActive,
+              let view = artworkView, let host = artworkHost,
+              view.superview === host, host.window != nil,
+              host.isDescendant(of: page),
+              view.image != nil else { return false }
+        let coverWidth = page.bounds.width
+        let coverHeight = max(
+            coverWidth,
+            min(page.bounds.height * Self.artworkHeightRatio, coverWidth * Self.artworkMaxAspect)
+        )
+        let wanted = host.convert(
+            CGRect(x: 0, y: 0, width: coverWidth, height: coverHeight),
+            from: page
+        )
+        var changed = false
+        if view.isHidden {
+            view.isHidden = false
+            changed = true
+        }
+        if view.layer.cornerRadius != 0 {
+            view.layer.cornerRadius = 0
+            changed = true
+        }
+        if view.clipsToBounds {
+            view.clipsToBounds = false
+            changed = true
+        }
+        if view.frame != wanted {
+            view.frame = wanted
+            changed = true
+        }
+        if view.layer.mask == nil, applyArtworkFadeMask(to: view) { changed = true }
         return changed
     }
 
@@ -817,6 +895,22 @@ enum NowPlayingIOS27 {
     private static func mountField(in page: UIView) -> Bool {
         guard let shell = artworkShell,
               let host = fullPageAncestor(of: shell, in: page) else { return false }
+        // ★ 2026-10-24（照片 1）：**最后一道闸** —— 只要宿主在绘制顺序上位于
+        //   `npv.bottomStackView` 之上（或者把它包在里面），这块整页大的 field 就一定会
+        //   盖住标题/进度/传输/收藏。宁可这一拍不铺底，也不能让控件消失；
+        //   下一拍 Spotify 把层级调回来（或换歌重建完成）就会自动铺上。
+        guard !hostWouldCoverControls(host), !hostIsAboveControls(host) else {
+            if !didLogCoverHostSkip {
+                didLogCoverHostSkip = true
+                writeDebugLog(
+                    "[\(logTag)] field: refused a host drawn above npv.bottomStackView"
+                        + " — the field would cover the title/progress/transport"
+                )
+            }
+            // 如果之前已经铺上去了（层级是后来才翻上去的），必须撤掉 —— 留着就是照片 1。
+            if fieldHost != nil { teardownField() }
+            return false
+        }
 
         // ★ 2026-10-24（用户：「有的歌封面好像超出边界、有的像被往下拉了」）：
         //   wrapper 之前用的是 `page.bounds`——那是**页面坐标**，而它被加到 `host`（cell）里；
@@ -1243,6 +1337,12 @@ enum NowPlayingIOS27 {
         }
     }
 
+    /// 只把**这一张**原生壳按原值放回来（`revealShells` 是整批）。
+    private static func revealShell(_ shell: UIView) {
+        guard let original = shellAlphas[ObjectIdentifier(shell)] else { return }
+        if shell.alpha != original { shell.alpha = original }
+    }
+
     // MARK: - 收尾
 
     /// 关开关 / 离开页面：把写过的每一处写回去，拆掉我们自己的视图。
@@ -1328,6 +1428,9 @@ enum NowPlayingIOS27 {
         didLogFrames = false
         didLogMissingCover = false
         didLogRestore = false
+        didLogArtworkHold = false
+        didLogCoverHostSkip = false
+        didLogWideGlyphHide = false
         clearProgressState()
         clearTransportState()
         clearFooterState()
@@ -1414,18 +1517,90 @@ enum NowPlayingIOS27 {
     }
 
     /// 封面所在的**整页**祖先（contentlayer 的 cell，414×896）。
+    ///
+    /// ★ 2026-10-24（照片 1：听歌中突然标题/进度/传输/收藏全没了，而底排字形还在）：
+    ///   整页大的祖先**不止一个** —— 换歌 / cell 复用时，第一张 414×896 的祖先有可能
+    ///   是**控件上面那一层**。我们的 field 是整页大的，插进那一层就会把
+    ///   `npv.bottomStackView` 整块盖住（缩略图还在，因为它在 field 上面）。
+    ///   所以：整页祖先里**跳过任何包含 bottomStack 的**，只认封面自己那一格；
+    ///   全都不合适时才退回老行为（至少封面还在）。
     private static func fullPageAncestor(of view: UIView, in page: UIView) -> UIView? {
         var current = view.superview
+        var fallback: UIView?
         var visited = 0
         while let candidate = current, candidate !== page, visited < 12 {
             visited += 1
             if candidate.bounds.width >= page.bounds.width - 1,
                candidate.bounds.height >= page.bounds.height - 1 {
-                return candidate
+                if !hostWouldCoverControls(candidate) {
+                    return candidate
+                }
+                if fallback == nil {
+                    fallback = candidate
+                    if !didLogCoverHostSkip {
+                        didLogCoverHostSkip = true
+                        writeDebugLog(
+                            "[\(logTag)] cover host: skipped a full-page ancestor that holds"
+                                + " npv.bottomStackView (its field would cover the controls)"
+                        )
+                    }
+                }
             }
             current = candidate.superview
         }
-        return nil
+        return fallback
+    }
+
+    /// 这个祖先是不是**把原生控件也包在里面**（它就是控件上面那一层）。
+    ///
+    /// 用 `isDescendant(of:)` 而不是按 id 全树 BFS：每拍都要问，成本必须是一个深度读。
+    private static func hostWouldCoverControls(_ host: UIView) -> Bool {
+        guard let stack = controlsStackForComparison(), stack.window != nil else { return false }
+        return stack.isDescendant(of: host)
+    }
+
+    /// 宿主的**绘制顺序**是不是在 `npv.bottomStackView` 之上。
+    ///
+    /// ★ 2026-10-24（照片 1）：`hostWouldCoverControls` 只查"宿主是不是把控件包在里面"；
+    ///   还有一种更隐蔽的情况 —— 宿主与控件是**兄弟层级**，而宿主那一支被 Spotify
+    ///   提到了前面（换歌 / 打开歌词时重建 contentlayer 就会这样）。那时
+    ///   `stack.isDescendant(of: host)` 是假，但整页大的 field 照样盖住控件。
+    ///   这里按"从根到该视图的 subview 下标"比较两边的绘制顺序。
+    private static func hostIsAboveControls(_ host: UIView) -> Bool {
+        guard let stack = controlsStackForComparison(), let window = stack.window,
+              host.window === window else { return false }
+        if stack.isDescendant(of: host) { return true }
+        let hostPath = subviewPath(of: host)
+        let stackPath = subviewPath(of: stack)
+        guard !hostPath.isEmpty, !stackPath.isEmpty else { return false }
+        let count = min(hostPath.count, stackPath.count)
+        var i = 0
+        while i < count, hostPath[i] == stackPath[i] { i += 1 }
+        // 一条是另一条的前缀：`host` 是控件的祖先（控件在 host 里面）⇒ 盖住；
+        // 反过来（host 在控件里面）不可能、也不该判成盖住。
+        if i == count { return hostPath.count <= stackPath.count }
+        return hostPath[i] > stackPath[i]
+    }
+
+    /// 从根到 `view` 每一层的 subview 下标。
+    private static func subviewPath(of view: UIView) -> [Int] {
+        var path: [Int] = []
+        var node = view
+        while let parent = node.superview {
+            path.append(parent.subviews.firstIndex(of: node) ?? 0)
+            node = parent
+        }
+        return Array(path.reversed())
+    }
+
+    /// `bottomStack`（可能还没被 `placeBottomStack` 记下来）。
+    private static func controlsStackForComparison() -> UIView? {
+        if let stack = bottomStack { return stack }
+        guard let page = lastPage else { return nil }
+        return NowPlayingLyricsPlate.findByIdentifier(
+            NowPlayingLyricsPlate.bottomStackIdentifier,
+            in: page
+        )
     }
 
     /// 一次性把各行的真实坐标打出来（排查 / 下一轮排版靠它）。

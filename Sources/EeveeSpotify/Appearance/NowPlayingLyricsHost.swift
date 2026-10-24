@@ -94,6 +94,11 @@ final class NowPlayingLyricsHost {
         hosting.view.accessibilityIdentifier = "eevee-npv-lyrics"
 
         container.addSubview(hosting.view)
+        // ★ 2026-10-24（照片 3：切歌词会闪一下黑底）：**加进容器之后再重申一次**。
+        // 宿主视图在第一次布局前偶尔会把底色写成系统的不透明底（深色模式下就是一块黑），
+        // 只设一次不够；`isOpaque = false` 一起写死，`alpha` 淡入才盖得住那一帧。
+        hosting.view.backgroundColor = UIColor.clear
+        hosting.view.isOpaque = false
         NSLayoutConstraint.activate([
             hosting.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             hosting.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),

@@ -63,6 +63,42 @@ enum LyricsSource: Int, CaseIterable, CustomStringConvertible {
     }
     }
 
+    /// 歌词偏移的**存储键**（`LyricsTimingOffset` 用，2026-10-24 起）。
+    ///
+    /// 为什么不直接用 `description`：那一串是**展示名**，`multiLevel` 那一项还是
+    /// 本地化串（`ngzhwm_multi_level_fallback.localized`）—— 用户换一次语言，
+    /// 已保存的偏移就会全部对不上号。这里给每个源一个写死的英文标识，只进存储、不进 UI。
+    var offsetStorageKey: String {
+        switch self {
+        case .genius: return "genius"
+        case .lrclib: return "lrclib"
+        case .musixmatch: return "musixmatch"
+        case .petit: return "petit"
+        case .notReplaced: return "spotify"
+        case .spicy: return "spicy"
+        case .netease: return "netease"
+        case .multiLevel: return "multiLevel"
+        case .amllTtml: return "amll"
+        case .appleMusicOfficialTtml: return "appleMusic"
+        }
+    }
+
+    /// 从 `offsetStorageKey` 反查（读已保存的偏移时用）。认不出就是脏数据 ⇒ nil。
+    init?(offsetStorageKey key: String) {
+        switch key {
+        case "genius": self = .genius
+        case "lrclib": self = .lrclib
+        case "musixmatch": self = .musixmatch
+        case "petit": self = .petit
+        case "spotify": self = .notReplaced
+        case "spicy": self = .spicy
+        case "netease": self = .netease
+        case "multiLevel": self = .multiLevel
+        case "amll": self = .amllTtml
+        case "appleMusic": self = .appleMusicOfficialTtml
+        default: return nil
+        }
+    }
     
     var isReplacingLyrics: Bool { self != .notReplaced }
     

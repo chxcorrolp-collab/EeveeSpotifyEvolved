@@ -304,14 +304,15 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
 
             if let dto = resultDto {
                 writeDebugLog("[Lyrics] \(source.description) returned \(dto.lines.count) line(s)")
-                storeLyricsDto(dto, source: source)
+                // 偏移同样在这里施加（与 `makeLyrics` 同一条口径），并用返回的那一份造 payload。
+                let shifted = storeLyricsDto(dto, source: source)
                 lyricsState.isEmpty = dto.lines.isEmpty
                 lyricsState.wasRomanized = dto.romanization == .romanized
                     || dto.romanization == .canBeRomanized
                 lyricsState.loadedSuccessfully = true
 
                 return Lyrics.with {
-                    $0.data = dto.toSpotifyLyricsData(
+                    $0.data = shifted.toSpotifyLyricsData(
                         // `providedBy` 现在优先用 dto 的 `providerCredit`（含 Spicy Lyrics 的
                         // 社区贡献者）；这里传的源名只是两者都空时的兜底。
                         source: source.description,
@@ -771,16 +772,22 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
     // `unavailableLyricsBytes` 是文件作用域函数（见本文件 `getLyricsDataForCurrentTrack` 上方）：
     // 调用方是 URLSession 的两个钩子，属"这次响应交什么字节"的纯数据问题。
 
-    /// 把 dto 落到全局状态上（**唯一**写入口）。
+    /// 把 dto 落到全局状态上（**唯一**写入口），返回**已经加上时间轴偏移**的那一份。
     ///
-    /// 两件事必须一起做，而且是同一个顺序：
+    /// 三件事必须一起做，而且是同一个顺序：
     ///   1. 提供者写进 dto 本身（`providerName`）并同步 `currentLyricsProvider`；
-    ///   2. `currentLyricsVersion` 自增并通知逐词 overlay 重挂。
+    ///   2. 按「这一首 + 这个源」加时间轴偏移（`LyricsTimingOffset`，Genius 不参与）；
+    ///   3. `currentLyricsVersion` 自增并通知逐词 overlay 重挂。
+    ///
+    /// ⚠️ 为什么返回 dto：注入给 Spotify 的 payload 是由**调用方**用这份 dto 现造的
+    ///    （`makeLyrics` / 多级回退那一段），如果只改 `currentLyricsDto` 而不把平移过的
+    ///    那一份交回去，原生歌词页与两个自绘 overlay 会差一个偏移量。
     ///
     /// 以前第 1 步散在 `getLyricsDataForCurrentTrack` 的**末尾**（在 dto 写完之后），
     /// 所以"旧 overlay 在 rebuild 时读到上一首的提供者"这种慢一拍是必然会发生的；
     /// 现在提供者与 dto 是同一时刻写下的，不可能错配。
-    private func storeLyricsDto(_ dto: LyricsDto, source: LyricsSource) {
+    @discardableResult
+    private func storeLyricsDto(_ dto: LyricsDto, source: LyricsSource) -> LyricsDto {
         var dto = dto
         // ★ 2026-10-11（用户）：「这个就不需要写 eveespotify 的水印了」——只留**源名**。
         //   这一串有两个去处：① 我们自己画的页脚（`逐词歌词提供者：…`）；
@@ -821,23 +828,41 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
         //    "每行第一个字母大写"这条显示约定（用户问的：「如果主歌词是英文这种字母，首字母
         //    或者「后面的首个字母是不是不会大写。如果不会大写，改成大写」）。
         //    见 `LyricsDto.capitalizingFirstLettersForDisplay`：它只动大小写，原文一个字不换。
-        currentLyricsDto = dto.capitalizingFirstLettersForDisplay()
-        // ★ 2026-10-11：数据到了（哪怕是纯音乐那种"空行 + isInstrumental"）⇒ 取词这一步=found。
-        currentLyricsLookupState = .found
         // 这份数据**属于哪一首**：切歌不一定伴随歌词请求（客户端命中自己的歌词存储 /
         // 离线歌词时不会有 `color-lyrics` 请求），所以"模型归属"必须显式记下来，
         // 供两层每帧比对。详见 `currentLyricsDtoTrackId` 的说明。
         //
         // 优先用"这次请求问的那首"（`lyricsLayerTrackId` 在请求入口就写好了），
         // 再退回播放器实时读到的曲目。
-        currentLyricsDtoTrackId = lyricsLayerTrackId
+        let trackId = lyricsLayerTrackId
             ?? statefulPlayer?.currentTrack()?.trackIdentifier
             ?? ""
-        // ★ 2026-10-20：网易云的时间轴偏移已经在仓库返回时加进这份 dto 了；
-        //   这里记下“已经加了多少”，运行时调偏移时只补差值（见 `reapplyNeteaseTimingOffset`）。
-        currentNeteaseOffsetAppliedMs = (source == .netease && !currentLyricsDtoTrackId.isEmpty)
-            ? NeteaseTimingOffset.offsetMs(forTrackId: currentLyricsDtoTrackId)
-            : 0
+
+        // ★★ 2026-10-24（用户：「把歌词偏移这个东西做成对全部歌词源都生效，但记录的时候，
+        //   要连带把歌词源记录，genius不用歌词偏移这个东西」）：
+        //
+        //   偏移从"网易云专属"改成**所有源共用**，并统一在这里加**一次** ——
+        //   注入给 Spotify 的 payload 与两个自绘 overlay 读的必须是同一份平移过的数据。
+        //   键是「源 + 曲目」：同一首歌换一个源就是另一份时间轴（见 `LyricsTimingOffset`）。
+        //   Genius 由 `LyricsTimingOffset.supportsOffset` 挡掉，恒为 0。
+        //
+        // ⚠️ 必须在 `currentLyricsDto` 赋值**之前**平移：下面那份是 UI 每帧在读的全局量。
+        let offsetMs = LyricsTimingOffset.offsetMs(forTrackId: trackId, source: source)
+        if offsetMs != 0 {
+            dto = dto.applyingTimingOffset(offsetMs)
+            writeDebugLog(
+                "[Lyrics] timing offset \(offsetMs)ms applied — source=\(source.description)"
+            )
+        }
+
+        currentLyricsDto = dto.capitalizingFirstLettersForDisplay()
+        // ★ 2026-10-11：数据到了（哪怕是纯音乐那种"空行 + isInstrumental"）⇒ 取词这一步=found。
+        currentLyricsLookupState = .found
+        currentLyricsDtoTrackId = trackId
+        // 这份 dto 是谁给的：运行时调偏移（`reapplyLyricsTimingOffset`）与设置页都要读它。
+        currentLyricsSource = source
+        // 已经加了多少：运行时只补差值。
+        currentLyricsTimingOffsetAppliedMs = offsetMs
         // ⚠️ 提供者要在**版本号自增之前**写好：观察者（两个 overlay 层）都是
         // 盯着版本号决定要不要重建的，版本一变它们就会立刻读 `currentLyricsProvider`。
         currentLyricsProvider = dto.providerName
@@ -854,6 +879,9 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
         onMainThreadSync {
             WordByWordHost.shared.refreshForCurrentLyrics()
         }
+
+        // 交回**平移过**的那一份：调用方拿它造注入 payload。
+        return dto
     }
 
     /// 上一次**已经装上/清空**的逐词层对应的曲目 id（切歌信号，见调用点）。
@@ -887,7 +915,8 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
         // 模型归属也要一起清：留着它会让"这份数据属于哪一首"永远指向上一首。
         currentLyricsDtoTrackId = ""
         currentLyricsProvider = ""
-        currentNeteaseOffsetAppliedMs = 0
+        currentLyricsSource = nil
+        currentLyricsTimingOffsetAppliedMs = 0
         // 署名两样也要一起清：留着会让"这首歌没有我们的词"时页面上还挂着上一首的贡献者。
         currentLyricsProviderURL = nil
         currentLyricsContributors = []
@@ -914,10 +943,12 @@ private func loadCustomLyricsForCurrentTrack() throws -> Lyrics {
             || dto.romanization == .canBeRomanized
         lyricsState.loadedSuccessfully = true
 
-        storeLyricsDto(dto, source: source)
+        // ★ 2026-10-24：偏移在这里施加，返回值是**平移过**的那一份 —— 注入 payload
+        //   必须用它，否则原生歌词页会比自绘层差一个偏移量。
+        let shifted = storeLyricsDto(dto, source: source)
 
         return Lyrics.with {
-            $0.data = dto.toSpotifyLyricsData(
+            $0.data = shifted.toSpotifyLyricsData(
                 // 同上：`providedBy` 优先用 dto 的 `providerCredit`，源名只是兜底。
                 source: source.description,
                 useInstrumentalPlaceholder: source != .genius
@@ -1174,24 +1205,32 @@ func getLyricsDataForCurrentTrack(_ originalPath: String, originalLyrics: Lyrics
     return try lyrics.serializedBytes()
 }
 
-/// 改完网易云时间轴偏移后，把**当前已经显示**的歌词按差值平移，并通知观察者重挂。
+/// 改完歌词偏移后，把**当前已经显示**的歌词按差值平移，并通知观察者重挂。
 ///
-/// - 只对「当前这份歌词实际来自网易云」生效；别的源不动。
+/// - 对**当前这份歌词实际来自的那个源**生效（Genius 除外：它压根没有偏移）。
 /// - 只改内存里的 `currentLyricsDto`，不重新联网、不动仓库缓存。
 /// - 必须在主线程：`currentLyricsDto` / `currentLyricsVersion` 是 UI 侧每拍在读的全局量。
-func reapplyNeteaseTimingOffset() {
+///
+/// ★ 2026-10-24：以前这里硬判 `currentLyricsProvider == NetEase`，偏移也只存在网易云名下；
+///   现在偏移对所有源生效，判据换成"这份 dto 是哪个源给的"（`currentLyricsSource`）——
+///   用展示名反推是不行的（"Spicy Lyrics" / "Apple Inc." 与 `LyricsSource` 不是一一对应）。
+func reapplyLyricsTimingOffset() {
     onMainThreadSync {
-        guard currentLyricsProvider == LyricsSource.netease.description else { return }
+        guard let source = currentLyricsSource,
+              LyricsTimingOffset.supportsOffset(source: source) else { return }
         guard let dto = currentLyricsDto, !currentLyricsDtoTrackId.isEmpty else { return }
 
-        let desired = NeteaseTimingOffset.offsetMs(forTrackId: currentLyricsDtoTrackId)
-        let delta = desired - currentNeteaseOffsetAppliedMs
+        let desired = LyricsTimingOffset.offsetMs(forTrackId: currentLyricsDtoTrackId, source: source)
+        let delta = desired - currentLyricsTimingOffsetAppliedMs
         guard delta != 0 else { return }
 
         currentLyricsDto = dto.applyingTimingOffset(delta)
-        currentNeteaseOffsetAppliedMs = desired
+        currentLyricsTimingOffsetAppliedMs = desired
         currentLyricsVersion += 1
         WordByWordHost.shared.refreshForCurrentLyrics()
-        writeDebugLog("[NetEase] timing offset re-applied — \(desired)ms (delta \(delta)ms)")
+        writeDebugLog(
+            "[Lyrics] timing offset re-applied — \(desired)ms"
+                + " (delta \(delta)ms, source \(source.description))"
+        )
     }
 }

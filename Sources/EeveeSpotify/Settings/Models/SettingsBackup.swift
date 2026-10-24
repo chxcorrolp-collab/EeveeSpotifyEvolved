@@ -115,9 +115,9 @@ enum SettingsBackup {
             applied += 1
         }
 
-        // 网易云偏移在内存里有一份索引（`NeteaseTimingOffset`）—— 批量写入绕过了它，
+        // 歌词偏移在内存里有一份索引（`LyricsTimingOffset`）—— 批量写入绕过了它，
         // 这里让它作废，下一次取词重新解码。
-        NeteaseTimingOffset.invalidateCache()
+        LyricsTimingOffset.invalidateCache()
 
         return Result(applied: applied, skipped: skipped, message: "ok")
     }
@@ -134,7 +134,7 @@ enum SettingsBackup {
             removed += 1
         }
 
-        if removed > 0 { NeteaseTimingOffset.invalidateCache() }
+        if removed > 0 { LyricsTimingOffset.invalidateCache() }
         return removed
     }
 
@@ -157,7 +157,7 @@ enum SettingsBackup {
             removed += 1
         }
 
-        if removed > 0 { NeteaseTimingOffset.invalidateCache() }
+        if removed > 0 { LyricsTimingOffset.invalidateCache() }
         return removed
     }
 }

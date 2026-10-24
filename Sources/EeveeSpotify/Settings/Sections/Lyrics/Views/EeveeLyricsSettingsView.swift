@@ -27,9 +27,10 @@ struct EeveeLyricsSettingsView: View {
             if viewModel.lyricsSource == .netease {
                 neteaseRomajiLocalSection()
                 neteaseHideTranslationSection()
-                // ★ 2026-10-23（用户：「设置页里面放个可点击进去的页面吧」）：单曲偏移
-                //   从本页拆出去成了独立页（`EeveeNeteaseOffsetSettingsView`），入口在
-                //   根设置页「播放与歌词」组里，与「歌词 / 听歌页 / 补丁」那些并排。
+                // ★ 2026-10-23（用户：「设置页里面放个可点击进去的页面吧」）：歌词偏移
+                //   从本页拆出去成了独立页（`EeveeLyricsOffsetSettingsView`，2026-10-24 起
+                //   对所有源生效），入口在根设置页「播放与歌词」组里，与「歌词 / 听歌页 /
+                //   补丁」那些并排。
             }
             
             if viewModel.lyricsSource != .notReplaced {

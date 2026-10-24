@@ -108,14 +108,16 @@ struct EeveeSettingsView: View {
                     imageSystemName: "quote.bubble.fill"
                 ) { AnyView(EeveeLyricsSettingsView()) }
 
-                // ★ 2026-10-23（用户：「设置页里面放个可点击进去的页面吧」）：网易云歌词偏移
+                // ★ 2026-10-23（用户：「设置页里面放个可点击进去的页面吧」）：歌词偏移
                 //   从歌词页拆成独立页 —— 它会随听歌不断长出条目，内嵌在歌词页里越拖越长。
+                // ★ 2026-10-24：从"网易云歌词偏移"扩成**所有源**（Genius 除外），
+                //   标题与副标题跟着改成通用的。
                 settingsRow(
                     color: Color(hex: "#30B0C7"),
-                    title: "netease_offset_title",
-                    subtitle: "settings_sub_netease_offset",
+                    title: "lyrics_offset_title",
+                    subtitle: "settings_sub_lyrics_offset",
                     imageSystemName: "timer"
-                ) { AnyView(EeveeNeteaseOffsetSettingsView()) }
+                ) { AnyView(EeveeLyricsOffsetSettingsView()) }
 
                 // 听歌页那一整页开关（原「扩展」页的 `now_playing_section` + 藏 chrome 三颗）。
                 settingsRow(

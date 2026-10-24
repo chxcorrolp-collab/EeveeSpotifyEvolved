@@ -911,11 +911,10 @@ class NeteaseLyricsRepository: LyricsRepository {
         let cacheKey = String(query.hashValue)
         if let cached = lyricsCache.object(forKey: cacheKey as NSString) {
             writeDebugLog("[NetEase] Cache hit")
-            // 缓存里存的是**未偏移**的那份；偏移在返回时现加 —— 设置里改了偏移后，
-            // 下一次取词（哪怕命中缓存）拿到的也是新值，不用把偏移算进缓存 key。
-            return cached.dto.applyingTimingOffset(
-                NeteaseTimingOffset.offsetMs(forTrackId: query.spotifyTrackId)
-            )
+            // ★ 2026-10-24：时间轴偏移**不在这里加**了 —— 改成所有源共用的
+            // `LyricsTimingOffset`，施加点统一在 `CustomLyrics.storeLyricsDto`。
+            // 缓存里存的永远是**未偏移**的原始 dto，所以命中缓存也拿得到最新偏移。
+            return cached.dto
         }
 
         // ── 搜索（2026-10-20 重做）────────────────────────────────────────────
@@ -1628,13 +1627,10 @@ class NeteaseLyricsRepository: LyricsRepository {
         )
 
         writeDebugLog("[NetEase] Synced lyrics — \(lines.count) line(s)")
-        // 缓存**原始** dto；时间轴偏移只在返回时施加（见上面 cache hit 那条注释）。
+        // 缓存**原始** dto：时间轴偏移统一在 `CustomLyrics.storeLyricsDto` 加
+        //（见 `LyricsTimingOffset`），这里不再碰时间戳。
         lyricsCache.setObject(CachedLyrics(dto: dto), forKey: cacheKey as NSString)
-        let offsetMs = NeteaseTimingOffset.offsetMs(forTrackId: query.spotifyTrackId)
-        if offsetMs != 0 {
-            writeDebugLog("[NetEase] timing offset \(offsetMs)ms applied (\(lines.count) line(s))")
-        }
-        return dto.applyingTimingOffset(offsetMs)
+        return dto
     }
 }
 

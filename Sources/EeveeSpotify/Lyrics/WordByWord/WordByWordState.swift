@@ -8,11 +8,18 @@ import SwiftUI
 var currentLyricsDto: LyricsDto?
 var currentLyricsVersion: Int = 0
 
-/// `currentLyricsDto` 里**已经加进去**的网易云时间轴偏移（毫秒）。
+/// `currentLyricsDto` 里**已经加进去**的歌词时间轴偏移（毫秒）。
 ///
 /// 运行时改偏移时只补差值（`新偏移 - 已经加过的`），不去重新取词；
 /// 写入点：`storeLyricsDto`（按实际来源）与 `resetWordByWordLyrics`（清零）。
-var currentNeteaseOffsetAppliedMs: Int = 0
+var currentLyricsTimingOffsetAppliedMs: Int = 0
+
+/// `currentLyricsDto` 是**哪个源**给的（`.genius` 时偏移一律不参与）。
+///
+/// 为什么不从 `currentLyricsProvider` 反推：那是**展示名**（"Spicy Lyrics" / "Apple Inc."），
+/// 与 `LyricsSource` 不是一一对应，反查会出错。这里是 dto 落地时同刻写下的真值，
+/// 供 `reapplyLyricsTimingOffset` 与设置页读取。
+var currentLyricsSource: LyricsSource?
 
 /// ★ 2026-10-11（用户提的现场）：**这一次"取词"走到哪一步了。**
 ///

@@ -140,14 +140,17 @@ extension UserDefaults {
         "artistBioSource",
         "flagOverrides",
 
-        // 网易云歌词时间轴偏移（单曲覆盖 + 显示名）：键由功能自己拥有，
-        // 见 `Lyrics/NeteaseTimingOffset.swift`。默认偏移 2026-10-23 已去掉。
-        NeteaseTimingOffset.trackOffsetsKey,
-        NeteaseTimingOffset.trackTitlesKey,
+        // 歌词时间轴偏移（按「源 + 曲目」分开存，含旧网易云键）：键由功能自己拥有，
+        // 见 `Lyrics/LyricsTimingOffset.swift`。默认偏移 2026-10-23 已去掉。
+        LyricsTimingOffset.offsetsKey,
+        LyricsTimingOffset.titlesKey,
     ]
     // 听歌页「卡片」那批（总开关 + 每张卡一个键）：键表由 `PlayerCard` / `PlayerCardsDeclutter`
     // 自己拥有 —— 加一张卡片只改那一处，这里跟着走，不会漏。
     + PlayerCardsDeclutter.allKeys
+    // 老备份里还是 `ngzhwm_neteaseOffsetByTrack` / `...TrackTitles` 这两个旧键；
+    // 不登记它们，「导入备份」会把那批网易云偏移静默丢掉（迁移只读已经落盘的旧键）。
+    + LyricsTimingOffset.legacyOwnedKeys
 
     static var musixmatchToken: String {
         get {

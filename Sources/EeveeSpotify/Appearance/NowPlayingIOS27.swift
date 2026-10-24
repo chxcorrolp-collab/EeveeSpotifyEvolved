@@ -205,6 +205,9 @@ enum NowPlayingIOS27 {
     /// **进度条 / 传输行 / 音量 / 底排三颗一颗都不动**（不借用旧布局的
     /// `NowPlayingLyricsPlate` 整套版式）。
     static var lyricsModeActive = false
+    /// 开合歌词时那一层「整幅封面慢慢化开」的过渡视图（就是用户要的
+    /// 「让封面溶进我们自己的底子」；只活 0.36s）。
+    static weak var lyricsDissolveView: UIImageView?
     /// 开合动画令牌：连点两次时后一次作废前一次的回调。
     static var lyricsModeGeneration = 0
 
@@ -305,6 +308,10 @@ enum NowPlayingIOS27 {
             "[\(logTag)] lyrics mode \(on ? "on" : "off") — "
                 + "cover/title move, the bottom controls stay as they are"
         )
+        // ★ 2026-10-24（用户：「原本的修改听歌页就有自己做底子，让封面溶进底子做过渡」）：
+        //   在缩略图/标题开始动之前，先铺一层**整幅封面**（同一张图），让它在这一段动画里
+        //   慢慢化开 → 下面露出来的就是我们自己的 field（封面色 + 模糊封面 + 暗纱）。
+        beginLyricsDissolve(entering: on, in: page)
         // 只在这一拍放动画；之后每拍的重铺都是幂等的。
         UIView.animate(
             withDuration: 0.36,
@@ -312,6 +319,51 @@ enum NowPlayingIOS27 {
             options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction]
         ) {
             _ = layout(in: page)
+        }
+    }
+
+    /// 「封面溶进底子」的那一层。
+    ///
+    /// 开：整幅封面从 alpha 1 淡到 0（下面的 field 逐渐显出来），同时 `artworkView` 缩成缩略图；
+    /// 关：反向 —— 整幅封面从 0 淡到 1，`artworkView` 从缩略图长回满屏。
+    ///
+    /// 它插在 `artworkView` **下面**、field **上面**：缩略图永远在最前，化开的只是"原来那张大图"。
+    private static func beginLyricsDissolve(entering: Bool, in page: UIView) {
+        guard let host = artworkHost, let art = artworkView, let image = art.image else { return }
+        lyricsDissolveView?.removeFromSuperview()
+        lyricsDissolveView = nil
+
+        let coverWidth = page.bounds.width
+        let coverHeight = max(
+            coverWidth,
+            min(page.bounds.height * Self.artworkHeightRatio, coverWidth * Self.artworkMaxAspect)
+        )
+        let frame = host.convert(
+            CGRect(x: 0, y: 0, width: coverWidth, height: coverHeight),
+            from: page
+        )
+        let dissolve = UIImageView(frame: frame)
+        dissolve.image = image
+        dissolve.contentMode = .scaleAspectFill
+        dissolve.clipsToBounds = true
+        dissolve.isUserInteractionEnabled = false
+        dissolve.accessibilityIdentifier = "eevee-ios27-lyrics-dissolve"
+        dissolve.alpha = entering ? 1 : 0
+        host.insertSubview(dissolve, belowSubview: art)
+        lyricsDissolveView = dissolve
+
+        UIView.animate(
+            withDuration: 0.36,
+            delay: 0,
+            options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction]
+        ) {
+            dissolve.alpha = entering ? 0 : 1
+        } completion: { _ in
+            // 连点两次时旧的那层不要误删新的：只清自己。
+            if lyricsDissolveView === dissolve {
+                dissolve.removeFromSuperview()
+                lyricsDissolveView = nil
+            }
         }
     }
 
@@ -1195,7 +1247,9 @@ enum NowPlayingIOS27 {
 
     /// 关开关 / 离开页面：把写过的每一处写回去，拆掉我们自己的视图。
     static func restore(reason: String) {
-        // 页内歌词先收（它不参与 `hadState` 的账，但必须先拆掉容器）。
+        // 页内歌词先收（它不参与 `hadState` 的账，但必须先拆掉容器与化开层）。
+        lyricsDissolveView?.removeFromSuperview()
+        lyricsDissolveView = nil
         if lyricsModeActive {
             lyricsModeActive = false
             NowPlayingLyricsPlate.unmountLyricsOnly()
@@ -1238,6 +1292,8 @@ enum NowPlayingIOS27 {
 
     private static func clearState() {
         lyricsModeActive = false
+        lyricsDissolveView?.removeFromSuperview()
+        lyricsDissolveView = nil
         artworkShell = nil
         artworkHost = nil
         artworkView = nil

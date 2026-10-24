@@ -209,14 +209,11 @@ extension NowPlayingIOS27 {
         }
 
         var changed = false
-        for button in [connect, share, queue].compactMap({ $0 }) {
-            // ★ 2026-10-24（日志 17：点雷达没反应，树里 `EncoreButton alpha=0.00`）：
-            //   `connect` 拿到的是 **ViewHolder**（`ConnectButtonOutputSwitcherViewHolder`），
-            //   而真正的 `EncoreButton` 是它的子视图。直接 `hideGlyphSubtree(viewHolder)`
-            //   会把**整颗按钮**的 alpha 设成 0 —— 按钮看着没了、`sendActions` / 无障碍
-            //   也不再像一颗活着的键。现在 `hideGlyphSubtree` 只藏叶子，按钮本体留下。
-            //
-            // ★★ 2026-10-24（照片 1）：这里**只传按钮自己**。以前传的是
+        // ★ 2026-10-24（用户：「点击 雷达 按钮没反应」）：Connect **不再藏字形**，
+        // 也不再走 `sendActions` 转发（那颗 EncoreButton 收到 sendActions 什么都不做）。
+        // 它由 `mountFooterGlyphs` 搬到中间那颗字形的位置，真触摸直接落到原生键上。
+        for button in [share, queue].compactMap({ $0 }) {
+            // ★ 2026-10-24（照片 1）：这里**只传按钮自己**。以前传的是
             //   `nearestControl(button)`（会向上爬 6 跳），一旦爬到 footer 以上的容器，
             //   就会把 bottomStack 里标题/进度/传输/收藏的叶子一起按掉 ⇒ 整块控件消失。
             if hideGlyphSubtree(button) { changed = true }
@@ -325,13 +322,26 @@ extension NowPlayingIOS27 {
             }
             // ★ 2026-10-24：舞台关着 + 找不到原生键 ⇒ **不画**（见 `footerGlyphDisabledAlpha`）。
             //   这一档叫不上“变暗”了，就是真的没有歌词入口。
-            let wantedAlpha: CGFloat = (name == "lyrics" && !footerLyricsAvailable)
-                ? footerGlyphDisabledAlpha : 1
+            //   Connect 那颗：原生键被搬到这个位置、它的字形直接露出（见下面的
+            //   `moveConnectHolder`）⇒ 我们自画的那颗要透明，否则两个图标叠在一起。
+            let wantedAlpha: CGFloat
+            if name == "lyrics" && !footerLyricsAvailable {
+                wantedAlpha = footerGlyphDisabledAlpha
+            } else if name == "connect" {
+                wantedAlpha = 0
+            } else {
+                wantedAlpha = 1
+            }
             if glyph.alpha != wantedAlpha {
                 glyph.alpha = wantedAlpha
                 changed = true
             }
         }
+
+        // ★ 2026-10-24（用户：「点击 雷达 按钮没反应」）：
+        // 把**原生 Connect 按钮**搬到中间那颗字形的位置（207），不藏它的字形、也不做转发。
+        // 真触摸会落到它身上 —— `sendActions` 对这颗 EncoreButton 是无效的（日志 18）。
+        if moveConnectHolder(connect, to: frames[1], in: page) { changed = true }
 
         // 替身：三个互不相交的 zone，各指向一颗原生键。
         let relay: NowPlayingIOS27RemoteRelayView
@@ -421,7 +431,8 @@ extension NowPlayingIOS27 {
             // iOS 26 以下没有我们自己的歌词页：退回 Spotify 那颗键。
             actionZones.append((tapRect(frames[0]), action))
         }
-        addZone(frames[1], target: connect, label: "connect")
+        // ⚠️ Connect **不在这里加替身**：它已经被搬到 frames[1]，真触摸直接落在原生键上。
+        //    替身如果还盖一块，就等于把真按钮又挡住了（而且 sendActions 对它无效）。
         addZone(frames[2], target: queue, label: "queue")
         relay.zones = zones
         relay.actionZones = actionZones
@@ -529,9 +540,51 @@ extension NowPlayingIOS27 {
             .withRenderingMode(.alwaysTemplate)
     }
 
+    /// 把**原生 Connect 按钮**搬到目标中心（`frames[1]`）。
+    ///
+    /// 用 `transform` 平移（与标题行同一条纪律）：StackView 会写 `frame`，但不会重置
+    /// `transform`；每拍按"当前 convert 到的中心 → 目标中心"补差值，所以 Spotify 再排一次
+    /// 布局也能自己跟上。**不藏它的字形**——搬过去露出来的就是原生那颗（雷达）图标，
+    /// 真触摸落在它身上，不再依赖对 EncoreButton 无效的 `sendActions`。
+    @discardableResult
+    static func moveConnectHolder(_ holder: UIView?, to frame: CGRect, in page: UIView) -> Bool {
+        guard let holder else { return false }
+        if movedConnectHolder !== holder {
+            restoreMovedConnectHolder()
+            movedConnectHolder = holder
+            movedConnectBase = (ObjectIdentifier(holder), holder.transform)
+        }
+        guard holder.window != nil,
+              let recorded = movedConnectBase,
+              recorded.0 == ObjectIdentifier(holder) else { return false }
+        let current = holder.convert(holder.bounds, to: page)
+        let dx = (frame.midX - current.midX).rounded()
+        let dy = (frame.midY - current.midY).rounded()
+        guard abs(dx) > 0.5 || abs(dy) > 0.5 else { return false }
+        let wanted = recorded.1.concatenating(CGAffineTransform(translationX: dx, y: dy))
+        guard holder.transform != wanted else { return false }
+        holder.transform = wanted
+        return true
+    }
+
+    /// 把搬过的原生 Connect 按钮写回原 transform（收尾 / 换页）。
+    static func restoreMovedConnectHolder() {
+        guard let holder = movedConnectHolder,
+              let recorded = movedConnectBase,
+              recorded.0 == ObjectIdentifier(holder) else {
+            movedConnectHolder = nil
+            movedConnectBase = nil
+            return
+        }
+        if holder.transform != recorded.1 { holder.transform = recorded.1 }
+        movedConnectHolder = nil
+        movedConnectBase = nil
+    }
+
     // MARK: - 收尾
 
     static func teardownFooter() {
+        restoreMovedConnectHolder()
         revealHiddenGlyphs()
         for glyph in footerGlyphs.allObjects {
             glyph.removeFromSuperview()
@@ -548,5 +601,7 @@ extension NowPlayingIOS27 {
         lyricsSearchTicks = 0
         didLogFooter = false
         footerLyricsAvailable = false
+        movedConnectHolder = nil
+        movedConnectBase = nil
     }
 }

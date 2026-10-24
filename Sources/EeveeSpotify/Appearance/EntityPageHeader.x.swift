@@ -117,6 +117,11 @@ enum EntityPageHeaderManager {
     private static let albumConcealedBranchLimit = 8
     /// "封面还没建出来就先藏了头"只报一次 —— 下一次日志能直接确认这条竞态有没有发生。
     private static var didLogAlbumBlindConceal = false
+    /// 封面晚到时重跑 `applyToAlbumPage` 的计数（按页面记账）。
+    ///
+    /// ★ 2026-10-24：只靠 `layoutSubviews` 不保险 —— 页头建完之后可能不再有布局回合，
+    /// 封面到了也没人把"被整支藏掉的分支"放回来。这里最多补 8 次（≈1.6s）。
+    private static var albumCoverRetryKey: UInt8 = 0
 
     /// 艺人页那条路（见 `applyToArtistPage`）：名字、月听众那行、照片、Follow —— 同样全走缓存。
     private static var cachedArtistName: UIView?
@@ -811,7 +816,13 @@ enum EntityPageHeaderManager {
         )
         // ★★ 2026-10-24：封面到了 ⇒ 把"当时因为它还没建出来而被整支藏掉"的分支放回来
         //（先于下面的 `concealAlbumChrome`，那一趟会递归进这一支、只藏非封面的兄弟）。
-        if let cover { revealAlbumBranches(containing: cover) }
+        if let cover {
+            revealAlbumBranches(containing: cover)
+            objc_setAssociatedObject(page, &albumCoverRetryKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        } else {
+            // 封面还没建出来：这一拍先藏了头，之后可能没有布局回合再叫我们 ⇒ 补几拍。
+            scheduleAlbumCoverRetry(page)
+        }
 
         let headerView: EntityPageHeaderView
         if let existing = objc_getAssociatedObject(header, &entityPageHeaderKey) as? EntityPageHeaderView {
@@ -2450,9 +2461,24 @@ enum EntityPageHeaderManager {
         )
     }
 
+    /// 封面还没建出来时补几拍 `applyToAlbumPage`，好让 `revealAlbumBranches` 有机会跑。
+    private static func scheduleAlbumCoverRetry(_ page: UIView) {
+        let tries = (objc_getAssociatedObject(page, &albumCoverRetryKey) as? NSNumber)?.intValue ?? 0
+        guard tries < 8 else { return }
+        objc_setAssociatedObject(
+            page,
+            &albumCoverRetryKey,
+            NSNumber(value: tries + 1),
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak page] in
+            guard let page, page.window != nil else { return }
+            applyToAlbumPage(page)
+        }
+    }
+
     /// 离开专辑页 / 关开关：把记录过的分支全部写回。`concealAlbumChrome` 本身不做还原。
-    static func restoreAlbumWashBranches(reason: String) {
-        guard !albumConcealedBranches.isEmpty else { return }
+    static func restoreAlbumWashBranches(reason: String) {        guard !albumConcealedBranches.isEmpty else { return }
         let count = albumConcealedBranches.count
         for record in albumConcealedBranches { record.restore() }
         albumConcealedBranches.removeAll()

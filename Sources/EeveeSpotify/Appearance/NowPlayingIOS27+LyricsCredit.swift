@@ -29,16 +29,16 @@ final class NowPlayingIOS27LyricsCreditView: UIView {
         accessibilityIdentifier = "eevee-ios27-lyrics-credit"
         isAccessibilityElement = false
 
-        // 字号/颜色照原生标题行：歌名 19~20pt semibold、艺人 13~15pt 半透明。
-        titleLabel.font = .systemFont(ofSize: 19, weight: .semibold)
-        titleLabel.textColor = UIColor.white.withAlphaComponent(0.94)
+        // 字号照歌词区底沿那行署名（不是标题行）：这是一条"来源/署名"页脚。
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.textColor = UIColor.white.withAlphaComponent(0.90)
         titleLabel.numberOfLines = 1
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.accessibilityIdentifier = "eevee-ios27-lyrics-credit-title"
 
-        subtitleLabel.font = .systemFont(ofSize: 13.5, weight: .regular)
-        subtitleLabel.textColor = UIColor.white.withAlphaComponent(0.66)
-        subtitleLabel.numberOfLines = 2
+        subtitleLabel.font = .systemFont(ofSize: 11, weight: .regular)
+        subtitleLabel.textColor = UIColor.white.withAlphaComponent(0.62)
+        subtitleLabel.numberOfLines = 1
         subtitleLabel.lineBreakMode = .byTruncatingTail
         subtitleLabel.accessibilityIdentifier = "eevee-ios27-lyrics-credit-subtitle"
 
@@ -65,14 +65,8 @@ final class NowPlayingIOS27LyricsCreditView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         let width = bounds.width
-        titleLabel.frame = CGRect(x: 0, y: 0, width: width, height: 24)
-        let subtitleTop: CGFloat = 27
-        subtitleLabel.frame = CGRect(
-            x: 0,
-            y: subtitleTop,
-            width: width,
-            height: max(0, min(bounds.height - subtitleTop, 32))
-        )
+        titleLabel.frame = CGRect(x: 0, y: 0, width: width, height: 18)
+        subtitleLabel.frame = CGRect(x: 0, y: 19, width: width, height: 16)
     }
 }
 

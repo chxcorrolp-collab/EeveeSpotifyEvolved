@@ -1807,11 +1807,65 @@ enum EntityPageAppearance {
     /// 我们接管的三页。只有 `.artist` 铺满幅；另两页照 AM 留 Spotify 自己那张封面卡片。
     private enum PageKind { case artist, album, playlist }
 
+    /// 当前**真正在前面**的那个实体页（专辑 / 歌单 / 艺人）。
+    ///
+    /// ★★ 2026-10-24（用户：「还是有可能不展示专辑页面/显示艺人头像」）：
+    ///   转场里「正在出去的艺人页」和「正在进来的专辑页」可能同时在窗口里，
+    ///   而 `firstView(in: window, …)` 是按 BFS 顺序拿**第一个** —— 它可能是**后面那一页**
+    ///   ⇒ 底色 / 满幅照片（艺人头像）被铺到专辑页上，看起来就是"专辑页变成了艺人页"。
+    ///   现在把所有候选页都收出来，只保留在屏上占得到面积的，再按 subview 顺序取**最前面**
+    ///   那一页（同一层里下标更大 = 更靠前）。
+    private static func frontEntityPage(in window: UIView) -> UIView? {
+        var candidates: [UIView] = []
+        var queue: [UIView] = [window]
+        var visited = 0
+        while !queue.isEmpty, visited < 4000 {
+            let view = queue.removeFirst()
+            visited += 1
+            if let id = view.accessibilityIdentifier, pageIdentifiers.contains(id) {
+                candidates.append(view)
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        guard !candidates.isEmpty else { return nil }
+
+        let windowRect = window.bounds
+        func visibleArea(_ page: UIView) -> CGFloat {
+            guard page.window != nil, !page.isHidden, page.alpha > 0.01 else { return 0 }
+            let rect = page.convert(page.bounds, to: window)
+            let clipped = rect.intersection(windowRect)
+            guard !clipped.isNull else { return 0 }
+            return max(0, clipped.width) * max(0, clipped.height)
+        }
+        let threshold = windowRect.width * windowRect.height * 0.15
+        let visible = candidates.filter { visibleArea($0) >= threshold }
+        let pool = visible.isEmpty ? candidates : visible
+
+        func zPath(_ view: UIView) -> [Int] {
+            var path: [Int] = []
+            var node = view
+            while let parent = node.superview {
+                path.append(parent.subviews.firstIndex(of: node) ?? 0)
+                node = parent
+            }
+            return Array(path.reversed())
+        }
+        func isFront(_ a: UIView, _ b: UIView) -> Bool {
+            let pa = zPath(a), pb = zPath(b)
+            let count = min(pa.count, pb.count)
+            var i = 0
+            while i < count, pa[i] == pb[i] { i += 1 }
+            if i == count { return pa.count > pb.count }
+            return pa[i] > pb[i]
+        }
+        return pool.max(by: { isFront($1, $0) })
+    }
+
     private static func currentTarget() -> Target? {
         guard let window = frontWindow() else { return nil }
 
         // 专辑页：root 有 id，封面元素也有 id。
-        if let page = firstView(in: window, withAnyIdentifier: pageIdentifiers) {
+        if let page = frontEntityPage(in: window) {
             let cover = firstView(in: page, withAnyIdentifier: coverIdentifiers)
             let color = cover.flatMap(coverColor)
             // ⚠️ 拿不到颜色时**不许静默**（日志 79 里专辑页一次都没出现，就是被我"悄悄 return"藏掉了）：

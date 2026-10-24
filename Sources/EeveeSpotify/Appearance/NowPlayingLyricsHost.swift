@@ -99,6 +99,16 @@ final class NowPlayingLyricsHost {
         // 只设一次不够；`isOpaque = false` 一起写死，`alpha` 淡入才盖得住那一帧。
         hosting.view.backgroundColor = UIColor.clear
         hosting.view.isOpaque = false
+        hosting.view.layer.backgroundColor = UIColor.clear.cgColor
+        // SwiftUI 第一帧布局之后可能把底色写回来 —— 下一轮再清一次（幂等）。
+        DispatchQueue.main.async { [weak hosting] in
+            guard let hosting else { return }
+            if hosting.view.backgroundColor != .clear {
+                hosting.view.backgroundColor = .clear
+            }
+            hosting.view.isOpaque = false
+            hosting.view.layer.backgroundColor = UIColor.clear.cgColor
+        }
         NSLayoutConstraint.activate([
             hosting.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             hosting.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),

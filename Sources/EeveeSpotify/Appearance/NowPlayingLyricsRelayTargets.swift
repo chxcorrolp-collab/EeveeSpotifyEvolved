@@ -55,9 +55,15 @@ final class NowPlayingLyricsContainerView: UIView {
 
     /// 底部放行多少 pt（0 = 不放行）。
     var passThroughBottom: CGFloat = 0
+    /// 额外放行的矩形（**容器坐标**）。
+    ///
+    /// ★ 2026-10-24（用户：「点击 收藏 按钮没反应」）：歌词容器伸到进度条上沿（587），
+    /// 而收藏键在 549…597 —— 上半截被容器吃了。由调用方把收藏键的框换算到这里。
+    var passThroughRects: [CGRect] = []
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard super.point(inside: point, with: event) else { return false }
+        if passThroughRects.contains(where: { $0.contains(point) }) { return false }
         guard passThroughBottom > 0 else { return true }
         return point.y < bounds.height - passThroughBottom
     }

@@ -230,6 +230,14 @@ enum NowPlayingLyricsPlate {
     /// 看起来就是一块黑）。页内歌词每一次「打开」都从 `alpha = 0` 淡进来 0.22s，
     /// 把那一帧盖掉；同一程里后续每拍的重铺不再动 alpha。
     static var lyricsOnlyNeedsFadeIn = true
+    /// 挂上宿主之后**等多久再淡入**（秒）。
+    ///
+    /// ★ 2026-10-24（照片 1 的"黑底"）：`UIHostingController` 挂上后的第一两帧里，
+    /// SwiftUI 的内容还没画完，容器那一片会是一块深色。等 0.10s 再淡入，那一帧就在
+    /// 容器完全透明的时候画完了；不会跟着淡入被看见。
+    static var lyricsOnlyFadeInDelay: TimeInterval = 0
+    /// 淡入令牌：挂上之后还没淡入就被收起 / 重挂时，作废上一次的延迟回调。
+    static var lyricsOnlyFadeGeneration = 0
     /// 我们自己那份封面：**外层容器**（承载 transform 与阴影）+ **里面的 imageView**（承载圆角与裁剪）。
     ///
     /// ★ 分两层是照 pw 的 `PlayerLyrics.x`：容器**永远按"Spotify 封面那个大小与位置"布局**

@@ -193,6 +193,7 @@ extension NowPlayingLyricsPlate {
         // 容器是复用的，底色必须是透明（下面铺的是我们自己的 field，不是黑卡片）；
         // 每次挂都重申一次，防止上一程留下的状态。
         container.backgroundColor = .clear
+        container.layer.backgroundColor = UIColor.clear.cgColor
         if lyricsOnlyNeedsFadeIn { container.alpha = 0 }
         applyEdgeFade(to: container)
         applyNoticeLabel(notice, in: container)
@@ -223,11 +224,17 @@ extension NowPlayingLyricsPlate {
         // 同一程后面的每拍重铺（alpha 已经是 1）不会再闪。
         if lyricsOnlyNeedsFadeIn {
             lyricsOnlyNeedsFadeIn = false
-            DispatchQueue.main.async {
+            lyricsOnlyFadeGeneration += 1
+            let generation = lyricsOnlyFadeGeneration
+            let delay = max(0, lyricsOnlyFadeInDelay)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                // 这一程已经收起 / 重挂了 ⇒ 这次淡入作废（否则会把正在淡出的容器又点亮）。
+                guard generation == NowPlayingLyricsPlate.lyricsOnlyFadeGeneration,
+                      container.superview != nil else { return }
                 UIView.animate(
-                    withDuration: 0.22,
+                    withDuration: 0.18,
                     delay: 0,
-                    options: [.curveEaseOut, .allowUserInteraction]
+                    options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]
                 ) {
                     container.alpha = 1
                 }
@@ -244,6 +251,8 @@ extension NowPlayingLyricsPlate {
     ///   现在它和封面长回去共用 0.30s 淡出；调用方按 `lyricsModeGeneration`
     ///   决定动画结束后还要不要拆（快速重开时这次拆作废）。
     static func fadeOutLyricsOnly(duration: TimeInterval, completion: @escaping () -> Void) {
+        // 作废"挂上之后延迟淡入"那一次回调：现在要淡出，不是淡入。
+        lyricsOnlyFadeGeneration += 1
         guard let container = lastContainer, container.superview != nil else {
             completion()
             return
@@ -261,6 +270,7 @@ extension NowPlayingLyricsPlate {
 
     /// 收掉 `mountLyricsOnly` 铺的东西（不碰任何原生视图、不动 `door`）。
     static func unmountLyricsOnly() {
+        lyricsOnlyFadeGeneration += 1
         // ⚠️ `NowPlayingLyricsHost` 本身是 `@available(iOS 26.0, *)`；本文件所在的
         // extension 没有整体标可用性，所以这里必须自己在 `#available` 里做那次 cast
         //（CI 报的就是这一句：`'NowPlayingLyricsHost' is only available in iOS 26.0 or newer`）。

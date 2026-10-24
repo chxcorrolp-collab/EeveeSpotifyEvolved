@@ -388,6 +388,9 @@ enum NowPlayingIOS27 {
 
     @discardableResult
     private static func layout(in page: UIView) -> Bool {
+        // 页内歌词不依赖封面（封面量不到时也要能看词），先铺它。
+        var changed = false
+        if lyricsModeActive, updateLyricsStage(in: page) { changed = true }
         guard let shell = resolvedShell(in: page) else {
             // ★ 2026-10-24（切歌 / 进页面闪过原生大封面）：这一拍没认出"要画的那张"，
             //   但原生封面可能正露着 ⇒ 兜底找一次、按下去。宁可这一拍是背景 field，
@@ -399,7 +402,7 @@ enum NowPlayingIOS27 {
                 didLogMissingCover = true
                 writeDebugLog("[\(logTag)] no on-screen artwork yet — nothing to draw this tick")
             }
-            return false
+            return changed
         }
         didLogMissingCover = false
         // 认出来了就先按下去（不等 `updateArtwork` 的图）—— 首次进页面时图往往比壳晚一拍，
@@ -407,7 +410,7 @@ enum NowPlayingIOS27 {
         hideShell(shell)
         artworkShell = shell
 
-        var changed = updateArtwork(shell, in: page)
+        changed = updateArtwork(shell, in: page)
         if mountField(in: page) { changed = true }
         // ★ 2026-10-24（用户：「C:\dsh\am 里不是有图片 1 么，这个先做得像吧起码」）：
         //   图片 1 里曲名**压在封面下沿**上、进度/时间紧接其下 —— 而我们曲名在 600、
@@ -424,9 +427,7 @@ enum NowPlayingIOS27 {
         // 待办 T3 + T6：工具行排成 AM 的三颗（歌词 / 隔空播放 / 队列），见 `NowPlayingIOS27+Footer.swift`。
         // ⚠️ 必须排在 T2 前面：循环那颗圆钮是**按我们画的那颗队列字形**定位的。
         if placeFooter(in: page) { changed = true }
-        // ★ 2026-10-24（页内歌词）：封面/标题由上面两条按模式摆；歌词容器在
-        //   「缩略图下沿 → 进度条上沿」之间，**只在歌词模式**铺。
-        if lyricsModeActive, updateLyricsStage(in: page) { changed = true }
+        // 页内歌词的容器在布局开头就铺了（它不依赖封面/标题）。
         // ★ 2026-10-24（用户：「那个自画的小切换随机播放按钮也回退」）：
         //   `placeTransport`（藏随机/循环 + 把循环画成工具行右上角的小圆钮）**整条停用**。
         //   现在随机 / 循环回到 Spotify 原生的传输行里 —— 左右各一颗，天然对称；

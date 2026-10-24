@@ -116,26 +116,28 @@ extension NowPlayingIOS27 {
 
     // MARK: - 找单元 / 找滑块
 
-    /// 进度条单元：先认上一次那个，再在播放页自己的子树上按 id 找（避免整页 BFS 跑到列表里）。
-    private static func progressUnit(in page: UIView) -> UIView? {
-        if let unit = progressUnitView, unit.window != nil, unit.isDescendant(of: page) {
+    /// 进度条单元：**只认当前可见页**那一个。
+    ///
+    /// ★ 2026-10-24（日志 20 的同类现场）：听歌页的 pager 里同时留着相邻页的 cell，
+    ///   旧写法先问 `SPTNowPlayingView` 再整页 BFS ⇒ 经常先撞上**离屏**那一份。
+    ///   后果不只是进度条样式没上：`lyricsStageFrame` 用它的 y 算歌词区高度，离屏
+    ///   那一份在 y≈-413 ⇒ 高度算成负数 ⇒ 歌词容器永远不铺（点了没反应）。
+    ///   这里和底排/标题一样，只接 `isControlOnPage` 的那一份。
+    static func progressUnit(in page: UIView) -> UIView? {
+        if let unit = progressUnitView, unit.window != nil,
+           isControlOnPage(unit, in: page, requireAlpha: false) {
             return unit
         }
-        var roots: [UIView] = []
-        if let player = NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingLyricsPlate.nowPlayingViewIdentifier,
-            in: page
-        ), player !== page {
-            roots.append(player)
-        }
-        roots.append(page)
-        for root in roots {
-            if let unit = NowPlayingLyricsPlate.findByIdentifier(
-                NowPlayingLyricsPlate.progressUnitIdentifier,
-                in: root
-            ) {
-                return unit
+        var queue: [UIView] = [page]
+        var visited = 0
+        while !queue.isEmpty, visited < 3000 {
+            let view = queue.removeFirst()
+            visited += 1
+            if view.accessibilityIdentifier == NowPlayingLyricsPlate.progressUnitIdentifier,
+               isControlOnPage(view, in: page, requireAlpha: false) {
+                return view
             }
+            queue.append(contentsOf: view.subviews)
         }
         return nil
     }

@@ -373,7 +373,15 @@ enum NowPlayingIOS27 {
 
     static func setLyricsMode(_ on: Bool, in page: UIView) {
         guard on != lyricsModeActive else { return }
-        guard page.window != nil else { return }
+        // ★ 2026-10-24：转场里页面会被短暂摘出窗口。以前这里静默 return ——
+        //   用户点了一下、什么都没发生，日志里也看不到。现在至少留一行。
+        guard page.window != nil else {
+            writeDebugLog(
+                "[\(logTag)] lyrics mode \(on ? "on" : "off") ignored —"
+                    + " the page is not in a window yet"
+            )
+            return
+        }
         lyricsModeActive = on
         lyricsModeGeneration += 1
         let generation = lyricsModeGeneration
@@ -652,9 +660,10 @@ enum NowPlayingIOS27 {
     /// 抽出来是因为「歌词区左下角那行来源」也要贴同一个底边（`placeLyricsCredit`），
     /// 两处各算一份的话改一个数就会错位。
     private static func lyricsStageFrame(in page: UIView) -> CGRect? {
-        guard let progress = NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingLyricsPlate.progressUnitIdentifier, in: page
-        ) else { return nil }
+        // ★ 2026-10-24：进度条也必须找**当前可见页**那一份 —— pager 里相邻页的副本
+        //   在 y≈-413，用它算出来的高度是负数 ⇒ `guard bottom - top > 80` 永远不过，
+        //   歌词容器就永远不铺（点了没反应）。见 `progressUnit(in:)`。
+        guard let progress = progressUnit(in: page) else { return nil }
         let progressRect = progress.convert(progress.bounds, to: page)
         let thumb = lyricsThumbFrame(in: page)
         let top = thumb.maxY + Self.lyricsStageTopGap
@@ -707,7 +716,9 @@ enum NowPlayingIOS27 {
         //   触摸 ⇒ 点 ✓ 被容器吃掉。这里把收藏键的框登记成"放行区"，触摸直接落到原生键上。
         if mounted,
            let container = NowPlayingLyricsPlate.lastContainer as? NowPlayingLyricsContainerView {
-            let like = NowPlayingLyricsPlate.findByIdentifier("Components.UI.AddToButton", in: page)
+            // ★ 2026-10-24：收藏键贴着右边缘（348…396），默认 20% 闸门会把它筛掉；
+            //   pager 里还有相邻页的副本 ⇒ 用 visibleView（margin 0）只认当前页那一颗。
+            let like = visibleView(identifier: "Components.UI.AddToButton", in: page)
             if let like {
                 let rect = like.convert(like.bounds, to: page).insetBy(dx: -6, dy: -6)
                 container.passThroughRects = [container.convert(rect, from: page)]
@@ -790,16 +801,49 @@ enum NowPlayingIOS27 {
     static func isControlOnPage(
         _ view: UIView,
         in page: UIView,
-        requireAlpha: Bool = true
+        requireAlpha: Bool = true,
+        horizontalMargin: CGFloat = 0.2
     ) -> Bool {
         guard view.window != nil, !view.isHidden else { return false }
         if requireAlpha, view.alpha <= 0.01 { return false }
         let rect = view.convert(view.bounds, to: page)
         guard rect.width > 1, rect.height > 1 else { return false }
-        return rect.midX > page.bounds.width * 0.2
-            && rect.midX < page.bounds.width * 0.8
+        let minX = page.bounds.width * horizontalMargin
+        let maxX = page.bounds.width * (1 - horizontalMargin)
+        return rect.midX > minX
+            && rect.midX < maxX
             && rect.midY > 0
             && rect.midY < page.bounds.height
+    }
+
+    /// 全页 BFS，只返回**当前可见页**上的那一个（pager 里相邻页的副本会被跳过）。
+    ///
+    /// `horizontalMargin` 默认 0：只要求中线落在页面横向范围内。贴边的小控件
+    /// （底排三颗、收藏 ✓）用默认的 20% 闸门会被全部筛掉 —— 见 `footerControl`。
+    static func visibleView(
+        identifier: String,
+        in page: UIView,
+        requireAlpha: Bool = false,
+        horizontalMargin: CGFloat = 0,
+        limit: Int = 3000
+    ) -> UIView? {
+        var queue: [UIView] = [page]
+        var visited = 0
+        while !queue.isEmpty, visited < limit {
+            let view = queue.removeFirst()
+            visited += 1
+            if view.accessibilityIdentifier == identifier,
+               isControlOnPage(
+                   view,
+                   in: page,
+                   requireAlpha: requireAlpha,
+                   horizontalMargin: horizontalMargin
+               ) {
+                return view
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
     }
 
     /// 把这一首**元数据里的专辑封面**取回来（异步、按曲目 id 缓存）。
@@ -1652,7 +1696,9 @@ enum NowPlayingIOS27 {
     private static func placeNavChrome(in page: UIView) -> Bool {
         var changed = false
         for identifier in [NowPlayingLyricsPlate.minimizeButtonIdentifier, navTitleIdentifier] {
-            guard let view = NowPlayingLyricsPlate.findByIdentifier(identifier, in: page) else {
+            // ★ 2026-10-24：左上那颗更小（x≈28…76，中线 52），必须 margin 0；
+            //   pager 里相邻页也有一份，按 id 直接 BFS 会藏错对象。
+            guard let view = visibleView(identifier: identifier, in: page) else {
                 continue
             }
             if hideChrome(view) { changed = true }

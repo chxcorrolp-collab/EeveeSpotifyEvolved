@@ -245,8 +245,18 @@ extension NowPlayingIOS27 {
         while !queue.isEmpty, visited < 3000 {
             let view = queue.removeFirst()
             visited += 1
+            // ★ 2026-10-24（72ee701 的回归）：三颗原生键本来就贴着页面**左右边缘**
+            //   （Connect ≈38、分享 ≈329、队列 ≈376），用默认的 20%…80% 中线判据会把
+            //   它们全部筛掉 ⇒ `placeFooter` 直接 return false，底排三颗字形 + 替身
+            //   一起消失。这里只要"中线还在页面横向范围内"即可；离屏 pager 副本在
+            //   x≈-413 / +414 之外，照样会被挡掉。
             if view.accessibilityIdentifier == identifier,
-               NowPlayingIOS27.isControlOnPage(view, in: page) {
+               NowPlayingIOS27.isControlOnPage(
+                   view,
+                   in: page,
+                   requireAlpha: false,
+                   horizontalMargin: 0
+               ) {
                 return view
             }
             queue.append(contentsOf: view.subviews)
@@ -444,7 +454,19 @@ extension NowPlayingIOS27 {
             actionZones.append((tapRect(frames[0]), {
                 if stageEnabled {
                     writeDebugLog("[\(logTag)] lyrics: opening the Folia stage")
-                    LyricsStageEntry.present()
+                    // ★ 2026-10-24（用户：「开启更炫酷的逐词歌词以及 iOS27 后，没效果」）：
+                    //   以前这里只是"发个 Task 去开窗口"，窗口建不起来就**什么都没发生**
+                    //   （没有日志、没有回退）。现在同步拿到结果：失败就开页内歌词，
+                    //   保证这颗键在任何情况下都有反应。
+                    if !LyricsStageEntry.present(from: page) {
+                        writeDebugLog(
+                            "[\(logTag)] lyrics: the stage could not open —"
+                                + " opening the in-page lyrics instead"
+                        )
+                        onMainThreadSync {
+                            NowPlayingIOS27.setLyricsMode(true, in: page)
+                        }
+                    }
                 } else {
                     writeDebugLog("[\(logTag)] lyrics: toggling the iOS 27 in-page lyrics")
                     onMainThreadSync {

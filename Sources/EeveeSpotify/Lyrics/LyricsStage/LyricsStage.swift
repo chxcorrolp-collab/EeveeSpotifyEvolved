@@ -56,11 +56,43 @@ enum LyricsStageEntry {
     }
 
     /// 打开我们自己的全屏歌词页。已打开时什么都不做（幂等）。
-    static func present() {
-        guard #available(iOS 26.0, *) else { return }
-        Task { @MainActor in
-            LyricsStage.shared.present()
+    ///
+    /// ★ 2026-10-24（用户：「开启更炫酷的逐词歌词以及 iOS27 后，没效果」）：
+    ///   **同步返回"这一下接住没有"**。以前这里是个 `Task`，窗口建不起来（没有前台
+    ///   `UIWindowScene`）时调用方拿不到结果 ⇒ 那颗歌词键按下去**什么都不发生**。
+    ///   现在把听歌页所在的 scene 传进去；失败返回 false，调用方回退到页内歌词。
+    ///
+    /// - Parameter page: 听歌页（用它所在 `UIWindowScene` 建窗口）。传 nil 时退回任意前台 scene。
+    /// - Returns: true = 窗口已经建起来（或本来就在台上）；false = 环境不满足，调用方必须回退。
+    @discardableResult
+    static func present(from page: UIView?) -> Bool {
+        guard #available(iOS 26.0, *) else { return false }
+        // 调用点（替身的手势回调 / 设置页）都在主线程。万一不是：异步派发一次，
+        // 返回 true 表示"已经受理"，不让调用方在主线程之外去碰页内歌词。
+        guard Thread.isMainThread else {
+            Task { @MainActor in
+                _ = LyricsStage.shared.present(in: nil)
+            }
+            return true
         }
+        return MainActor.assumeIsolated {
+            LyricsStage.shared.present(in: page?.window?.windowScene) {
+                // 窗口建了但 0.5s 后仍没挂上 scene ⇒ 至少把页内歌词打开，
+                // 不让用户面对一颗"点了没反应"的键。
+                guard let page, page.window != nil else { return }
+                writeDebugLog(
+                    "[\(LyricsStage.logTag)] the stage could not attach —"
+                        + " opening the iOS 27 in-page lyrics instead"
+                )
+                NowPlayingIOS27.setLyricsMode(true, in: page)
+            }
+        }
+    }
+
+    /// 兼容旧调用点：拿不到页面时退回"任意前台 scene"。
+    @discardableResult
+    static func present() -> Bool {
+        present(from: nil)
     }
 
     /// 关掉歌词页（没开着就什么都不做）。
@@ -131,21 +163,38 @@ final class LyricsStage {
     private var lastPresentationUptime: TimeInterval = 0
     private var didLogStall = false
 
+    /// 0.5s 显示校验失败时的回退（入口设置：开页内歌词）。用完即清。
+    ///
+    /// 为什么需要：窗口"建起来了"不等于"显示出来了"。只有结构上没挂上（没有 scene /
+    /// 被 hidden）才走这里 —— 否则用户点了歌词、窗口没显示、而 `isPresented` 又把
+    /// 之后每一次点击都吞掉，看起来就是"开了逐词歌词之后歌词键坏了"。
+    fileprivate var presentationFallback: (@MainActor () -> Void)?
+
     private var observers: [NSObjectProtocol] = []
 
     private init() {}
 
     // MARK: - 打开 / 关闭
 
-    func present() {
-        guard !isPresented else { return }
+    /// 打开舞台窗口。
+    ///
+    /// - Parameter scene: 听歌页所在的 `UIWindowScene`（调用方从页面拿）。nil 时退回任意前台 scene。
+    /// - Returns: 窗口有没有建起来（已经开着也算 true）。
+    @discardableResult
+    func present(in scene: UIWindowScene? = nil, onFailure: (@MainActor () -> Void)? = nil) -> Bool {
+        guard !isPresented else { return true }
+        presentationFallback = onFailure
         // ★★ 2026-10-24（用户：「歌词这部分，不能直接复用吗，iOS 27 这边只需要改动画就好了」）：
-        //   **开关不再挡"打开"** —— 这颗歌词键就是"看歌词"，任何时候都该点得开。
-        //   实验开关只决定里面用哪种观感（见 `makeRootView` 的 `usesStageTilt`）：
-        //   关 ⇒ 复用 `AppleMusicLyricsPage`（老布局那条线一直在用的那一页）；开 ⇒ Folia 3D。
-        guard let scene = Self.activeWindowScene() else {
+        //   **实验开关不挡"打开"** —— 这颗歌词键就是"看歌词"，任何时候都该点得开。
+        //   开关只决定里面用哪种观感（见 `makeRootView` 的 `usesStageTilt`）：
+        //   关 ⇒ 复用 `AppleMusicLyricsPage`；开 ⇒ Folia 3D。
+        // ★★ 2026-10-24（用户：「开启更炫酷的逐词歌词以及 iOS27 后，没效果」）：
+        //   以前这里失败只写一行日志就 return，调用方毫不知情 ⇒ 歌词键变成死键。
+        //   现在把结果交给 `LyricsStageEntry.present(from:)`，失败就回退页内歌词。
+        guard let scene = scene ?? Self.activeWindowScene() else {
+            presentationFallback = nil
             writeDebugLog("[\(Self.logTag)] present failed — no UIWindowScene in the foreground")
-            return
+            return false
         }
 
         // 先把行模型、曲名歌手、样式**全都对齐一遍**再建页面：
@@ -214,11 +263,44 @@ final class LyricsStage {
                 + " scene=\(NSStringFromClass(type(of: scene)))"
                 + " level=\(Int(stageWindow.windowLevel.rawValue))"
         )
+        // ★ 2026-10-24：下一次真机日志里要能分清"窗口建了但没显示"与"根本没建"。
+        //   0.5s 后把窗口的真实状态写一行（只此一次，不是每拍）。
+        let presentedWindow = stageWindow
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            // 这中间用户可能已经关掉又重开另一扇窗 —— 那这次校验作废，别去动新那扇。
+            guard self.window === presentedWindow else { return }
+            guard let stageWindow = self.window else { return }
+            let attached = stageWindow.windowScene != nil && !stageWindow.isHidden
+            writeDebugLog(
+                "[\(Self.logTag)] present check — hidden=\(stageWindow.isHidden ? 1 : 0)"
+                    + " alpha=\(Int((stageWindow.alpha * 100).rounded()))"
+                    + " scene=\(stageWindow.windowScene == nil ? "nil" : "ok")"
+                    + " root=\(stageWindow.rootViewController == nil ? "nil" : "ok")"
+            )
+            // 结构上没挂上（没有 scene / 被 hidden）⇒ 拆掉并把 `isPresented` 归位，
+            // 否则 `present()` 开头那句幂等判断会把之后每一次点击都吞掉。
+            guard !attached else {
+                self.presentationFallback = nil
+                return
+            }
+            let fallback = self.presentationFallback
+            self.presentationFallback = nil
+            writeDebugLog(
+                "[\(Self.logTag)] the stage window never attached —"
+                    + " tearing it down and falling back to the in-page lyrics"
+            )
+            self.dismiss()
+            fallback?()
+        }
+        return true
     }
 
     func dismiss() {
         guard isPresented else { return }
         isPresented = false
+        // 用户自己关 / 收尾：这一次的显示校验回退作废（见 `presentationFallback`）。
+        presentationFallback = nil
 
         tickView?.isPaused = true
         tickView?.onTick = nil

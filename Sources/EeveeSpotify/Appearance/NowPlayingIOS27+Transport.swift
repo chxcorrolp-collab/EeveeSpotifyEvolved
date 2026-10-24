@@ -236,8 +236,10 @@ extension NowPlayingIOS27 {
     /// 补法是**结构**：从播放键往上爬到"装得下上一首、播放、下一首的那一层"，
     /// 再把这一层里不在那三颗之列、看得见且够宽的最左/最右子视图当随机/循环。
     private static func transportRow(in page: UIView) -> (shuffle: UIView?, repeat: UIView?)? {
-        var shuffle = NowPlayingLyricsPlate.findByIdentifier(shuffleButtonIdentifier, in: page)
-        var repeatKey = NowPlayingLyricsPlate.findByIdentifier(repeatButtonIdentifier, in: page)
+        // ★ 2026-10-24：这两颗贴着页面左右边缘（中线≈40 / 374），默认 20% 闸门会把它们
+        //   全筛掉；而且 pager 里相邻页还有一份 ⇒ 用 margin 0 的 visibleView。
+        var shuffle = visibleView(identifier: shuffleButtonIdentifier, in: page, horizontalMargin: 0)
+        var repeatKey = visibleView(identifier: repeatButtonIdentifier, in: page, horizontalMargin: 0)
         if shuffle != nil, repeatKey != nil { return (shuffle, repeatKey) }
 
         if let structural = structuralTransportRow(in: page) {
@@ -250,12 +252,12 @@ extension NowPlayingIOS27 {
 
     /// 按"和上一首/播放/下一首同一排"这个结构找最外两颗。
     private static func structuralTransportRow(in page: UIView) -> (shuffle: UIView?, repeat: UIView?)? {
-        guard let play = NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingLyricsPlate.playButtonIdentifier, in: page
-        ), let previous = NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingControlsPlate.previousButtonID, in: page
-        ), let next = NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingControlsPlate.nextButtonID, in: page
+        guard let play = visibleView(
+            identifier: NowPlayingLyricsPlate.playButtonIdentifier, in: page, horizontalMargin: 0
+        ), let previous = visibleView(
+            identifier: NowPlayingControlsPlate.previousButtonID, in: page, horizontalMargin: 0
+        ), let next = visibleView(
+            identifier: NowPlayingControlsPlate.nextButtonID, in: page, horizontalMargin: 0
         ) else { return nil }
 
         var candidate: UIView? = play

@@ -516,33 +516,30 @@ enum NowPlayingIOS27 {
         //   门禁改成"真的是听歌页封面 cell 里的 tilt"（`isInsideCoverCell`），不会误伤列表封面。
         guard tilt.bounds.width >= 200 else { return }
         guard NowPlayingLyricsPlate.isInsideCoverCell(tilt) else { return }
-        // ★ 2026-10-24（日志 20）：给**相邻页**（离屏 cell）的封面壳排布局也会走到这里；
-        //   以前会把 `artworkShell` 记成那一份，之后 `artwork frame` 一直是 -372。
-        //   只接当前页可见的那一份，离屏的等它真正进页面再说。壳可能已经被我们按成
-        //   alpha 0（藏原生封面），所以这里不要求 alpha。
-        guard isControlOnPage(tilt, in: page, requireAlpha: false) else { return }
-        // ★ 2026-10-24（用户：「首次进入专辑页面可能不会加载专辑图片」）：
-        //   上面"不要求 tilt 已在本页"是为了抓换歌时**新的 contentlayer cell**；但同样一条
-        //   也会把**别的页面**里长得像封面的 tilt 按掉（专辑页页头）。这里补一道更精确的判据：
-        //   祖先里必须有 `nowplaying-contentlayer-cell` 那一格 —— 只有听歌页的封面会命中。
+        // ★ 2026-10-24（用户：「切歌会闪过 Spotify 原生大封面 的问题又回来了」）：
+        //   **先按下去，再判页面归属**。72ee701 把 `isControlOnPage` 提到了隐藏之前，
+        //   而换歌那一拍新封面 cell 还在转场里（中线可能不在 20%…80% / 还没进 `lastPage`
+        //   子树）⇒ 这一拍直接 return、原生封面整张露出来，下一拍才按掉 = 用户看到的那一闪。
+        //   隐藏本身对离屏 cell 无害（它进页面时我们照样画自己的图）；
+        //   只有"记壳 + 画图"才需要页面归属。
         guard isNowPlayingCoverCell(tilt) else { return }
-
-        // ★ 2026-10-24（用户：「进入听歌页的时候，可能会展示一小会 Spotify 原生大封面」）：
-        //   **只要这一页是我们在管，就先按下去**，不再要求"我们自己已经有一张图"——
-        //   首次进页面时那张图正是还没读到的时刻；等 `updateArtwork` 拿到图再画上去。
-        //   中间那几帧露的是我们的背景 field（不是一张别人的大封面）。
         if let cover = NowPlayingLyricsPlate.sameSizeChild(of: tilt) {
             hideShell(cover)
         }
         hideShell(tilt)
+        // 壳**这一拍就记下来**（哪怕新 cell 还在转场里、还没进 lastPage 子树）——
+        // 下一拍 `resolvedShell` 会用它继续画；`updateArtwork` 自己有可见页闸门，
+        // 所以不会重演日志 20 的 `artwork frame -372`。
+        let shell = shell(in: tilt) ?? tilt
+        artworkShell = shell
+        guard isControlOnPage(tilt, in: page, requireAlpha: false) else { return }
+
         // ★ 2026-10-24（用户：切歌后**不展示自画封面**）：换歌时新 cell 还没挂到 `lastPage`
         //   底下，原来那道 `tilt.isDescendant(of: page)` 会让这一拍直接返回 —— 而我们刚把
         //   原生 tilt 按成 alpha 0，`resolvedShell` 的 `visibleCover` 又因 alpha 0 认不出它
         //   ⇒ 接下来十几秒都"no on-screen artwork"（真机日志 16：02:53:52 → 02:54:08）。
         //   现在把壳**记下来**（`artworkShell`）并立即尝试画；`updateArtwork` 拿不到宿主也
         //   没关系，下一拍 `resolvedShell` 会直接用这个记录继续试。
-        let shell = shell(in: tilt) ?? tilt
-        artworkShell = shell
         _ = updateArtwork(shell, in: page)
         _ = updateField(in: page)
     }

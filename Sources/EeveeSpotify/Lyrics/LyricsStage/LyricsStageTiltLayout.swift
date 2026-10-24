@@ -15,21 +15,24 @@ import SwiftUI
 //      标点处断开；最后一段很短时（≤2 字）放大一点（Folia 的 short-last-line）。
 //   ② 其中一段是 tilt：斜体、字重轻、字距宽、逐字上下错开（±size/6）；
 //      其余段是 normal：常规字重、字距略宽。
-//   ③ 逐字揭示：每个字从下方 12~18pt、透明度 0 浮到 0/1，起音后 0.38s 完成；
-//      已唱的字亮到 1.0 并带两层光晕，未唱的字 0.5 透明度。
-//   ④ 逐字脉冲：这个字起音后的一个短窗里放大 12~16%（Folia 的 char pulse），
+//   ③ 逐字揭示：整段出现时每个字按 0.04s/0.05s 错开淡入（0.5s）；tilt 字从
+//      2× 错落位落到 1×，normal 字没有位移。**不分“已唱/未唱”两种颜色、也不加光晕**
+//      —— 双层光晕是 Folia Classic 的参数，Tilt 没有。
+//   ④ 逐字脉冲：这个字起音后的一个短窗里放大 15%~18%（tilt 18 / normal 15），
 //      随后快速回落 —— 这是“字在唱”的节奏，不是整行抖。
 //   ⑤ 换行：**完全由 playbackTime 手工插值**（不依赖 SwiftUI 的 transition）：
-//      新句 0.42s 从 +28pt / 0.97 倍淡入；旧句在它结束后的 0.30s 内向上 24pt 淡出。
-//      上一版靠 `.transition + .animation(value: focus)`，真机上很可能硬切；现在
-//      每一帧都能算出来，动画一定跑。
+//      新句 0.55s 从 +10pt / 0.98 倍淡入；旧句 0.45s 内淡出，只上飘 8pt。
+//      Folia 的父容器换行就是纯 opacity 0.45s（旧句不往上飞）—— 我们上一版为了躲
+//      重叠把它推到 -140pt，真机看起来就是“跳一下”，这一版改回淡出。
 //   ⑥ 译文/罗马字：译文在整句块下方（15pt、0.62），罗马字在上方（12pt、0.45）；
 //      两者都跟着整句的 enter 淡入。副唱在译文下方一行。
+//   ⑦ 段**不做横向错位**：Folia 的段是 flex-col items-center，只有 tilt 段里的字
+//      上下错开；上一版给每段 ±8/±10pt 的横向抖动，看起来是“乱”而不是“设计”。
 //
 // ⚠️ 只参考 Folia 的**效果与参数**：没有复制它的代码/注释（AGPL-3.0）。
-// ⚠️ 性能：每帧给每个字建一个 Text + 两层 shadow，开销显著；用户明确说过
-//   “不考虑性能开销”，所以先按最好看的一档写。真机若掉帧，先砍第二层 shadow，
-//   再砍逐字 scaleEffect，最后才砍逐字视图（改成整段 Text）。
+// ⚠️ 性能：每帧给每个字建一个 Text + 逐字 scaleEffect；用户明确说过
+//   “不考虑性能开销”，所以先按最好看的一档写。真机若掉帧，先砍逐字 scaleEffect，
+//   最后才把逐字 HStack 换成整段 Text。
 //
 // 数据层：字的时间来自 `LyricLine.syllables`（逐字/逐词源）；没有时就按整句时长
 // 均分给非空格字符（行级同步源）。
@@ -45,9 +48,10 @@ struct LyricsStageTiltLayout: View {
     /// 舞台口径：有译文且用户没关「隐藏译文」时才画。
     let showsTranslation: Bool
 
-    /// 换行动画：新句进入 0.42s；旧句在结束后 0.30s 内退出。
-    private static let enterDuration: Double = 0.42
-    private static let exitDuration: Double = 0.30
+    /// 换行动画：新句进入 0.55s；旧句在结束后 0.45s 内淡出（Folia 的父容器 exit 是
+    /// 纯 opacity 0.45s，**不往上飞** —— 见 §24 的对照）。
+    private static let enterDuration: Double = 0.55
+    private static let exitDuration: Double = 0.45
 
     var body: some View {
         GeometryReader { geometry in
@@ -216,11 +220,12 @@ private struct TiltLineBlock: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .opacity(outgoing ? 1 - exit : enter)
-        // 旧句向上“推出去”的幅度要够大，否则两句大字会叠在屏幕中央（0.30s 里
-        // 两套字互相糊住）。Folia 的段 exit 只有 -16pt，但它是逐段进出、且旧段
-        // 会从布局里移除；我们整块保留，所以用 -140pt 把旧句推出画面中心。
-        .offset(y: CGFloat(outgoing ? -140 * exit : (1 - enter) * 10))
-        .scaleEffect(CGFloat(outgoing ? 1 - 0.06 * exit : 0.98 + 0.02 * enter))
+        // ★ 2026-10-24（用户：「这个 folia 感觉不咋地啊」）：原来看旧句向上飞 **-140pt**，
+        //   那是为了在 ZStack 里躲开新句；但 Folia 的 Tilt 换行只是**淡出**（父容器
+        //   exit 0.45s，没有位移），真正躲不开的重叠交给交叉淡出。140pt 的大位移正是
+        //   看起来"跳一下"的来源。现在只留 8pt 的上飘，幅度与 Folia 的 -12/-16 同档。
+        .offset(y: CGFloat(outgoing ? -8 * exit : (1 - enter) * 10))
+        .scaleEffect(CGFloat(outgoing ? 1 : 0.98 + 0.02 * enter))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(line.text))
         .accessibilityHidden(outgoing)
@@ -243,9 +248,9 @@ private struct TiltSegmentRow: View {
         let tracking = TiltLayout.tracking(for: segment)
         let spacing = size * tracking
         // ★ 每一行（段）自己也有“推进”感：Folia 的段容器 initial
-        //   `{ opacity: 0, y: 24, scale: 0.92 }` → animate `{ opacity: 1, y: 0, scale: 1 }`。
-        //   段内每个字再按 0.04s 错开浮入（见 `revealProgress`），两者叠加才是 Folia 的落位。
-        let row = outgoing ? 1 : min(max((playbackTime - (segment.startTime - 0.15)) / 0.45, 0), 1)
+        //   `{ opacity: 0, y: 24, scale: 0.92 }` → animate `{ opacity: 1, y: 0, scale: 1 }`，
+        //   时长 0.6s；它的 `visibleSegmentIndex` 在段首字前 0.25s 就翻真。
+        let row = outgoing ? 1 : min(max((playbackTime - (segment.startTime - 0.25)) / 0.55, 0), 1)
 
         HStack(alignment: .center, spacing: spacing) {
             ForEach(segment.chars.indices, id: \.self) { index in
@@ -255,7 +260,10 @@ private struct TiltSegmentRow: View {
         .fixedSize()
         .frame(maxWidth: .infinity, alignment: .center)
         .opacity(row)
-        .offset(x: segment.horizontalOffset, y: CGFloat((1 - row) * 24))
+        // ★ 2026-10-24（用户：「这个 folia 感觉不咋地啊」）：这里原来按段加 ±8/±10pt 的
+        //   **横向抖动**（`segment.horizontalOffset`）。Folia 的段是 flex-col items-center，
+        //   一行都不横移；只有 tilt 段里的**字**上下错开。横向随机偏移正是"看着乱"的来源。
+        .offset(y: CGFloat((1 - row) * 24))
         .scaleEffect(CGFloat(0.92 + 0.08 * row))
     }
 
@@ -266,19 +274,21 @@ private struct TiltSegmentRow: View {
             Color.clear.frame(width: size * 0.28, height: size * 0.8)
         } else {
             let reveal = outgoing ? 1 : revealProgress(for: char, position: position)
-            let sung = outgoing || playbackTime >= char.startTime
             let pulse = outgoing ? 0 : pulseAmount(for: char)
             let tiltY: CGFloat = segment.isTilt
                 ? (char.index.isMultiple(of: 2) ? -size / 6 : size / 6)
                 : 0
-            let rise = CGFloat(1 - reveal) * (segment.isTilt ? 18 : 12)
+            // Folia 的 tilt 字是 `y: ±yOffset*2 → ±yOffset`（**朝着自己的错落位落下**），
+            // normal 字只有 opacity、没有 y。原来这里让每个字都从下方升 12/18pt，
+            // 观感是"波浪上浮"，不是 Folia 的"字落位"。
+            let settle = CGFloat(1 - reveal) * tiltY
 
             glyphText(char, size: size)
-                .foregroundColor(primaryColor.opacity(sung ? 1 : 0.5))
-                .shadow(color: sung ? primaryColor.opacity(0.50) : .clear, radius: sung ? 8 : 0)
-                .shadow(color: sung ? primaryColor.opacity(0.22) : .clear, radius: sung ? 20 : 0)
-                .scaleEffect(1 + pulse * (segment.isTilt ? 0.16 : 0.12))
-                .offset(y: tiltY + rise)
+                // Folia 的 Tilt **没有光晕**（那是 Classic 模式的参数）。原来每个字两层
+                // 白色 shadow（8/20pt）会让大字糊成一团，尤其配我们的模糊封面底。
+                .foregroundColor(primaryColor)
+                .scaleEffect(1 + pulse * (segment.isTilt ? 0.18 : 0.15))
+                .offset(y: tiltY + settle)
                 .opacity(reveal)
         }
     }
@@ -292,15 +302,13 @@ private struct TiltSegmentRow: View {
         return text
     }
 
-    /// 这个字在**这一段出现之后**的第 `position` 个：每字错开 0.04s，0.38s 完成。
-    ///
-    /// 这是 Folia Tilt 的“逐字落下”：段的出现由第一个字的起音时间决定，段内其余字
-    /// 按固定 0.04s 的 stagger 跟上；每个字**亮起来**仍然按它自己的 `startTime`（见
-    /// `sung`），所以是“先落位、后点亮”。
+    /// 这个字在**这一段出现之后**的第 `position` 个：Folia 的 delay 是 0.04s/字（tilt 0.05s），
+    /// 每个字 opacity 0→1 用 0.5s；段的 visible 在段首字前 0.25s 翻真。
     private func revealProgress(for char: TiltChar, position: Int) -> Double {
-        let segmentStart = segment.startTime - 0.10
-        let start = segmentStart + Double(position) * 0.04
-        return min(max((playbackTime - start) / 0.38, 0), 1)
+        let segmentStart = segment.startTime - 0.20
+        let stagger = segment.isTilt ? 0.05 : 0.04
+        let start = segmentStart + Double(position) * stagger
+        return min(max((playbackTime - start) / 0.5, 0), 1)
     }
 
     /// 逐字脉冲：起音后 0.2~0.9s 内按正弦放大，随后 0.25 的余晖在 ~1.2 倍时长里
@@ -355,7 +363,6 @@ private enum TiltLayout {
         let timings = characterTimings(for: line, characters: characters, lineEnd: lineEnd)
         let ranges = splitRanges(characters, seed: line.time)
         let tiltIndex = chooseTiltIndex(count: ranges.count, seed: line.time)
-        let offsets: [CGFloat] = [-8, 10, -6, 8]
 
         return ranges.enumerated().compactMap { index, range in
             guard !range.isEmpty else { return nil }
@@ -376,24 +383,36 @@ private enum TiltLayout {
                 isShortLast: shortLast,
                 startTime: start,
                 endTime: end,
-                horizontalOffset: offsets[index % offsets.count]
+                // Folia 的段是居中的（flex-col items-center），**不做横向错位**；
+                // 只有 tilt 段里的字上下错开。这里保留字段只为兼容旧调用，值恒 0。
+                horizontalOffset: 0
             )
         }
     }
 
     /// 按字数决定 1~4 段，再用行起始时间做一点伪随机抖动；尽量在空格/标点后断开。
+    ///
+    /// ★ 2026-10-24（用户：「这个 folia 感觉不咋地啊」）：行数改成 Folia 的公式
+    ///   `log(charCount+4)/log(24) × jitter(0.7…1.3) × splitProbability(0.75)`，
+    ///   阈值 0.45 / 1.05 / 1.7。原来那句 `≤10→1、≤20→2、≤34→3` 的台阶**太保守**：
+    ///   一句 10 字的词只出 1 行大字（还会因为要放下而被压到 30pt），而 Folia 会出
+    ///   2 行、每行 5 字、字号接近满档 —— 两种版式看起来完全不是一回事。
     private static func splitRanges(_ characters: [Character], seed: TimeInterval) -> [Range<Int>] {
         let count = characters.count
         guard count > 0 else { return [] }
-        let base: Int
-        switch count {
-        case ...10: base = 1
-        case ...20: base = 2
-        case ...34: base = 3
-        default: base = 4
+        let normalized = log(Double(count) + 4) / log(24.0)
+        let jitter = seedRandom(seed, 1) * 0.6 + 0.7
+        let score = normalized * jitter * 0.75
+        let target: Int
+        if score < 0.45 {
+            target = 1
+        } else if score < 1.05 {
+            target = 2
+        } else if score < 1.7 {
+            target = 3
+        } else {
+            target = 4
         }
-        let roll = seedRandom(seed, 7)
-        let target = min(4, max(1, base + (roll < 0.30 ? 1 : 0)))
         guard target > 1 else { return [0..<count] }
 
         var cuts: [Int] = []
@@ -530,12 +549,16 @@ private enum TiltLayout {
 
     // MARK: 字号
 
-    /// 这一段的字号：base 42（tilt 46、短尾 48），再按估算宽度缩到可用宽度内。
+    /// 这一段的字号：base 50（短尾 58），再按估算宽度缩到可用宽度内。
     ///
     /// 逐字 HStack 不能自动换行，也不能靠 `minimumScaleFactor`；所以用字宽估算
     /// （CJK≈1em、拉丁≈0.58em、空格 0.3em）先把字号压到放得下，再留 4% 余量。
     static func fontSize(for segment: TiltSegment, availableWidth: CGFloat) -> CGFloat {
-        let base: CGFloat = segment.isTilt ? 46 : (segment.isShortLast ? 48 : 42)
+        // Folia 在 414pt 宽屏上的字号是 **50pt**（`clamp(3.125rem, 6.875vw, 5.625rem)`
+        // 在 414 宽下取 min=50）；短尾行再乘 1.18 ⇒ 约 59。原来用 42/48 偏小，
+        // 大字撑不满一屏，是"不够 Folia"的观感来源之一。
+        // 只有放不下时才会被下面的 fitted 压下去（长句仍然能排进屏幕）。
+        let base: CGFloat = segment.isShortLast ? 58 : 50
         let characterWidth = segment.chars.reduce(CGFloat(0)) { partial, char in
             partial + emWidth(char.character)
         }
@@ -548,9 +571,9 @@ private enum TiltLayout {
         return max(14, min(base, fitted))
     }
 
-    /// 字距（em）：tilt 段宽一些，normal 段略宽（Folia 的 0.08 / 0.15em 的近似）。
+    /// 字距（em）：Folia 的 Tilt 是 0.08（normal）/ 0.15（tilt）。
     static func tracking(for segment: TiltSegment) -> CGFloat {
-        segment.isTilt ? 0.10 : 0.06
+        segment.isTilt ? 0.15 : 0.08
     }
 
     private static func emWidth(_ character: Character) -> CGFloat {

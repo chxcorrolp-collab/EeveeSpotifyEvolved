@@ -275,6 +275,13 @@ enum NowPlayingLyricsPlate {
     /// `close` / `pageDidAppear` / `pageWillLeave` / `nextCoverGeneration`），别在这里再写一遍。
     static var door = LyricsDoor()
 
+    /// ★ 2026-10-24（用户：「点击歌词之后是图 2 的样子」）：
+    /// iOS 27 听歌页里的那颗歌词键不再开独立窗口，而是**临时借用这一层**：
+    /// `NowPlayingIOS27` 先把整页交还给 Spotify（撤掉满屏封面/标题/底排），
+    /// 再由这一层按它原本的几何铺开（封面缩成 64pt 缩略图 + 歌词）。
+    /// 关掉时由 `toggle()` 通知 `NowPlayingIOS27` 重新接管。
+    static var ios27Session = false
+
     static var didLogInstall = false
     static var lastSkipReason = ""
 
@@ -291,9 +298,15 @@ enum NowPlayingLyricsPlate {
     ///
     /// ★ 2026-10-23：**新的「iOS 27 听歌页」开着时这一层自动让位**（两版布局互斥）——
     /// 它自己会把封面 / 标题行 / 理论上的歌词都拿走，两层同时生效就会打架。
+    ///
+    /// ★ 2026-10-24（用户：「点击歌词之后是图 2 的样子」）：例外是 `ios27Session` ——
+    /// 用户从 iOS 27 的歌词键进来时，`NowPlayingIOS27` 已经先把自己整层撤掉，
+    /// 这时这一层是页面上唯一的"我们自己人"，让它按原本的几何铺开。
     static var isEnabled: Bool {
-        UserDefaults.nowPlayingLayout && UserDefaults.nowPlayingLyricsInPlayer
-            && !UserDefaults.nowPlayingIOS27
+        if UserDefaults.nowPlayingIOS27 {
+            return ios27Session
+        }
+        return UserDefaults.nowPlayingLayout && UserDefaults.nowPlayingLyricsInPlayer
     }
 
 

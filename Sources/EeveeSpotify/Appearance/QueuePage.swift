@@ -62,6 +62,8 @@ enum QueuePage {
     static var didDumpTree = false
     static var didLogInstall = false
     static var lastTrackKey = ""
+    /// 已经调过 detent / 圆角 / 把手的那张卡（只调一次，别每拍重设 detent 把动画打断）。
+    static weak var styledSheet: UIViewController?
     /// 我们接管之前那张表的 `tableHeaderView`（收尾要原样放回去）。
     static weak var originalTableHeader: UIView?
     /// 卡片的列表（弱引用；卡片重建就自己掉）。
@@ -84,6 +86,11 @@ enum QueuePage {
             if sheetView != nil || headerView != nil { teardown(reason: "sheet dismissed") }
             return false
         }
+        // ★ 2026-10-24（用户：「还是弹窗并且没做好」）：先把那张卡从"半屏弹窗"推到
+        //   **整页高度**（大 detent、无把手、无圆角、背景不压暗）。真正的 MeloX 页
+        //   （顶部当前歌 + 控件 + 队列 + 底部播放控制）要等下一轮拿到队列树再做；
+        //   这一步只改呈现方式，不动卡里的任何原生控件。
+        styleSheet(sheet)
         if sheetView !== root {
             // 换了一张卡（上一张的弱引用还在）⇒ 先把旧的拆干净。
             teardown(reason: "new sheet")
@@ -131,6 +138,25 @@ enum QueuePage {
     }
 
     // MARK: - 找那张卡
+
+    /// 把 Spotify 的队列卡片从"半屏 sheet"抬成**整页**：大 detent、去掉把手与圆角、
+    /// 背景不压暗。只调一次（同一张卡第二次进来时这些值已经是目标值）。
+    ///
+    /// ⚠️ 仍然是 sheet 的呈现方式（保留下滑关闭，不会把用户困在页面里）；
+    /// 真正的"整页 + 底部播放控制"是下一轮的事。
+    private static func styleSheet(_ controller: UIViewController) {
+        guard styledSheet !== controller else { return }
+        styledSheet = controller
+        guard let sheet = controller.sheetPresentationController else { return }
+        sheet.detents = [.large()]
+        sheet.prefersGrabberVisible = false
+        sheet.preferredCornerRadius = 0
+        sheet.prefersScrollingExpandsWhenScrolledToEdge = false
+        sheet.largestUndimmedDetentIdentifier = .large
+        writeDebugLog(
+            "[\(logTag)] sheet expanded — large detent, no grabber, corner radius 0"
+        )
+    }
 
     /// 当前屏幕上那张队列卡片（`Queue_ViewImpl.QueueViewController`）。
     ///
@@ -449,6 +475,7 @@ enum QueuePage {
         sheetView = nil
         originalTableHeader = nil
         tableView = nil
+        styledSheet = nil
         controlSearchTicks = 0
         lastTrackKey = ""
         didDumpTree = false

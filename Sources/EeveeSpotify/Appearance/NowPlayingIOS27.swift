@@ -200,6 +200,15 @@ enum NowPlayingIOS27 {
     /// 立刻收尾就等于把原生封面放回来 = 用户看到的那一闪）。
     static var pageMissingTicks = 0
 
+    /// ★ 2026-10-24（用户：「点击歌词之后是图 2 的样子」）：
+    /// iOS 27 的歌词键借走整页的这段时间。开着时这一层**什么都不重铺** ——
+    /// 页面已经交还给 Spotify，由 `NowPlayingLyricsPlate` 按它原本的几何铺歌词。
+    static var lyricsSessionActive = false
+    /// 歌词收起来之后等 `NowPlayingLyricsPlate` 的收场动画走完，再把满屏封面铺回来。
+    static var resumingAfterLyrics = false
+    /// 收场动画的最短等待（墙钟；`closeEverything` 的动画是 0.45s）。
+    static var resumeAfterLyricsAt: CFAbsoluteTime = 0
+
     // MARK: - 对外入口
 
     /// 进听歌页时叫一次（蹭既有的两个 appear 点）。
@@ -257,23 +266,88 @@ enum NowPlayingIOS27 {
         } else {
             pageMissingTicks = 0
         }
+
+        // ★ 2026-10-24（歌词借页）：这一程由 `NowPlayingLyricsPlate` 全权负责，
+        //   这一层不重铺任何东西（否则两套几何每拍互相覆盖）。
+        //   页面真的走了才把会话结束掉（回收的 cell 不能留着 alpha = 0）。
+        if lyricsSessionActive {
+            guard lastPage?.window != nil else {
+                lyricsSessionActive = false
+                resumingAfterLyrics = false
+                NowPlayingLyricsPlate.endIOS27Session()
+                return false
+            }
+            return false
+        }
+        // 歌词收起来了：等那一层把退场动画走完（`isAnythingLive` 变假 + 最短 0.55s）
+        // 再铺回满屏封面，否则会在封面"飞回去"的半路把整张满屏封面盖上来。
+        if resumingAfterLyrics {
+            if NowPlayingLyricsPlate.isAnythingLive
+                || CFAbsoluteTimeGetCurrent() < resumeAfterLyricsAt {
+                return false
+            }
+            resumingAfterLyrics = false
+        }
+
         guard isEnabled else { return false }
         guard let page = lastPage, page.window != nil else { return false }
         return layout(in: page)
     }
 
+    /// ★ 2026-10-24（用户：「点击歌词之后是图 2 的样子」）：
+    /// 把整页交还给 Spotify（撤掉满屏封面 / 标题 / 底排），再让 `NowPlayingLyricsPlate`
+    /// 按它原本的几何铺开。这样得到的就是旧布局里「歌词进播放器」的那一屏（用户照片 2）。
+    static func enterLyricsMode(in page: UIView) {
+        guard !lyricsSessionActive else { return }
+        guard page.window != nil else { return }
+        lyricsSessionActive = true
+        resumingAfterLyrics = false
+        writeDebugLog("[\(logTag)] lyrics mode — handing the page back to Spotify for the in-player lyrics")
+        // 交还页面：把写过 alpha / transform 的原生视图写回，拆掉我们自己的层。
+        // ⚠️ 封面缓存要留过这一程：`restore` 会清 `lastArtworkImage`，而歌词关掉后
+        //    重铺满屏封面时正是靠它顶着（否则新图没到的那几拍会闪原生封面）。
+        let cachedArtwork = lastArtworkImage
+        let cachedTrackId = lastTrackId
+        restore(reason: "lyrics mode")
+        lastArtworkImage = cachedArtwork
+        lastTrackId = cachedTrackId
+        NowPlayingLyricsPlate.startIOS27Session(in: page)
+    }
+
+    /// 歌词那一层收起之后由 `NowPlayingLyricsPlate.toggle()` 调回来。
+    /// 这里只落旗标；真正重铺由下一条 0.3s 节拍在它的退场动画结束后做。
+    static func lyricsSessionEnded() {
+        guard lyricsSessionActive else { return }
+        lyricsSessionActive = false
+        resumingAfterLyrics = true
+        resumeAfterLyricsAt = CFAbsoluteTimeGetCurrent() + 0.55
+        writeDebugLog("[\(logTag)] lyrics mode ended — the iOS 27 page will come back after the close animation")
+    }
+
     /// 封面自己被布局的那一刻（`CoverArtTiltLayoutHook` 转发进来）。
     static func coverDidLayOut(from tilt: UIView) {
-        guard isEnabled, let page = lastPage, page.window != nil, tilt.window != nil else { return }
-        guard tilt.bounds.width >= 200, tilt.isDescendant(of: page) else { return }
-        guard isOnScreen(tilt, in: page) else { return }
-        guard let shell = shell(in: tilt) else { return }
-        // ★ 2026-10-24（切歌闪过原生大封面）：这个钩子比 0.3s 那拍**早** —— 新封面刚布局完
-        //   就轮到我们藏它。只要我们自己已经有一张（哪怕还是上一首那张），就先按下去，
-        //   别等 `updateArtwork`（它可能因为"新图还没到"而选择不画）。
+        guard isEnabled, !lyricsSessionActive,
+              let page = lastPage, page.window != nil, tilt.window != nil else { return }
+        // ★ 2026-10-24（用户：「切歌还是会有 Spotify 原生大封面闪过」）：
+        //   旧布局（`NowPlayingLyricsPlate.coverDidLayOut`）早就解决了同一件事，这里照它的做法：
+        //   · **不要求** `tilt` 已经在这棵 `page` 底下 —— 换歌/翻页转场里新封面先挂在**新的**
+        //     contentlayer cell 上，等 `lastPage` 更新过来时它已经露了一两帧；
+        //   · **不要求** `alpha > 0.01` —— 新封面对象常常先以 `alpha = 0` 出现，等 Spotify
+        //     把它淡入时不再有新的布局回调；
+        //   · 连 `tilt` 自己一起按下去（不只是它里面那张同尺寸的图），Spotify 之后在同一份
+        //     tilt 里换图 / 加层都不会再露出来。
+        //   门禁改成"真的是听歌页封面 cell 里的 tilt"（`isInsideCoverCell`），不会误伤列表封面。
+        guard tilt.bounds.width >= 200 else { return }
+        guard NowPlayingLyricsPlate.isInsideCoverCell(tilt) else { return }
+
         if artworkView != nil || lastArtworkImage != nil {
-            hideShell(shell)
+            if let cover = NowPlayingLyricsPlate.sameSizeChild(of: tilt) {
+                hideShell(cover)
+            }
+            hideShell(tilt)
         }
+        guard tilt.isDescendant(of: page) else { return }
+        guard let shell = shell(in: tilt) else { return }
         _ = updateArtwork(shell, in: page)
         _ = updateField(in: page)
     }
@@ -282,6 +356,7 @@ enum NowPlayingIOS27 {
 
     @discardableResult
     private static func layout(in page: UIView) -> Bool {
+        guard !lyricsSessionActive else { return false }
         guard let shell = resolvedShell(in: page) else {
             // ★ 2026-10-24（切歌闪过原生大封面）：这一拍没认出"要画的那张"，但原生封面
             //   可能正露着（换歌转场里 `visibleCover` 会把它筛掉）。只要我们自己已经有一张，

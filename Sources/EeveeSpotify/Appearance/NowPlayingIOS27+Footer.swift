@@ -331,8 +331,24 @@ extension NowPlayingIOS27 {
             //   不再转发 Spotify 那颗 `lyrics-expand-button` —— 它在 9.1.88 上经常是空壳，
             //   而"点得开"比"转发成功"重要。
             actionZones.append((tapRect(frames[0]), {
-                writeDebugLog("[\(logTag)] lyrics: opening our lyrics page")
-                LyricsStageEntry.present()
+                // ★ 2026-10-24（用户：「点击歌词之后是图 2 的样子」）：
+                //   默认走**播放页内**的歌词（旧布局那套「歌词进播放器」：缩封面 + 标题左上 +
+                //   歌词铺在中间），不再开独立窗口。实验里那颗「更炫酷的逐词歌词」开着时
+                //   仍然尊重它，去开 Folia 舞台。
+                if LyricsStageEntry.isEnabled {
+                    writeDebugLog("[\(logTag)] lyrics: opening the Folia stage")
+                    LyricsStageEntry.present()
+                } else {
+                    writeDebugLog("[\(logTag)] lyrics: opening the in-player lyrics page")
+                    // ⚠️ 下一拍再做：这颗闭包就挂在底部那块 relay 上，而
+                    //   `enterLyricsMode` → `restore` 会把 relay 从页面上摘掉。
+                    //   在抬手回调里立刻释放自己那块视图不稳妥，延一拍最省事。
+                    DispatchQueue.main.async {
+                        onMainThreadSync {
+                            NowPlayingIOS27.enterLyricsMode(in: page)
+                        }
+                    }
+                }
             }))
         } else if let target = lyricsTarget, let action = tapAction(for: target, label: "lyrics") {
             // iOS 26 以下没有我们自己的歌词页：退回 Spotify 那颗键。

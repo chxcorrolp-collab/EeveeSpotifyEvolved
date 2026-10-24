@@ -107,15 +107,26 @@ enum NowPlayingIOS27 {
     static let bottomStackYOffset: CGFloat = -55
     /// 压黑渐变：从页面 60% 起渐到纯黑（pw 的 `kBlackFrom` 是 0.55；这里推后一点，
     /// 让封面淡出来的那块颜色多留一会儿，过渡更长）。
-    static let blackFromRatio: CGFloat = 0.60
+    static let blackFromRatio: CGFloat = 0.64
     /// 压黑渐变终点的**不透明度**。
     ///
     /// ★ 2026-10-24（用户选 A）：终点原来是 1.0（纯黑）⇒ 下半屏死黑。现在背景里铺了
     /// "封面的模糊延续"，这条纱只负责压暗（0.62），颜色的层次能透出来。
-    static let blackScrimAlpha: CGFloat = 0.62
-    /// 字段颜色：pw 的 `SGRPalette` 两条上限（饱和度 0.55、线性亮度 0.07 ⇒ sRGB ≈ 0.29）。
-    static let maxFieldSaturation: CGFloat = 0.55
-    static let maxFieldBrightness: CGFloat = 0.30
+    ///
+    /// ★★ 2026-10-24（用户：「现在这个渐变感觉是灰色的，有些歌不太好看」）：
+    ///   0.62 → **0.42**。AM 那块是"暗下去"，不是"灰掉" —— 它把封面**过饱和**之后
+    ///   再压暗（Apple Music 的渐变本身就是把专辑图多层扭曲 + 高斯模糊，颜色被刻意拉高
+    ///   饱和度）；我们是一条模糊底 + 一条纱，所以纱要更淡、颜色才透得出来。
+    static let blackScrimAlpha: CGFloat = 0.42
+    /// 字段颜色的两条上限（原 pw：饱和度 0.55、线性亮度 0.07 ⇒ sRGB ≈ 0.29）。
+    ///
+    /// ★★ 2026-10-24：pw 这两条是为"整块纯色底"定的；现在底下铺的是封面模糊图，
+    ///   颜色不需要压到那么死。把饱和度上限放到 0.90、亮度 0.38，并给平均色一个
+    ///   `fieldSaturationBoost`（见 `fieldColour`）—— 对应 AM 的"过饱和封面"。
+    static let maxFieldSaturation: CGFloat = 0.90
+    static let maxFieldBrightness: CGFloat = 0.38
+    /// 平均色 → 字段色时的饱和度倍率（AM 的渐变会刻意过饱和专辑图）。
+    static let fieldSaturationBoost: CGFloat = 1.45
     /// 顶部导航那三件的 id（真机树：`108.log:1735-1736`）。
     ///
     ///   · `now-playing-minimize-button` —— 左上那颗向下箭头（48×48，`Tertiary`）；
@@ -147,6 +158,20 @@ enum NowPlayingIOS27 {
     /// 就是用"自己缓存上一次那张图、新图没到先顶着"解决的。这里同名同法；
     /// 只有 `restore` / `clearState` 会清掉它（不能放进 `teardownArtwork` —— 那个是换 cell 时调的）。
     static var lastArtworkImage: UIImage?
+
+    /// 曲目元数据里的**专辑封面**（`image_url` → `i.scdn.co` 那张），按曲目 id 认。
+    ///
+    /// ★★ 2026-10-24（用户：「出现艺人头像这个东西不一定是之前进过艺人页/专辑页才有的」）：
+    /// 播放页 contentlayer 里有时候摆的不是专辑封面（Canvas 帧 / 艺人图），而
+    /// `firstImage(in: shell)` 只认"壳里第一张够大的图" ⇒ 会把它当成封面、连 field 一起用。
+    /// 元数据的 `image_url` 永远是**这首的专辑封面** ⇒ 异步取它，**优先于壳里的图**；
+    /// 壳只负责"元数据图还没到的那一两拍"和加载失败时兜底。
+    static var metadataArtworkTrackId = ""
+    static var metadataArtworkImage: UIImage?
+    static var metadataArtworkLoading = false
+    static var metadataArtworkCache: [String: UIImage] = [:]
+    static var metadataArtworkOrder: [String] = []
+    static let metadataArtworkCacheLimit = 8
     /// 被我们按下 `alpha` 的原生壳（记原值，收尾按原值写回）。
     static let hiddenShells = NSHashTable<UIView>.weakObjects()
     static var shellAlphas: [ObjectIdentifier: CGFloat] = [:]
@@ -511,6 +536,10 @@ enum NowPlayingIOS27 {
     @discardableResult
     private static func layout(in page: UIView) -> Bool {
         var changed = false
+        // 封面壳还没认出来时也要让"元数据封面"开始加载（它不依赖壳）。
+        if let trackId = NowPlayingLyricsPlate.currentTrackId() {
+            refreshMetadataArtwork(trackId: trackId)
+        }
         // ★★ 2026-10-24（照片 1 / 照片 2）：**先摆不依赖封面壳的那几行**。
         //
         // 旧顺序是"先 resolve 封面，拿不到就 return"——而换歌 / 关歌词的头一两拍，
@@ -674,27 +703,64 @@ enum NowPlayingIOS27 {
         return rect.midX > page.bounds.width * 0.2 && rect.midX < page.bounds.width * 0.8
     }
 
-    /// 把"我们要画的那张封面"摆上去 —— 有图就画我们的、把原生的按下去；
+    /// 把这一首**元数据里的专辑封面**取回来（异步、按曲目 id 缓存）。
+    ///
+    /// 为什么不能只信播放页 contentlayer 里的那张图：那里有时候是 Canvas / 艺人图，
+    /// 不是专辑封面（用户 2026-10-24：「出现艺人头像……不一定是之前进过艺人页/专辑页才有的」）。
+    /// `SPTPlayerTrack.metadata()["image_url"]` 是这首曲目的专辑封面，
+    /// `LyricsArtworkResolver` 已经把它翻译成 `i.scdn.co` 地址（歌词背景在用同一条链）。
+    private static func refreshMetadataArtwork(trackId: String) {
+        guard trackId != metadataArtworkTrackId else { return }
+        metadataArtworkTrackId = trackId
+        metadataArtworkImage = nil
+        metadataArtworkLoading = false
+        guard !trackId.isEmpty else { return }
+        if let cached = metadataArtworkCache[trackId] {
+            metadataArtworkImage = cached
+            return
+        }
+        guard let track = statefulPlayer?.currentTrack(),
+              let url = LyricsArtworkResolver.artworkURL(for: track) else { return }
+        metadataArtworkLoading = true
+        URLSession.shared.dataTask(with: url) { data, _, _ in
+            let image = data.flatMap { UIImage(data: $0) }
+            DispatchQueue.main.async {
+                guard metadataArtworkTrackId == trackId else { return }
+                metadataArtworkLoading = false
+                guard let image else { return }
+                metadataArtworkImage = image
+                metadataArtworkCache[trackId] = image
+                metadataArtworkOrder.append(trackId)
+                while metadataArtworkOrder.count > metadataArtworkCacheLimit {
+                    metadataArtworkCache.removeValue(forKey: metadataArtworkOrder.removeFirst())
+                }
+                // 图到了：下一拍就把它画上去（壳里的图只当兜底）。
+                if let page = lastPage, page.window != nil {
+                    _ = layout(in: page)
+                }
+            }
+        }.resume()
+    }
+
+    /// 把封面壳摆上去 —— 有图就画我们的、把原生的按下去；
     /// 没图就让原生那张先露着（**绝不空白**）。
     @discardableResult
     private static func updateArtwork(_ shell: UIView, in page: UIView) -> Bool {
         artworkShell = shell
         let trackId = NowPlayingLyricsPlate.currentTrackId() ?? ""
         let trackChanged = trackId != lastTrackId
+        // ★★ 2026-10-24：先确保这一首的**元数据封面**在取（或已取到）。
+        refreshMetadataArtwork(trackId: trackId)
 
-        // ★★ 2026-10-23 第六轮（用户：「图片可能不是当前专辑封面，而是上一首的艺人图 / 上一首的专辑页」）：
-        //   **图只认"播放页自己那张壳里的图"**——`firstImage(in: shell)`。
-        //
-        //   原来是缓存优先（`rememberArtworkIfNeeded`）：它按**曲目 id** 存图，
-        //   而从艺人页 / 专辑页进来时，转场那一两拍封面格里可能还是**那个页面的头图** ⇒
-        //   它会把那张图当成"这一首的封面"存进缓存，之后整个会话都用错图。
-        //   现在：当前壳里没图就**等**（旧图继续顶着），不去缓存里拿"可能是别人的那张"。
-        //
-        // ★★ 2026-10-24（用户：「切歌的时候会闪过 Spotify 原生大封面」）：
-        //   旧布局（`NowPlayingLyricsPlate+Cover`）早就解决过同一件事，做法是**把自己那张图缓存起来**：
-        //   换歌的一两秒里 Spotify 的新封面对象还没有图 ⇒ 继续铺上一次那张（同图不同曲也看不出来），
-        //   新图一到就原地替换。这里照抄这个思路，只是缓存放在 `lastArtworkImage`（跨 cell 复用也拿得到）。
-        var image: UIImage? = NowPlayingLyricsPlate.firstImage(in: shell)
+        // ★★ 2026-10-24（用户：「出现艺人头像……不一定是之前进过艺人页/专辑页才有的」）：
+        //   **优先用元数据里的专辑封面**。播放页 contentlayer 里有时候摆的是 Canvas 帧 /
+        //   艺人图（`firstImage(in: shell)` 会把它当成封面，field 也跟着错），而
+        //   `SPTPlayerTrack.metadata()["image_url"]` 才是这首的专辑封面。
+        //   壳里的图只负责"元数据图还没到的那一两拍"兜底。
+        var image: UIImage? = metadataArtworkImage
+        if image == nil {
+            image = NowPlayingLyricsPlate.firstImage(in: shell)
+        }
         if image == nil {
             image = lastArtworkImage
         }
@@ -1121,9 +1187,11 @@ enum NowPlayingIOS27 {
     @discardableResult
     private static func updateField(in page: UIView) -> Bool {
         // 图也可能是我们缓存的那张（换歌那一两拍壳里还没图）—— 用**屏幕上那张**算色，
-        // 封面和底色才是同一首。
+        // 封面和底色才是同一首。★ 元数据里的专辑封面优先（见 `refreshMetadataArtwork`）。
         guard let shell = artworkShell,
-              let image = NowPlayingLyricsPlate.firstImage(in: shell) ?? lastArtworkImage
+              let image = metadataArtworkImage
+                ?? NowPlayingLyricsPlate.firstImage(in: shell)
+                ?? lastArtworkImage
         else { return false }
 
         if lastFieldImage === image, fieldSolid != nil { return false }
@@ -1186,23 +1254,44 @@ enum NowPlayingIOS27 {
         guard let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
         filter.setValue(small.clampedToExtent(), forKey: kCIInputImageKey)
         filter.setValue(9, forKey: kCIInputRadiusKey)
-        guard let output = filter.outputImage?.cropped(to: small.extent) else { return nil }
+        guard let blurred = filter.outputImage?.cropped(to: small.extent) else { return nil }
+
+        // ★ 2026-10-24（用户：「渐变感觉是灰色的」/「AM 是怎么做的」）：
+        //   Apple Music 的渐变不是"平均色 + 黑纱"，而是把**专辑图本身**多层扭曲 + 模糊，
+        //   并**刻意过饱和**（社区逆向：Mac/网页版会把封面 oversaturate 再叠 4 份）。
+        //   我们没有 Metal shader，近似做法是：模糊之后再过一遍 `CIColorControls`
+        //   （饱和度 ×1.45 / 对比 ×1.05）⇒ 同一张模糊底，颜色明显更透、不再灰。
+        let graded: CIImage
+        if let controls = CIFilter(name: "CIColorControls") {
+            controls.setValue(blurred, forKey: kCIInputImageKey)
+            controls.setValue(1.45, forKey: kCIInputSaturationKey)
+            controls.setValue(1.05, forKey: kCIInputContrastKey)
+            controls.setValue(0.02, forKey: kCIInputBrightnessKey)
+            graded = controls.outputImage?.cropped(to: small.extent) ?? blurred
+        } else {
+            graded = blurred
+        }
 
         let context = CIContext(options: [.useSoftwareRenderer: false])
-        guard let cg = context.createCGImage(output, from: small.extent) else { return nil }
+        guard let cg = context.createCGImage(graded, from: small.extent) else { return nil }
         return UIImage(cgImage: cg)
     }
 
-    /// 从封面取"字段色"：封面**下沿**的平均色，再压到 pw 的两条上限（白字一定读得清）。
+    /// 从封面取"字段色"：**整张图的平均色**，再拉高饱和度、压到白字读得清的亮度。
+    ///
+    /// ★ 2026-10-24（用户：「现在这个渐变感觉是灰色的」）：
+    ///   以前取的是**封面下沿 30%** 的平均色 —— 而很多封面下沿是白色/灰色（人物脚下、
+    ///   唱片行、留白），算出来就是一块灰底，和上半张彩色的封面完全不搭。
+    ///   AM 的底色来自**整张图**的平均/主色并刻意过饱和 ⇒ 这里改成整图平均 + ×1.45。
     private static func fieldColour(from image: UIImage) -> UIColor {
-        let strip = bottomStrip(of: image) ?? image
-        guard let average = averageColour(of: strip) else { return .black }
+        guard let average = averageColour(of: image) else { return .black }
         var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0
         average.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
+        let boosted = min(maxFieldSaturation, saturation * fieldSaturationBoost)
         return UIColor(
             hue: hue,
-            saturation: min(saturation, maxFieldSaturation),
-            brightness: min(max(brightness, 0.08), maxFieldBrightness),
+            saturation: boosted,
+            brightness: min(max(brightness, 0.10), maxFieldBrightness),
             alpha: 1
         )
     }
@@ -1547,6 +1636,9 @@ enum NowPlayingIOS27 {
         lyricsCreditView?.removeFromSuperview()
         lyricsCreditView = nil
         lyricsModeRevealed = false
+        metadataArtworkTrackId = ""
+        metadataArtworkImage = nil
+        metadataArtworkLoading = false
         artworkShell = nil
         artworkHost = nil
         artworkView = nil

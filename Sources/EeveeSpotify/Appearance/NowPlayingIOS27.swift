@@ -239,6 +239,9 @@ enum NowPlayingIOS27 {
     /// 改成**把原生 Connect 按钮搬到中间那颗字形的位置**，让真触摸落在它身上。
     static weak var movedConnectHolder: UIView?
     static var movedConnectBase: (ObjectIdentifier, CGAffineTransform)?
+    /// 原生 Connect 搬走后，在原 `UIStackView` 槽位留下的等宽占位（保证分享/队列不挪位）。
+    static weak var connectPlaceholder: UIView?
+    static var didLogConnectMoved = false
     /// 连续多少拍"记下的那一页不在窗口里"（见 `reconcile` 里那段：换歌转场会短暂摘掉旧页，
     /// 立刻收尾就等于把原生封面放回来 = 用户看到的那一闪）。
     static var pageMissingTicks = 0
@@ -505,6 +508,11 @@ enum NowPlayingIOS27 {
         //   门禁改成"真的是听歌页封面 cell 里的 tilt"（`isInsideCoverCell`），不会误伤列表封面。
         guard tilt.bounds.width >= 200 else { return }
         guard NowPlayingLyricsPlate.isInsideCoverCell(tilt) else { return }
+        // ★ 2026-10-24（日志 20）：给**相邻页**（离屏 cell）的封面壳排布局也会走到这里；
+        //   以前会把 `artworkShell` 记成那一份，之后 `artwork frame` 一直是 -372。
+        //   只接当前页可见的那一份，离屏的等它真正进页面再说。壳可能已经被我们按成
+        //   alpha 0（藏原生封面），所以这里不要求 alpha。
+        guard isControlOnPage(tilt, in: page, requireAlpha: false) else { return }
         // ★ 2026-10-24（用户：「首次进入专辑页面可能不会加载专辑图片」）：
         //   上面"不要求 tilt 已在本页"是为了抓换歌时**新的 contentlayer cell**；但同样一条
         //   也会把**别的页面**里长得像封面的 tilt 按掉（专辑页页头）。这里补一道更精确的判据：
@@ -745,23 +753,53 @@ enum NowPlayingIOS27 {
     /// 2. **挡住"挑到离屏那张"**：日志 888 里出现过 `at 399,161` 和 `at -138252,161`
     ///    （横向翻页转场中途），画进那种格子 = 屏幕上什么都没有（照片 162）。
     private static func resolvedShell(in page: UIView) -> UIView? {
-        if let shell = artworkShell, shell.window != nil, isOnScreen(shell, in: page),
+        if let shell = artworkShell, shell.window != nil,
+           isControlOnPage(shell, in: page, requireAlpha: false),
            isNowPlayingCoverCell(shell) {
             return shell
         }
-        guard let list = NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingLyricsPlate.listIdentifier,
-            in: page
-        ), let picked = NowPlayingLyricsPlate.visibleCover(in: list, page: page),
-           isOnScreen(picked, in: page) else { return nil }
+        guard let list = visibleList(in: page),
+              let picked = NowPlayingLyricsPlate.visibleCover(in: list, page: page),
+              isControlOnPage(picked, in: page, requireAlpha: false) else { return nil }
         return picked
     }
 
-    /// 这张视图的横向中线落在页面中间那一半里吗。
-    private static func isOnScreen(_ view: UIView, in page: UIView) -> Bool {
+    /// 当前页的 `listIdentifier` 那一份（pager 里相邻页还有一份，不能拿错）。
+    private static func visibleList(in page: UIView) -> UIView? {
+        var queue: [UIView] = [page]
+        var visited = 0
+        while !queue.isEmpty, visited < 3000 {
+            let view = queue.removeFirst()
+            visited += 1
+            if view.accessibilityIdentifier == NowPlayingLyricsPlate.listIdentifier,
+               isControlOnPage(view, in: page, requireAlpha: false) {
+                return view
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
+    }
+
+    /// 这个控件是不是**当前可见的那一页**上的。
+    ///
+    /// ★★ 2026-10-24（日志 20）：听歌页的 pager 里会同时留着相邻页的 cell，
+    /// `findByIdentifier` 的 BFS 经常先撞上**离屏**那一页的 `npv.bottomStackView`
+    /// （日志：`bottom stack lifted -55pt — -413…-413`，而屏幕上那一份在 4,543）。
+    /// 结果是我们搬了离屏的标题/底排，屏幕上的歌名/封面不动；`lyricsSceneReady`
+    /// 又永远等不到，歌词一直 `deferred`。所有"按 id 找控件"的地方都必须过这一道。
+    static func isControlOnPage(
+        _ view: UIView,
+        in page: UIView,
+        requireAlpha: Bool = true
+    ) -> Bool {
+        guard view.window != nil, !view.isHidden else { return false }
+        if requireAlpha, view.alpha <= 0.01 { return false }
         let rect = view.convert(view.bounds, to: page)
         guard rect.width > 1, rect.height > 1 else { return false }
-        return rect.midX > page.bounds.width * 0.2 && rect.midX < page.bounds.width * 0.8
+        return rect.midX > page.bounds.width * 0.2
+            && rect.midX < page.bounds.width * 0.8
+            && rect.midY > 0
+            && rect.midY < page.bounds.height
     }
 
     /// 把这一首**元数据里的专辑封面**取回来（异步、按曲目 id 缓存）。
@@ -814,6 +852,9 @@ enum NowPlayingIOS27 {
     /// 没图就让原生那张先露着（**绝不空白**）。
     @discardableResult
     private static func updateArtwork(_ shell: UIView, in page: UIView) -> Bool {
+        // 这颗壳可能正是我们为了藏原生封面而按成 alpha = 0 的那一颗；不能因为
+        // “它透明”就拒绝它，否则封面永远画不上、歌词闸门永远不过。
+        guard isControlOnPage(shell, in: page, requireAlpha: false) else { return false }
         artworkShell = shell
         let trackId = NowPlayingLyricsPlate.currentTrackId() ?? ""
         let trackChanged = trackId != lastTrackId
@@ -844,7 +885,8 @@ enum NowPlayingIOS27 {
             image = NowPlayingLyricsPlate.rememberArtworkIfNeeded(in: page)
         }
 
-        guard let image, let host = fullPageAncestor(of: shell, in: page) else {
+        guard let image, let host = fullPageAncestor(of: shell, in: page),
+              isControlOnPage(host, in: page) else {
             // ★ 2026-10-24（照片 2）：**不要把上一拍画上去的那张藏起来**。
             //
             // 旧代码这里有一句 `artworkView?.isHidden = true`：换歌时新的 cell 还没
@@ -1418,9 +1460,14 @@ enum NowPlayingIOS27 {
     ///   音量行），并且那些地方必须用 **`convert`**（带 transform）而不是 `untransformed`。
     @discardableResult
     private static func placeBottomStack(in page: UIView) -> Bool {
-        guard let stack = NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingLyricsPlate.bottomStackIdentifier, in: page
-        ) else { return false }
+        guard let stack = bottomStackView(in: page) else { return false }
+        // ★ 2026-10-24（日志 20）：换页/换歌时底排会换对象。旧对象的 transform 必须
+        //   先还回去，否则它下次被复用时 base 会记成"已经抬过 55pt"的错值。
+        if let previous = bottomStack, previous !== stack,
+           let recorded = bottomStackBase, recorded.0 == ObjectIdentifier(previous) {
+            previous.transform = recorded.1
+            bottomStackBase = nil
+        }
         bottomStack = stack
 
         let key = ObjectIdentifier(stack)
@@ -1456,6 +1503,22 @@ enum NowPlayingIOS27 {
         return true
     }
 
+    /// 当前页**可见**的底排（跳过 pager 里相邻页的离屏副本）。
+    private static func bottomStackView(in page: UIView) -> UIView? {
+        var queue: [UIView] = [page]
+        var visited = 0
+        while !queue.isEmpty, visited < 3000 {
+            let view = queue.removeFirst()
+            visited += 1
+            if view.accessibilityIdentifier == NowPlayingLyricsPlate.bottomStackIdentifier,
+               isControlOnPage(view, in: page) {
+                return view
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
+    }
+
     /// 只把标题行的**左边距**收到 28pt（纵向留在原生位置）。
     ///
     /// 为什么不抬上去：前三轮把它抬到 `W+56`，而进度条在原生那一档 —— 中间就空出一大块
@@ -1467,6 +1530,13 @@ enum NowPlayingIOS27 {
     @discardableResult
     private static func placeTitleRow(in page: UIView) -> Bool {
         guard let row = titleRowView(in: page) else { return false }
+        // 同上：换页时旧标题行先还原，避免复用后 base 记错、越挪越偏。
+        if let previous = titleRow, previous !== row,
+           let recorded = titleRowBase, recorded.0 == ObjectIdentifier(previous) {
+            previous.transform = recorded.1
+            titleRowBase = nil
+            titleRowBaseRect = nil
+        }
         titleRow = row
 
         let key = ObjectIdentifier(row)
@@ -1815,19 +1885,24 @@ enum NowPlayingIOS27 {
     }
 
     /// 标题行：`now-playing-title-label` 的祖父（与 `NowPlayingLyricsPlate.measure` 同一口径）。
+    ///
+    /// ★ 2026-10-24（日志 20）：原来先找 `listIdentifier` 的第一份 list，再在它里面找
+    ///   label —— pager 里相邻页的 list 会先被撞上（标题 y = -443）。现在直接全页 BFS
+    ///   所有 label，挑**祖父在当前页可见范围**的那一个。
     private static func titleRowView(in page: UIView) -> UIView? {
-        let list = NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingLyricsPlate.listIdentifier,
-            in: page
-        )
-        let label = list.flatMap {
-            NowPlayingLyricsPlate.findByIdentifier(NowPlayingLyricsPlate.titleLabelIdentifier, in: $0)
-        } ?? NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingLyricsPlate.titleLabelIdentifier,
-            in: page
-        )
-        guard let label else { return nil }
-        return label.superview?.superview
+        var queue: [UIView] = [page]
+        var visited = 0
+        while !queue.isEmpty, visited < 3000 {
+            let view = queue.removeFirst()
+            visited += 1
+            if view.accessibilityIdentifier == NowPlayingLyricsPlate.titleLabelIdentifier,
+               let row = view.superview?.superview,
+               isControlOnPage(row, in: page) {
+                return row
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
     }
 
     /// 标题行是不是**已经**被我们挪到缩略图旁边（而且还在窗口里）。
@@ -1896,7 +1971,8 @@ enum NowPlayingIOS27 {
         while let candidate = current, candidate !== page, visited < 12 {
             visited += 1
             if candidate.bounds.width >= page.bounds.width - 1,
-               candidate.bounds.height >= page.bounds.height - 1 {
+               candidate.bounds.height >= page.bounds.height - 1,
+               isControlOnPage(candidate, in: page, requireAlpha: false) {
                 if !hostWouldCoverControls(candidate) {
                     return candidate
                 }
@@ -1960,12 +2036,11 @@ enum NowPlayingIOS27 {
 
     /// `bottomStack`（可能还没被 `placeBottomStack` 记下来）。
     private static func controlsStackForComparison() -> UIView? {
-        if let stack = bottomStack { return stack }
+        if let stack = bottomStack, let page = lastPage, isControlOnPage(stack, in: page) {
+            return stack
+        }
         guard let page = lastPage else { return nil }
-        return NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingLyricsPlate.bottomStackIdentifier,
-            in: page
-        )
+        return bottomStackView(in: page)
     }
 
     /// 一次性把各行的真实坐标打出来（排查 / 下一轮排版靠它）。

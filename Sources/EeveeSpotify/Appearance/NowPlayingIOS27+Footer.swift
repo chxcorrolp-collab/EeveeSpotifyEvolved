@@ -198,11 +198,9 @@ extension NowPlayingIOS27 {
     /// ⚠️ **先量到中线再藏**：量不到位置时若已经把原生字形藏掉，底排就空了。
     @discardableResult
     static func placeFooter(in page: UIView) -> Bool {
-        let connect = NowPlayingLyricsPlate.findByIdentifier(connectButtonIdentifier, in: page)
-        let share = NowPlayingLyricsPlate.findByIdentifier(
-            NowPlayingLyricsPlate.shareButtonIdentifier, in: page
-        )
-        let queue = NowPlayingLyricsPlate.findByIdentifier(queueButtonIdentifier, in: page)
+        let connect = footerControl(connectButtonIdentifier, in: page)
+        let share = footerControl(NowPlayingLyricsPlate.shareButtonIdentifier, in: page)
+        let queue = footerControl(queueButtonIdentifier, in: page)
         guard connect != nil || share != nil || queue != nil else { return false }
         guard let rowMidY = footerRowMidY(connect: connect, share: share, queue: queue, in: page) else {
             return false
@@ -237,6 +235,23 @@ extension NowPlayingIOS27 {
             changed = true
         }
         return changed
+    }
+
+    /// 底排的一颗原生键 —— **只认当前可见页**（pager 里相邻页的副本会先被 BFS 撞上，
+    /// 日志 20 的 `bottom stack -413` 就是这么来的）。
+    private static func footerControl(_ identifier: String, in page: UIView) -> UIView? {
+        var queue: [UIView] = [page]
+        var visited = 0
+        while !queue.isEmpty, visited < 3000 {
+            let view = queue.removeFirst()
+            visited += 1
+            if view.accessibilityIdentifier == identifier,
+               NowPlayingIOS27.isControlOnPage(view, in: page) {
+                return view
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
     }
 
     /// 底排的中线 y（页面坐标）：三颗里能量到的取中位数，量不到就用底排的公共上沿推。
@@ -340,10 +355,12 @@ extension NowPlayingIOS27 {
             }
         }
 
-        // ★★ 2026-10-24（用户：「跨设备连接 这个按钮会抽搐」）：
-        //   **不再搬**原生 Connect。它留在 `UIStackView` 的原始槽位（x≈38），
-        //   字形被 `placeFooter` 藏掉；中间那颗是自绘的 airplay 字形，
-        //   触摸由下面的 `zones` 真转发过去（原生键始终在 38，hitTest 不跨屏）。
+        // ★★ 2026-10-24（日志 20：`connect: no action accepted the tap` ×6）：
+        //   `accessibilityActivate` / `sendActions` 对这颗 Encore 包装的 Connect 都不生效。
+        //   最终方案：把原生 Connect 从 `UIStackView` 里**结构性地**搬到中间字形的位置
+        //   （207），原槽位留一个等宽 placeholder；然后用替身的 `zones`（真触摸转发）
+        //   指向它 —— 目标真的在手指底下，`hitTest` 到的是按钮自己，不是 `.touchUpOutside`。
+        //   不再用 transform（栈会吃位移 = 抽搐），也不再走 actionZone。
 
         // 替身：三个互不相交的 zone，各指向一颗原生键。
         let relay: NowPlayingIOS27RemoteRelayView
@@ -439,17 +456,15 @@ extension NowPlayingIOS27 {
             // iOS 26 以下没有我们自己的歌词页：退回 Spotify 那颗键。
             actionZones.append((tapRect(frames[0]), action))
         }
-        // ★★ 2026-10-24（用户：「不是有自己画按键、功能交给被隐藏的原生按键吗，
-        //   Connect 这个不行吗」）：
-        //   **模式是对的，但 Connect 这颗不能用 `zones` 的"真触摸转发"** —— 它在
-        //   x≈38，我们画的在 207；`zones` 交给原生键的 `UITouch` 仍带着**手指的真实
-        //   坐标**，换算到原生键里落在 bounds 之外 ⇒ `.touchUpOutside`，动作不触发
-        //   （`NowPlayingIOS27RemoteRelayView` 头注里写明的那条）。
-        //   `sendActions` 对它也无效（日志 18：连刷 8 秒，面板没出来）。
-        //   ⇒ 这里走**动作级**的第三条路：`accessibilityActivate()` —— 它不依赖手指
-        //   坐标，走控件自己的"我该干什么"。`activateConnect` 里会依次试
-        //   ViewHolder / 子树里的每一个 view / UIControl，最后才退回 sendActions。
-        if let connect {
+        // ★★ 2026-10-24（日志 20：`connect: no action accepted the tap` ×6）：
+        //   Connect 这颗 `accessibilityActivate` / `sendActions` 都不认。把它从栈里
+        //   结构性搬到 207（原槽位 placeholder），目标就真的在手指底下；再用 `zones`
+        //   做真触摸转发。搬不动（不在 UIStackView 里）才退回动作级。
+        if let connect, let target = NowPlayingIOS27.moveConnectHolder(
+            connect, to: frames[1], in: page
+        ) {
+            zones.append((tapRect(frames[1]), target))
+        } else if let connect {
             actionZones.append((tapRect(frames[1]), {
                 NowPlayingIOS27.activateConnect(connect)
             }))
@@ -605,44 +620,127 @@ extension NowPlayingIOS27 {
         )
     }
 
-    /// 把**原生 Connect 按钮**搬到目标中心（`frames[1]`）。
+    /// 把**原生 Connect 按钮**从栈里结构性搬到目标中心（`frames[1]` = 207）。
     ///
-    /// ⚠️ **2026-10-24 起不再调用**：它在 `UIStackView` 里，栈每次布局写 `frame` 会把
-    /// transform 的位移吃掉/叠加（日志 19：171,68 → 206,103 → -55,-55 ⇒ 抽搐）。
-    /// 保留函数只是给"以后真要把原生键摆到 207"那条路留参考；正式方案见
-    /// `activateConnect` 的 ①②③。
+    /// 为什么不是 transform：它在 `UIStackView` 里，栈每次布局写 `frame` 会把 transform
+    /// 的位移吃掉/叠加（日志 19：171,68 → 206,103 → -55,-55 ⇒ 抽搐）。
+    /// 为什么不是 `sendActions` / `accessibilityActivate`：日志 18/20 都证明这颗
+    /// Encore 包装的 Connect 不认这两种动作；只有**真触摸**能开面板。
+    /// 现在把栈里的那一格换成等宽 placeholder，把按钮本体搬到页面上；替身的 `zones`
+    /// 在 207 做真触摸转发时，目标真的就在手指底下 —— 不会再 `.touchUpOutside`。
+    ///
+    /// - Returns: 搬到页面上、可交给 `zones` 的那个视图；搬不动返回 nil（调用方退回动作级）。
     @discardableResult
-    static func moveConnectHolder(_ holder: UIView?, to frame: CGRect, in page: UIView) -> Bool {
-        guard let holder else { return false }
-        if movedConnectHolder !== holder {
-            restoreMovedConnectHolder()
-            movedConnectHolder = holder
-            movedConnectBase = (ObjectIdentifier(holder), holder.transform)
+    static func moveConnectHolder(_ holder: UIView?, to frame: CGRect, in page: UIView) -> UIView? {
+        guard let holder, holder.window != nil else { return nil }
+
+        // 目标可能是 ViewHolder 里面的一层；往上找到 `UIStackView` 的直接子视图。
+        var arranged = holder
+        var hops = 0
+        while hops < 6,
+              let parent = arranged.superview,
+              parent !== page,
+              !(parent is UIStackView) {
+            arranged = parent
+            hops += 1
         }
-        guard holder.window != nil,
-              let recorded = movedConnectBase,
-              recorded.0 == ObjectIdentifier(holder) else { return false }
-        let current = holder.convert(holder.bounds, to: page)
-        let dx = (frame.midX - current.midX).rounded()
-        let dy = (frame.midY - current.midY).rounded()
-        guard abs(dx) > 0.5 || abs(dy) > 0.5 else { return false }
-        let wanted = recorded.1.concatenating(CGAffineTransform(translationX: dx, y: dy))
-        guard holder.transform != wanted else { return false }
-        holder.transform = wanted
-        return true
+
+        let width = arranged.bounds.width > 1 ? arranged.bounds.width : 47
+        let height = arranged.bounds.height > 1 ? arranged.bounds.height : 36
+        let wanted = CGRect(
+            x: (frame.midX - width / 2).rounded(),
+            y: (frame.midY - height / 2).rounded(),
+            width: width,
+            height: height
+        )
+
+        // 已经在页面上：只对齐位置。
+        if arranged.superview === page {
+            if movedConnectHolder !== arranged { movedConnectHolder = arranged }
+            if arranged.frame != wanted { arranged.frame = wanted }
+            return arranged
+        }
+
+        guard let stack = arranged.superview as? UIStackView,
+              let index = stack.arrangedSubviews.firstIndex(of: arranged) else { return nil }
+
+        if movedConnectHolder !== arranged {
+            restoreMovedConnectHolder()
+            movedConnectHolder = arranged
+        }
+
+        // Spotify 可能把按钮又塞回栈里；旧 placeholder 先清掉，避免一格变两格。
+        if let old = connectPlaceholder {
+            old.removeFromSuperview()
+            connectPlaceholder = nil
+        }
+
+        let placeholder = UIView()
+        placeholder.isUserInteractionEnabled = false
+        placeholder.backgroundColor = .clear
+        placeholder.translatesAutoresizingMaskIntoConstraints = false
+        placeholder.widthAnchor.constraint(equalToConstant: max(width, 44)).isActive = true
+        placeholder.heightAnchor.constraint(equalToConstant: max(height, 36)).isActive = true
+        stack.insertArrangedSubview(placeholder, at: index)
+        connectPlaceholder = placeholder
+
+        arranged.removeFromSuperview()
+        arranged.transform = .identity
+        arranged.translatesAutoresizingMaskIntoConstraints = true
+        // 放到中间那颗自绘 airplay 字形**下面**：字形就是那颗按钮的"皮肤"，
+        // 不能被按钮自己的玻璃底盖住。
+        if let glyph = footerGlyphs.allObjects.first(where: {
+            abs($0.center.x - frame.midX) < 2
+        }), glyph.superview === page {
+            page.insertSubview(arranged, belowSubview: glyph)
+        } else {
+            page.addSubview(arranged)
+        }
+        for glyph in footerGlyphs.allObjects {
+            page.bringSubviewToFront(glyph)
+        }
+        arranged.frame = wanted
+
+        if !didLogConnectMoved {
+            didLogConnectMoved = true
+            writeDebugLog(
+                "[\(logTag)] connect: moved out of the stack to x=\(Int(wanted.midX)),"
+                    + " y=\(Int(wanted.midY)) — the relay forwards a real touch"
+            )
+        }
+        return arranged
     }
 
-    /// 把搬过的原生 Connect 按钮写回原 transform（收尾 / 换页）。
+    /// 把搬过的原生 Connect 按钮放回原栈槽位（收尾 / 换页）。
     static func restoreMovedConnectHolder() {
-        guard let holder = movedConnectHolder,
-              let recorded = movedConnectBase,
-              recorded.0 == ObjectIdentifier(holder) else {
-            movedConnectHolder = nil
+        guard let holder = movedConnectHolder else {
+            connectPlaceholder = nil
             movedConnectBase = nil
             return
         }
-        if holder.transform != recorded.1 { holder.transform = recorded.1 }
+        if let placeholder = connectPlaceholder,
+           let stack = placeholder.superview as? UIStackView {
+            let index = stack.arrangedSubviews.firstIndex(of: placeholder) ?? 0
+            stack.removeArrangedSubview(placeholder)
+            placeholder.removeFromSuperview()
+            if holder.superview !== stack {
+                if holder.superview is UIStackView {
+                    // 已经被 Spotify 塞进一个新的栈：不要再搬回旧栈。
+                } else {
+                    holder.removeFromSuperview()
+                    holder.transform = .identity
+                    holder.translatesAutoresizingMaskIntoConstraints = false
+                    stack.insertArrangedSubview(
+                        holder,
+                        at: min(index, stack.arrangedSubviews.count)
+                    )
+                }
+            }
+        } else if let superview = holder.superview, !(superview is UIStackView) {
+            holder.removeFromSuperview()
+        }
         movedConnectHolder = nil
+        connectPlaceholder = nil
         movedConnectBase = nil
     }
 
@@ -667,6 +765,8 @@ extension NowPlayingIOS27 {
         didLogFooter = false
         footerLyricsAvailable = false
         movedConnectHolder = nil
+        connectPlaceholder = nil
         movedConnectBase = nil
+        didLogConnectMoved = false
     }
 }

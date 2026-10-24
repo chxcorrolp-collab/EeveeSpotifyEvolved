@@ -185,7 +185,14 @@ extension NowPlayingIOS27 {
 
         var changed = false
         for button in [connect, share, queue].compactMap({ $0 }) {
-            if hideGlyphSubtree(button) { changed = true }
+            // ★ 2026-10-24（日志 17：点雷达没反应，树里 `EncoreButton alpha=0.00`）：
+            //   `connect` 拿到的是 **ViewHolder**（`ConnectButtonOutputSwitcherViewHolder`），
+            //   而真正的 `EncoreButton` 是它的子视图。直接 `hideGlyphSubtree(viewHolder)`
+            //   会把**整颗按钮**的 alpha 设成 0 —— 按钮看着没了、`sendActions` / 无障碍
+            //   也不再像一颗活着的键。这里改成：先找到最近的 `UIControl`，
+            //   只藏它**里面**的字形（按钮本体 alpha 保持 1，替身才点得动）。
+            let glyphHost = NowPlayingIOS27.nearestControl(button) ?? button
+            if hideGlyphSubtree(glyphHost) { changed = true }
         }
         // ★ 2026-10-24（用户拿 MeloX 的播放页做对照：「我感觉应该是放得下的吧」）：对，放得下 ——
         //   只是**原生那一行太靠上**：日志里它的中线是 811，而音量行（28pt）落在 785…813、

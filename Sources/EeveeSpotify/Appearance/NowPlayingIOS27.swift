@@ -476,15 +476,9 @@ enum NowPlayingIOS27 {
         lyricsDissolveView?.removeFromSuperview()
         lyricsDissolveView = nil
 
-        let coverWidth = page.bounds.width
-        let coverHeight = max(
-            coverWidth,
-            min(page.bounds.height * Self.artworkHeightRatio, coverWidth * Self.artworkMaxAspect)
-        )
-        let frame = host.convert(
-            CGRect(x: 0, y: 0, width: coverWidth, height: coverHeight),
-            from: page
-        )
+        // 「整幅那张」按**满幅几何**画（不是缩略图）：这一层只在开歌词的那一向出现，
+        // 那时 `lyricsModeActive` 已经是 true，用 `artworkFrame` 会得到 64pt。
+        let frame = fullBleedArtworkFrame(in: page, host: host)
         let dissolve = UIImageView(frame: frame)
         dissolve.image = image
         dissolve.contentMode = .scaleAspectFill
@@ -659,6 +653,10 @@ enum NowPlayingIOS27 {
         if updateArtwork(shell, in: page) { changed = true }
         // ★★ 2026-10-25：壳认出来了，`updateArtwork` 仍可能因为量不到整页宿主 / 还没图
         //   而提前返回（它那几条 guard）。模式几何再兜一次 —— 幂等：已经是对的就只做一次比较。
+        //   ⚠️ 代价是"壳正常"那条路每拍多跑两次 `convert` + 一次 scrim 比较
+        //   （只读复核 2026-10-25 的 NIT-2）。故意换这个便宜：`updateArtwork` 的返回值
+        //   语义是 "changed"，稳态下本来就是 false，用它当"几何有没有走到"的判据会反过来
+        //   每拍都去兜底。宁可多两次换算，也不要为省它们再引一条会写错的账。
         if syncArtworkFrameWithoutShell(in: page) { changed = true }
         if mountField(in: page) { changed = true }
         if !didLogFrames {
@@ -1029,9 +1027,23 @@ enum NowPlayingIOS27 {
         return changed
     }
 
+    /// **满幅**那张封面的 frame（页面坐标 → 宿主坐标）：宽 = 页宽、高 = 页高的 58%
+    /// （AM 的竖长裁切，见 `artworkHeightRatio` / `artworkMaxAspect`）。
+    ///
+    /// 单独抽出来是给「化开层」（`beginLyricsDissolve`）用的：它要的永远是满幅，
+    /// 而那时 `lyricsModeActive` 已是 true —— 直接调 `artworkFrame` 会拿到 64pt。
+    private static func fullBleedArtworkFrame(in page: UIView, host: UIView) -> CGRect {
+        let coverWidth = page.bounds.width
+        let coverHeight = max(
+            coverWidth,
+            min(page.bounds.height * Self.artworkHeightRatio, coverWidth * Self.artworkMaxAspect)
+        )
+        return host.convert(CGRect(x: 0, y: 0, width: coverWidth, height: coverHeight), from: page)
+    }
+
     /// 封面在**当前模式**下的 frame（宿主坐标）。
     ///
-    ///   · 普通：**宽 = 页宽，高 = 页高的 58%**（AM 的竖长裁切）；
+    ///   · 普通：`fullBleedArtworkFrame`（**宽 = 页宽，高 = 页高的 58%**）；
     ///   · 页内歌词模式：左上角 **64pt 缩略图**（用户 2026-10-24：只动封面/标题，
     ///     底部按钮保持 iOS 27 的样子）。
     ///
@@ -1041,12 +1053,7 @@ enum NowPlayingIOS27 {
         if lyricsModeActive {
             return host.convert(lyricsThumbFrame(in: page), from: page)
         }
-        let coverWidth = page.bounds.width
-        let coverHeight = max(
-            coverWidth,
-            min(page.bounds.height * Self.artworkHeightRatio, coverWidth * Self.artworkMaxAspect)
-        )
-        return host.convert(CGRect(x: 0, y: 0, width: coverWidth, height: coverHeight), from: page)
+        return fullBleedArtworkFrame(in: page, host: host)
     }
 
     /// 让一张**已经画出来的**封面服从当前模式：满幅 ⇄ 64pt 缩略图，
@@ -1101,11 +1108,12 @@ enum NowPlayingIOS27 {
     ///   现在两向合一：只要封面还挂在一个活着的宿主里，就按模式摆好；不碰任何原生视图。
     @discardableResult
     private static func syncArtworkFrameWithoutShell(in page: UIView) -> Bool {
-        // 宿主优先用**封面真正挂在的那一层**（`superview`），记下来的 `artworkHost` 只在
-        // 万一没人挂它时兜底 —— 反过来会让"宿主刚换、账还没更新"的那一拍整条跳过。
+        // 宿主就认**封面真正挂在的那一层**（`superview`）。原稿还写了一个
+        // `?? artworkHost` 的兜底，但下一行要 `view.superview === host` —— 兜底永远过不去，
+        // 是死代码（只读复核 2026-10-25 指出）。封面本来也只会被挂进 `host`，
+        // 宿主没挂上时这一拍本来就无从摆位置。
         guard let view = artworkView,
-              let host = view.superview ?? artworkHost,
-              view.superview === host,
+              let host = view.superview,
               host.window != nil,
               host.isDescendant(of: page),
               view.image != nil else { return false }
@@ -1144,7 +1152,8 @@ enum NowPlayingIOS27 {
     private static func updateTopScrim(in host: UIView, page: UIView) -> Bool {
         // ★ 2026-10-25：页内歌词模式下封面缩略图就长在状态栏下面
         //   （`lyricsThumbTopInset` = 46），这条压暗带有 96…112pt 高、还插在封面**上面**，
-        //   会横过缩略图上沿 ⇒ 缩略图顶部像是被压黑了一条。那一档只保留状态栏那一段。
+        //   会横过缩略图上沿 ⇒ 缩略图顶部像是被压黑了一条。那一档只保留状态栏那一段
+        //   （顶层安全区量到 0 时也就 1pt：宁可没有这条压暗，也不让它压到缩略图）。
         let height = lyricsModeActive
             ? max(page.safeAreaInsets.top, 1)
             : max(page.safeAreaInsets.top + topScrimExtraHeight, topScrimMinHeight)

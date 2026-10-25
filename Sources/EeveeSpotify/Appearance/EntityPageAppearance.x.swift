@@ -86,9 +86,18 @@ enum EntityPageAppearance {
     ///   但**不再**因此把渐变一路往上顶到图的中段。
     private static let meltGap: CGFloat = 8
     /// 化开的**起点**占图高的比例（AM = 图高的 65%~70%，取中）。
-    private static let meltStartRatio: CGFloat = 0.66
+    ///
+    /// ★★ 2026-10-25（用户：「图片为艺人页，渐变的长度可以再拉大一点」）：0.66 → **0.60**。
+    ///   照片里那段化开正好卡在 `minMeltSpan` 的下限（90pt）上，看起来像"贴了一条渐变"；
+    ///   起点提前一点、下限抬高一截，同一张照片的化开就是 90 → 150pt（见 `minMeltSpan`）。
+    ///   ⚠️ 别再往 0.66 以上调：2026-10-16 照片 130 那次就是因为起点太高，把猫的下半身整段吃掉。
+    private static let meltStartRatio: CGFloat = 0.60
     /// 化开那一段的**下限**：页头矮的时候别把渐变整成一条硬边。
-    private static let minMeltSpan: CGFloat = 90
+    ///
+    /// ★★ 2026-10-25（用户：「渐变的长度可以再拉大一点」）：90 → **150**。
+    ///   这一段是**由下方（名字上沿 − `meltGap`）往上量**的，所以抬高它只会把起点往前推、
+    ///   把过渡拉长，名字和那三颗按钮仍然落在平色上（那一条没动）。
+    private static let minMeltSpan: CGFloat = 150
     /// 化开那一段的缓动采样：**两端都要平**（`1 − smoothstep(p)`，9 个等分点）。
     ///
     /// 用户诊断（照片 130）：「线性斜坡两端的折角才是'被切断'感的主要来源，和长短关系不大」。

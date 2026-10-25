@@ -645,9 +645,22 @@ reduce_interventions_scope_yourlibaryx_footer = "音乐库里出现的提示、�
 // 配方（取色渐变，不是模糊）借鉴 kumone（LGPL-3.0 / GPL-3.0），
 // 见 Sources/EeveeSpotify/Appearance/NowPlayingBackdrop.swift。
 now_playing_section = "歌曲播放页";
+// ★ 2026-10-25（用户拍板 A 方案）：两颗互斥的开关合成一个三档选择器
+// （Spotify 原生 / 沉浸式 / Apple Music 式）。选项名**故意短** —— Picker 行尾要显示
+// 当前选中值，长名字在 414pt 上会被截断；长句全放在 now_playing_style_description。
+// ⚠️ 存储键一个没加、一个没删（见 NowPlayingStyle）。
+now_playing_style = "听歌页样式";
+now_playing_style_spotify = "Spotify 原生";
+now_playing_style_immersive = "沉浸式";
+now_playing_style_apple_music = "Apple Music 式";
+now_playing_style_description = "Spotify 原生 = Spotify 默认；沉浸式 = 整页取色底、收起官方模块/单行歌词/两颗胶囊，歌词进播放器（包含：%@）；Apple Music 式 = 封面铺满上半屏、歌名压在封面下沿的过渡带上，照 iOS 27 的 Apple Music 做的那一版，旧那套歌词层自动让位。";
 // ★ 2026-10-22（用户）：上面那五件结构改动整合成这颗总开关，放在本页最上面、默认开启。
 // 第二行小字直接由下面那五条的译名拼出来（见 NowPlayingSettingsView.integratedFeaturesText），
 // 所以那五条文案只有这一份。
+// ⚠️ 2026-10-25：下面三条**已经过期** —— 它们原来是那两颗开关的名字，现在换成了上面那个
+// 三档选择器（now_playing_layout → 「沉浸式」，now_playing_ios27 → 「Apple Music 式」）。
+// 暂时留着：从 en.lproj 删一个键会让它在其它每个语言里变成 "extra key" 错误，
+// 真要清就得所有 locale 一次清干净。
 now_playing_layout = "修改Spotify听歌页布局";
 now_playing_layout_description = "包含：%@。";
 now_playing_ios27 = "iOS 27 听歌页（满屏封面）";

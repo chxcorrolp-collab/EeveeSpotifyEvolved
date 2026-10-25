@@ -188,6 +188,22 @@ require(
     "空白音节不该把实词吞掉"
 )
 
+// MARK: - 间奏行筛选（`SpicyLineFilter`）
+//
+// 2026-10-25 用户报的现场：「呼吸灯的下一行有可能是 ♪，而不是下一行歌词」。
+// 苹果那份 TTML 在间奏结束处会留一个空的人声条目，以前我们把它换成 `♪` 留在行里，
+// 于是呼吸点之后先冒出一个小音符。现在整行丢掉 —— 判据必须钉住两头：
+// 空白/纯音符要丢，**带正文的一律不许丢**。
+
+require(SpicyLineFilter.isInterludeRow(""), "空串算间奏行")
+require(SpicyLineFilter.isInterludeRow("   "), "纯空格算间奏行")
+require(SpicyLineFilter.isInterludeRow("\n\t"), "纯换行/制表符算间奏行")
+require(SpicyLineFilter.isInterludeRow("♪"), "单个 ♪ 算间奏行")
+require(SpicyLineFilter.isInterludeRow(" ♪ ♪ "), "多个 ♪（带空格）算间奏行")
+require(SpicyLineFilter.isInterludeRow("♫♬♩♭♯"), "其它音乐符号也算间奏行")
+require(!SpicyLineFilter.isInterludeRow("♪ la la"), "音符开头但有正文 ⇒ 必须留下")
+require(!SpicyLineFilter.isInterludeRow("Never gonna give you up"), "普通正文不算间奏行")
+
 // MARK: - 署名规则（Spicy Lyrics 服务条款 §6）
 //
 // "条款合规"里最容易悄悄改坏的一块：哪个 `source` 要署谁、URL 取哪个字段。

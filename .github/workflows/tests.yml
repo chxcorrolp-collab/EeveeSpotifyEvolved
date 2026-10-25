@@ -167,6 +167,7 @@ jobs:
           swiftc Sources/EeveeSpotify/Lyrics/Repositories/SLObjPack.swift \
                  Sources/EeveeSpotify/Lyrics/Models/LyricsWordDto.swift \
                  Sources/EeveeSpotify/Lyrics/Models/SpicySyllableText.swift \
+                 Sources/EeveeSpotify/Lyrics/Models/SpicyLineFilter.swift \
                  Sources/EeveeSpotify/Lyrics/Models/LyricsContributor.swift \
                  Sources/EeveeSpotify/Lyrics/Models/SpicyLyricsAttribution.swift \
                  Tests/SpicyLyricsJsonMapping/main.swift \

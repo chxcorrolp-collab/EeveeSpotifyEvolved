@@ -285,6 +285,7 @@ class SpicyLyricsRepository: LyricsRepository {
 
         var lines        = [LyricsLineDto]()
         var hasRomanized = root["HasTransliterations"]?.boolValue ?? false
+        var droppedInterludes = 0
 
         for entry in content {
             guard entry["Type"]?.stringValue == "Vocal",
@@ -307,11 +308,21 @@ class SpicyLyricsRepository: LyricsRepository {
                 continue
             }
 
+            // ★ 2026-10-25：间奏行**整行丢掉**，不再换成 `♪` 留在行里。
+            //   判据与理由见 `SpicyLineFilter`（用户：「呼吸灯的下一行有可能是 ♪，
+            //   而不是下一行歌词」）。
+            if SpicyLineFilter.isInterludeRow(lineText) {
+                droppedInterludes += 1
+                continue
+            }
+
             if (lead["TransliteratedText"]?.stringValue ?? "").isEmpty == false { hasRomanized = true }
 
             let offsetMs = lead["StartTime"]?.doubleValue.map { Int($0 * 1000) }
-            lines.append(LyricsLineDto(content: lineText.lyricsNoteIfEmpty, offsetMs: offsetMs, words: words))
+            lines.append(LyricsLineDto(content: lineText, offsetMs: offsetMs, words: words))
         }
+
+        logDroppedInterludes(droppedInterludes, kept: lines.count, shape: "Syllable")
 
         let romanization: LyricsRomanizationStatus = hasRomanized
             ? .romanized
@@ -327,13 +338,22 @@ class SpicyLyricsRepository: LyricsRepository {
 
         var lines        = [LyricsLineDto]()
         let hasRomanized = root["HasTransliterations"]?.boolValue ?? false
+        var droppedInterludes = 0
 
         for entry in content {
             guard entry["Type"]?.stringValue == "Vocal" else { continue }
             let text      = entry["Lead"]?["Text"]?.stringValue ?? entry["Text"]?.stringValue ?? ""
             let startTime = entry["Lead"]?["StartTime"]?.doubleValue ?? entry["StartTime"]?.doubleValue
-            lines.append(LyricsLineDto(content: text.lyricsNoteIfEmpty, offsetMs: startTime.map { Int($0 * 1000) }))
+
+            // 间奏行整行丢掉（同 `parseSyllableLyrics`，判据见 `SpicyLineFilter`）。
+            if SpicyLineFilter.isInterludeRow(text) {
+                droppedInterludes += 1
+                continue
+            }
+            lines.append(LyricsLineDto(content: text, offsetMs: startTime.map { Int($0 * 1000) }))
         }
+
+        logDroppedInterludes(droppedInterludes, kept: lines.count, shape: "Line")
 
         let romanization: LyricsRomanizationStatus = hasRomanized
             ? .romanized
@@ -358,10 +378,23 @@ class SpicyLyricsRepository: LyricsRepository {
             texts = content.compactMap { $0["Lead"]?["Text"]?.stringValue ?? $0["Text"]?.stringValue }
         }
 
-        let lines = texts.map { LyricsLineDto(content: $0.lyricsNoteIfEmpty, offsetMs: nil) }
+        // 间奏行整行丢掉（同上面两条路，判据见 `SpicyLineFilter`）。
+        let before = texts.count
+        texts = texts.filter { !SpicyLineFilter.isInterludeRow($0) }
+        logDroppedInterludes(before - texts.count, kept: texts.count, shape: "Static")
+
+        let lines = texts.map { LyricsLineDto(content: $0, offsetMs: nil) }
         let romanization: LyricsRomanizationStatus = lines.map(\.content).canBeRomanized
             ? .canBeRomanized : .original
         return LyricsDto(lines: lines, timeSynced: false, romanization: romanization)
+    }
+
+    /// 三条解析路共用的日志：只有真的丢了行才写（干净的歌一个字都不多）。
+    private func logDroppedInterludes(_ dropped: Int, kept: Int, shape: String) {
+        guard dropped > 0 else { return }
+        writeDebugLog(
+            "[SpicyLyrics] dropped \(dropped) interlude row(s) — \(kept) line(s) left (\(shape))"
+        )
     }
 
     private func emptyDto() -> LyricsDto {

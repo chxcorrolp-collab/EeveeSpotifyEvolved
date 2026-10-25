@@ -231,6 +231,10 @@ enum NowPlayingIOS27 {
     /// ★ 2026-10-24（照片 1：听歌中突然标题/进度/传输/收藏全没了，而底排字形还在）：
     /// `field` 是整页大的，它一旦被插到**控件上面那一层**，就会把整块 bottomStack 盖住。
     static var didLogCoverHostSkip = false
+    /// ★ 2026-10-25（用户：「点击歌词展示之后，封面又回溶底了」）：
+    /// 封面壳认不出来、靠"记下来的宿主"按模式摆好时只报一次 —— 它同时是
+    /// `resolvedShell` 那几拍空转的证据（见 `syncArtworkFrameWithoutShell`）。
+    static var didLogWithoutShell = false
     /// "一次藏了很多叶子"只报一次（照片 1 的排查线）。
     static var didLogWideGlyphHide = false
     /// ★ 2026-10-24（用户：「点击 雷达 按钮没反应」）：
@@ -453,6 +457,11 @@ enum NowPlayingIOS27 {
             options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction]
         ) {
             _ = layout(in: page)
+            // ★★ 2026-10-25：`layout` 里封面几何排在最后、而且要先认出封面壳；这一拍
+            //   壳没认出来（日志 21 的 `no on-screen artwork yet`）封面就不会缩 ——
+            //   但歌词照样会在 0.36s 后挂上来，于是"封面又回溶底"。这里用记下来的宿主
+            //   把模式几何**同一段动画**里落地，与壳无关（幂等，成功时只是一次比较）。
+            _ = syncArtworkFrameWithoutShell(in: page)
         }
     }
 
@@ -629,8 +638,12 @@ enum NowPlayingIOS27 {
                     revealShell(fallback)
                 }
             }
-            // 歌词收起时被"缩成缩略图"的那张图，壳没了也要能长回满屏。
-            if restoreArtworkWithoutShell(in: page) { changed = true }
+            // ★★ 2026-10-25（用户：「点击歌词展示之后，封面又回溶底了」）：
+            //   这一拍没有壳 ⇒ `updateArtwork` 整条不跑。以前只在这里"把缩略图长回满屏"，
+            //   收歌词那一向才有人管；**开**歌词那一向（缩成 64pt）就永远没人做 ⇒
+            //   歌词、标题、署名都出来了，封面还停在整幅帧（就是"又回溶底"）。
+            //   现在两向都走同一条：按当前模式摆好。
+            if syncArtworkFrameWithoutShell(in: page) { changed = true }
             if !didLogMissingCover {
                 didLogMissingCover = true
                 writeDebugLog("[\(logTag)] no on-screen artwork yet — nothing new to draw this tick")
@@ -644,6 +657,9 @@ enum NowPlayingIOS27 {
         artworkShell = shell
 
         if updateArtwork(shell, in: page) { changed = true }
+        // ★★ 2026-10-25：壳认出来了，`updateArtwork` 仍可能因为量不到整页宿主 / 还没图
+        //   而提前返回（它那几条 guard）。模式几何再兜一次 —— 幂等：已经是对的就只做一次比较。
+        if syncArtworkFrameWithoutShell(in: page) { changed = true }
         if mountField(in: page) { changed = true }
         if !didLogFrames {
             didLogFrames = true
@@ -987,13 +1003,58 @@ enum NowPlayingIOS27 {
             }
         }
 
-        // 封面画多大：
-        //   · 普通：**宽 = 页宽，高 = 页高的 58%**（AM 的竖长裁切）；
-        //   · 页内歌词模式：缩成左上角 **64pt 缩略图**（用户 2026-10-24：只动封面/标题，
-        //     底部按钮保持 iOS 27 的样子）。
-        let wanted: CGRect
+        // 封面画多大、什么形状：几何见 `artworkFrame(in:host:)`，形状见 `applyArtworkMode(to:)`。
+        // ⚠️ 先改 frame 再换形状：下沿那条淡出 mask 的 frame 是照 `bounds` 算的，
+        //   反过来会让 mask 慢一拍（收起/展开的那一段看得见）。
+        let wanted = artworkFrame(in: page, host: host)
+        if imageView.frame != wanted {
+            imageView.frame = wanted
+            changed = true
+        }
+        if applyArtworkMode(to: imageView) { changed = true }
+        // 一次性诊断：封面到底被放在哪、宿主多大。
+        // （用户报“有的歌铺开程度不对”时，看这一行就知道是宿主坐标还是帧子算错了。）
+        if !didLogArtworkFrame {
+            didLogArtworkFrame = true
+            writeDebugLog(
+                "[\(logTag)] artwork frame — \(Int(wanted.minX)),\(Int(wanted.minY))"
+                    + " \(Int(wanted.width))×\(Int(wanted.height))"
+                    + " · host \(Int(host.bounds.width))×\(Int(host.bounds.height))"
+                    + " · page \(Int(page.bounds.width))×\(Int(page.bounds.height))"
+            )
+        }
+        if updateTopScrim(in: host, page: page) { changed = true }
+        // 我们的封面在原生那张**上面**（同一个 cell 里），原生那张必须按下去。
+        hideShell(shell)
+        return changed
+    }
+
+    /// 封面在**当前模式**下的 frame（宿主坐标）。
+    ///
+    ///   · 普通：**宽 = 页宽，高 = 页高的 58%**（AM 的竖长裁切）；
+    ///   · 页内歌词模式：左上角 **64pt 缩略图**（用户 2026-10-24：只动封面/标题，
+    ///     底部按钮保持 iOS 27 的样子）。
+    ///
+    /// 抽出来的理由：`updateArtwork`（有壳）和 `syncArtworkFrameWithoutShell`（没壳）
+    /// 必须**用同一份几何**，否则"有壳时缩、没壳时停在上一帧"这种半成品又会回来。
+    private static func artworkFrame(in page: UIView, host: UIView) -> CGRect {
         if lyricsModeActive {
-            wanted = host.convert(lyricsThumbFrame(in: page), from: page)
+            return host.convert(lyricsThumbFrame(in: page), from: page)
+        }
+        let coverWidth = page.bounds.width
+        let coverHeight = max(
+            coverWidth,
+            min(page.bounds.height * Self.artworkHeightRatio, coverWidth * Self.artworkMaxAspect)
+        )
+        return host.convert(CGRect(x: 0, y: 0, width: coverWidth, height: coverHeight), from: page)
+    }
+
+    /// 让一张**已经画出来的**封面服从当前模式：满幅 ⇄ 64pt 缩略图，
+    /// 连同圆角 / 裁剪 / 下沿淡出 mask 一起换（三样必须同进同退）。
+    @discardableResult
+    private static func applyArtworkMode(to imageView: UIImageView) -> Bool {
+        var changed = false
+        if lyricsModeActive {
             if imageView.layer.cornerRadius != Self.lyricsThumbCorner {
                 imageView.layer.cornerRadius = Self.lyricsThumbCorner
                 imageView.layer.cornerCurve = .continuous
@@ -1013,15 +1074,6 @@ enum NowPlayingIOS27 {
                 changed = true
             }
         } else {
-            let coverWidth = page.bounds.width
-            let coverHeight = max(
-                coverWidth,
-                min(page.bounds.height * Self.artworkHeightRatio, coverWidth * Self.artworkMaxAspect)
-            )
-            wanted = host.convert(
-                CGRect(x: 0, y: 0, width: coverWidth, height: coverHeight),
-                from: page
-            )
             if imageView.layer.cornerRadius != 0 {
                 imageView.layer.cornerRadius = 0
                 changed = true
@@ -1030,69 +1082,57 @@ enum NowPlayingIOS27 {
                 imageView.clipsToBounds = false
                 changed = true
             }
+            // mask 可能在歌词模式里被摘掉，必须按身份重新挂。
+            if applyArtworkFadeMask(to: imageView) { changed = true }
         }
-        if imageView.frame != wanted {
-            imageView.frame = wanted
-            changed = true
-        }
-        // 一次性诊断：封面到底被放在哪、宿主多大。
-        // （用户报“有的歌铺开程度不对”时，看这一行就知道是宿主坐标还是帧子算错了。）
-        if !didLogArtworkFrame {
-            didLogArtworkFrame = true
-            writeDebugLog(
-                "[\(logTag)] artwork frame — \(Int(wanted.minX)),\(Int(wanted.minY))"
-                    + " \(Int(wanted.width))×\(Int(wanted.height))"
-                    + " · host \(Int(host.bounds.width))×\(Int(host.bounds.height))"
-                    + " · page \(Int(page.bounds.width))×\(Int(page.bounds.height))"
-            )
-        }
-        if !lyricsModeActive, applyArtworkFadeMask(to: imageView) { changed = true }
-        if updateTopScrim(in: host, page: page) { changed = true }
-        // 我们的封面在原生那张**上面**（同一个 cell 里），原生那张必须按下去。
-        hideShell(shell)
         return changed
     }
 
-    /// 没有封面壳（换歌转场 / 新 cell 还没挂上）时，把**已经画出来的那张**从缩略图长回满屏。
+    /// 把自己画的那张封面按**当前模式**摆好 —— 不依赖封面壳。
     ///
-    /// ★ 2026-10-24（照片 2：点歌词返回全溶封面后专辑图不展示）：`updateArtwork` 需要
-    /// `fullPageAncestor(of: shell)` 才肯改 frame；壳量不到时它整条跳过 ⇒ 关掉歌词之后
-    /// 我们的图还停在 64pt 缩略图（或者被藏掉）。这条只用**已经记下来的宿主**，不碰原生视图。
+    /// 原来的 `restoreArtworkWithoutShell` 只写了"收起歌词时长回满屏"那一向；反过来
+    /// （打开时缩成 64pt）只有 `updateArtwork` 会做，而它必须先认出封面壳
+    /// （`resolvedShell`）再量到整页宿主。
+    ///
+    /// ★★ 2026-10-25（用户：「点击歌词展示之后，封面又回溶底了」，日志 21 里那一串
+    ///   `no on-screen artwork yet` 就是它）：开歌词那一拍这两道里只要有一道没过，
+    ///   封面就**停在上一次的整幅帧**上 —— 歌词、缩进过的标题、署名全出来了，封面却还是
+    ///   那张"溶进底子"的大图（缩略图位置空着）。收起时同一条路也可能把缩略图留在原地。
+    ///   现在两向合一：只要封面还挂在一个活着的宿主里，就按模式摆好；不碰任何原生视图。
     @discardableResult
-    private static func restoreArtworkWithoutShell(in page: UIView) -> Bool {
-        guard !lyricsModeActive,
-              let view = artworkView, let host = artworkHost,
-              view.superview === host, host.window != nil,
+    private static func syncArtworkFrameWithoutShell(in page: UIView) -> Bool {
+        // 宿主优先用**封面真正挂在的那一层**（`superview`），记下来的 `artworkHost` 只在
+        // 万一没人挂它时兜底 —— 反过来会让"宿主刚换、账还没更新"的那一拍整条跳过。
+        guard let view = artworkView,
+              let host = view.superview ?? artworkHost,
+              view.superview === host,
+              host.window != nil,
               host.isDescendant(of: page),
               view.image != nil else { return false }
-        let coverWidth = page.bounds.width
-        let coverHeight = max(
-            coverWidth,
-            min(page.bounds.height * Self.artworkHeightRatio, coverWidth * Self.artworkMaxAspect)
-        )
-        let wanted = host.convert(
-            CGRect(x: 0, y: 0, width: coverWidth, height: coverHeight),
-            from: page
-        )
         var changed = false
         if view.isHidden {
             view.isHidden = false
             changed = true
         }
-        if view.layer.cornerRadius != 0 {
-            view.layer.cornerRadius = 0
-            changed = true
-        }
-        if view.clipsToBounds {
-            view.clipsToBounds = false
-            changed = true
-        }
+        // ⚠️ 与 `updateArtwork` 同一条：先 frame、再形状（mask 的 frame 照 bounds 算）。
+        let wanted = artworkFrame(in: page, host: host)
         if view.frame != wanted {
             view.frame = wanted
             changed = true
+            // 一次性诊断：下一份日志里出现这一行 = "几何是靠记下来的宿主摆正的"，
+            // 说明 `updateArtwork` 那一拍没有走到几何（壳认不出来 / 宿主量不到）。
+            if !didLogWithoutShell {
+                didLogWithoutShell = true
+                writeDebugLog(
+                    "[\(logTag)] artwork: \(lyricsModeActive ? "thumbnail" : "full bleed")"
+                        + " fixed from the remembered host — updateArtwork did not reach"
+                        + " the geometry this tick"
+                )
+            }
         }
-        // 与 `updateArtwork` 同一条：mask 可能在歌词模式里被摘掉，必须按身份重新挂。
-        if applyArtworkFadeMask(to: view) { changed = true }
+        if applyArtworkMode(to: view) { changed = true }
+        // 压暗带跟着封面走（歌词模式里它只该盖住状态栏那一段，见 `updateTopScrim`）。
+        if updateTopScrim(in: host, page: page) { changed = true }
         return changed
     }
 
@@ -1102,7 +1142,12 @@ enum NowPlayingIOS27 {
     /// 曲名在 545、离这一带很远，所以不会把标题压暗。
     @discardableResult
     private static func updateTopScrim(in host: UIView, page: UIView) -> Bool {
-        let height = max(page.safeAreaInsets.top + topScrimExtraHeight, topScrimMinHeight)
+        // ★ 2026-10-25：页内歌词模式下封面缩略图就长在状态栏下面
+        //   （`lyricsThumbTopInset` = 46），这条压暗带有 96…112pt 高、还插在封面**上面**，
+        //   会横过缩略图上沿 ⇒ 缩略图顶部像是被压黑了一条。那一档只保留状态栏那一段。
+        let height = lyricsModeActive
+            ? max(page.safeAreaInsets.top, 1)
+            : max(page.safeAreaInsets.top + topScrimExtraHeight, topScrimMinHeight)
         let frame = host.convert(
             CGRect(x: 0, y: 0, width: page.bounds.width, height: height),
             from: page
@@ -1150,7 +1195,9 @@ enum NowPlayingIOS27 {
             didLogTopScrim = true
             writeDebugLog(
                 "[\(logTag)] top scrim — 0…\(Int(height))pt, black 0.34 → 0.12 → clear"
-                    + " (the artwork still runs full-bleed under the island)"
+                    + (lyricsModeActive
+                        ? " (lyrics mode: only the status-bar band, the thumbnail stays clear)"
+                        : " (the artwork still runs full-bleed under the island)")
             )
         }
         return changed
@@ -1874,6 +1921,7 @@ enum NowPlayingIOS27 {
         didLogRestore = false
         didLogArtworkHold = false
         didLogCoverHostSkip = false
+        didLogWithoutShell = false
         didLogWideGlyphHide = false
         clearProgressState()
         clearTransportState()

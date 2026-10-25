@@ -29,14 +29,15 @@ enum SpicyLineFilter {
     /// `MusixmatchLyricsRepository.isMxmInterludeRow` 保持一致。
     private static let musicSymbols = "♪♫♬♩♭♯"
 
-    /// 这一行是不是**间奏行**：空白（含纯空格、纯换行），或整行只有 ♪ ♫ ♬ ♩ ♭ ♯。
+    /// 这一行是不是**间奏行**：空白（含纯空格、纯换行），或整行只有 ♪ ♫ ♬ ♩ ♭ ♯
+    /// **以及夹在符号之间的空白**（`" ♪ ♪ "` 这种）。
     ///
-    /// ⚠️ 只要行里还有**一个**非符号字符就**不算**间奏 —— `♪ la la` 这种带正文的行必须留着
+    /// ⚠️ 只要行里还有**一个**非空白、非符号字符就**不算**间奏 —— `♪ la la` 这种带正文的行必须留着
     /// （真有歌用音符开头）；反过来 `[间奏]` 这种方括号标注不归这里管，那是
     /// `LyricsMarkerFilter` 的活。
     static func isInterludeRow(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return true }
-        return trimmed.allSatisfy { musicSymbols.contains($0) }
+        return trimmed.allSatisfy { $0.isWhitespace || musicSymbols.contains($0) }
     }
 }

@@ -3,6 +3,6 @@ ARCHS = arm64
 INSTALL_TARGET_PROCESSES = Spotify
 include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = EeveeSpotify
-EeveeSpotify_FILES = modules/OfflineAudio/OfflineOnly.x.swift
-EeveeSpotify_SWIFTFLAGS = -Osize
+EeveeSpotify_FILES = modules/OfflineAudio/OfflineOnly.m
+EeveeSpotify_CFLAGS = -fobjc-arc
 include $(THEOS_MAKE_PATH)/tweak.mk

@@ -6,7 +6,7 @@ on:
     paths:
       - 'modules/OfflineAudio/**'
       - 'CustomApps/SonoraOffline/Core.swift'
-      - 'modules/OfflineAudio/OfflineOnly.x.swift'
+      - 'modules/OfflineAudio/OfflineOnly.m'
       - '.github/workflows/build-spotify-original-offline.yml'
 permissions:
   contents: read

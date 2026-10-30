@@ -49,7 +49,7 @@ jobs:
           unzip -q "$RUNNER_TEMP/Orion.zip" -d "$RUNNER_TEMP/orion"
           find "$RUNNER_TEMP/orion" -name Orion.framework -not -path '*__MACOSX*' -type d | head -1
       - name: Build EeveeSwiftProtobuf
-        run: Tools/SwiftProtobufBuild/build-eeveeswiftprotobuf.sh
+        run: bash Tools/SwiftProtobufBuild/build-eeveeswiftprotobuf.sh
       - name: Compile modified Spotify tweak
         run: |
           THEOS_PACKAGE_SCHEME=rootless NO_JBROOT=1 make package FINALPACKAGE=1 2>&1 | tee tweak-build.log

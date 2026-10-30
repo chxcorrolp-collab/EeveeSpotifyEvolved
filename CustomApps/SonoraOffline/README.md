@@ -26,6 +26,7 @@ Requiere macOS con Xcode 26.1.1 y XcodeGen. También se puede ejecutar el flujo 
 
 ```sh
 swift test
+swift GenerateIcon.swift
 xcodegen generate
 xcodebuild -project Sonora.xcodeproj -scheme Sonora -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
 mkdir -p output/Payload

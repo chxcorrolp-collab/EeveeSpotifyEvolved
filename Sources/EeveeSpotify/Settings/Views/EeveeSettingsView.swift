@@ -101,6 +101,12 @@ struct EeveeSettingsView: View {
 
             // ── ① 播放与歌词 ──────────────────────────────────────────────────
             Section(header: Text("settings_group_playback".localized)) {
+                Button {
+                    EeveeOfflineIntegration.showLibrary()
+                } label: {
+                    NavigationSectionView(color: .green, title: "Descargas locales", imageSystemName: "arrow.down.circle.fill", subtitle: "Audio guardado en este iPhone")
+                }
+
                 settingsRow(
                     color: .blue,
                     title: "lyrics",

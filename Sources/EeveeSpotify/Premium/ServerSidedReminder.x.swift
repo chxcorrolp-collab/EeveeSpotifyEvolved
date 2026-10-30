@@ -51,23 +51,7 @@ class ContentOffliningUIHelperImplementationHook: ClassHook<NSObject> {
         pageIdentifier: NSString,
         pageURI: NSURL
     ) {
-        let isPlaylist = Dynamic.convert(pageURI, to: SPTURL.self)
-            .isPlaylistURL()
-        
-        showPlaylistDownloadingPopUp(
-            isPlaylist,
-            onSecondaryClick: isPlaylist
-                ? {
-                    self.orig.downloadToggledWithCurrentAvailability(
-                        availability,
-                        addAction: addAction,
-                        removeAction: removeAction,
-                        pageIdentifier: pageIdentifier,
-                        pageURI: pageURI
-                    )
-                }
-                : nil
-        )
+        EeveeOfflineIntegration.download(pageURI)
     }
 }
 
@@ -83,23 +67,6 @@ class ContentOffliningUIHelperImplementationModernHook: ClassHook<NSObject> {
         pageURI: NSURL,
         interactionID: NSString
     ) {
-        let isPlaylist = Dynamic.convert(pageURI, to: SPTURL.self)
-            .isPlaylistURL()
-        
-        showPlaylistDownloadingPopUp(
-            isPlaylist,
-            onSecondaryClick: isPlaylist
-                ? {
-                    self.orig.downloadToggledWithCurrentAvailability(
-                        availability,
-                        addAction: addAction,
-                        removeAction: removeAction,
-                        pageIdentifier: pageIdentifier,
-                        pageURI: pageURI,
-                        interactionID: interactionID
-                    )
-                }
-                : nil
-        )
+        EeveeOfflineIntegration.download(pageURI)
     }
 }

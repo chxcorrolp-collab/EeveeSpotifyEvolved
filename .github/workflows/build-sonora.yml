@@ -41,7 +41,7 @@ jobs:
           APP=build/Build/Products/Release-iphoneos/Sonora.app
           test -f "$APP/Sonora"
           plutil -lint "$APP/Info.plist"
-          lipo -verify_arch arm64 "$APP/Sonora"
+          lipo "$APP/Sonora" -verify_arch arm64
           mkdir -p output/Payload
           cp -R "$APP" output/Payload/
           cd output

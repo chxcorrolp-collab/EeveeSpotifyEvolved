@@ -67,7 +67,12 @@ jobs:
           # minimal hook and restore Spotify's native compatibility appearance.
           plutil -replace UIDesignRequiresCompatibility -bool YES "$APP/Info.plist"
           plutil -remove CFBundleIcons.CFBundleAlternateIcons "$APP/Info.plist" 2>/dev/null || true
-          rm -rf "$APP/PlugIns/OpenSpotifySafariExtension.appex"
+          # Free sideload signatures use a different bundle ID; embedded Watch
+          # and app extensions would still refer to com.spotify.client.
+          rm -rf "$APP/Watch" "$APP/WatchKit" "$APP/WatchKitSupport" \
+            "$APP/com.apple.WatchPlaceholder" "$APP/PlugIns" "$APP/Extensions" \
+            "$RUNNER_TEMP/spotify/Payload/WatchKitSupport"
+          find "$APP" -type d -name '*.appex' -prune -exec rm -rf {} +
           cp -R modules/OfflineAudio/build/Build/Products/Release-iphoneos/EeveeOfflineAudio.framework "$APP/Frameworks/"
           find modules/OfflineAudio/build/Build/Products/Release-iphoneos -maxdepth 1 -name 'YouTubeKit*.bundle' -exec cp -R {} "$APP/" \;
           test -f "$APP/Frameworks/EeveeOfflineAudio.framework/EeveeOfflineAudio"
@@ -84,6 +89,10 @@ jobs:
           mkdir -p Outputs
           (cd "$RUNNER_TEMP/spotify" && zip -qry "$GITHUB_WORKSPACE/Outputs/Spotify-Original-Offline.ipa" Payload)
           unzip -t Outputs/Spotify-Original-Offline.ipa | tail -1
+          if unzip -Z1 Outputs/Spotify-Original-Offline.ipa | grep -Eq '(^|/)(Watch|WatchKit|WatchKitSupport|PlugIns|Extensions|com.apple.WatchPlaceholder)(/|$)|[.]appex/'; then
+            echo "Unexpected Watch or app extension remains in IPA" >&2
+            exit 1
+          fi
           unzip -l Outputs/Spotify-Original-Offline.ipa | grep 'Spotify.app/Frameworks/EeveeOfflineAudio.framework/EeveeOfflineAudio'
       - uses: actions/upload-artifact@v4
         with:

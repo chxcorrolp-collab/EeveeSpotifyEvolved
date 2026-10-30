@@ -7,7 +7,8 @@ import ObjectiveC.runtime
 /// Never forwards supported music downloads to Spotify's offline service.
 enum EeveeOfflineIntegration {
     static func download(_ uri: NSURL) {
-        invoke("download:", reference: uri.absoluteString as NSString)
+        guard let reference = uri.absoluteString else { return }
+        invoke("download:", reference: reference as NSString)
     }
 
     static func showLibrary() { invoke("showLibrary", reference: nil) }

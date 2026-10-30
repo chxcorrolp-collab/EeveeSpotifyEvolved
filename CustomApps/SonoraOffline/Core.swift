@@ -117,7 +117,7 @@ public enum SpotifyCatalog {
                   seen.insert(id).inserted else { return nil }
             return CatalogTrack(id: id, title: row["title"] as? String ?? title,
                                 artist: row["subtitle"] as? String ?? artist,
-                                duration: (row["duration"] as? Double ?? 0) / 1000, coverURL: cover)
+                                duration: ((row["duration"] as? NSNumber)?.doubleValue ?? 0) / 1000, coverURL: cover)
         }
         guard !tracks.isEmpty else { throw SonoraError.message("No se encontraron canciones en este enlace.") }
         // The public embed can limit long playlists; never claim a full playlist was imported.

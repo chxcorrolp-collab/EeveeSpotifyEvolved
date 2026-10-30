@@ -2,10 +2,21 @@ import Foundation
 import UIKit
 import Darwin
 import ObjectiveC.runtime
+import MediaPlayer
 
 /// Routes the native download action to the bundled audio engine.
 /// Never forwards supported music downloads to Spotify's offline service.
 enum EeveeOfflineIntegration {
+    // The local library posts this immediately before starting AVAudioPlayer.
+    private static let pauseSpotifyObserver: NSObjectProtocol = NotificationCenter.default.addObserver(
+        forName: Notification.Name("EeveeOfflineWillPlay"), object: nil, queue: .main
+    ) { _ in
+        let center = MPNowPlayingInfoCenter.default()
+        let rate = (center.nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] as? NSNumber)?.doubleValue
+        if rate == 1 || (rate == nil && center.playbackState == .playing) {
+            _ = WordByWordPlaybackControl.togglePlayPause()
+        }
+    }
     static func download(_ uri: NSURL) {
         guard let reference = uri.absoluteString else { return }
         invoke("download:", reference: reference as NSString)
@@ -14,6 +25,7 @@ enum EeveeOfflineIntegration {
     static func showLibrary() { invoke("showLibrary", reference: nil) }
 
     private static func invoke(_ name: String, reference: NSString?) {
+        _ = pauseSpotifyObserver
         DispatchQueue.main.async {
             let path = Bundle.main.bundlePath + "/Frameworks/EeveeOfflineAudio.framework/EeveeOfflineAudio"
             guard dlopen(path, RTLD_NOW) != nil,

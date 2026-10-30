@@ -35,22 +35,15 @@ jobs:
           xcodegen generate
           xcodebuild -project EeveeOfflineAudio.xcodeproj -scheme EeveeOfflineAudio -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build 2>&1 | tee framework-build.log
           test -f build/Build/Products/Release-iphoneos/EeveeOfflineAudio.framework/EeveeOfflineAudio
-      - name: Setup Theos
-        uses: actions/checkout@v4
-        with:
-          repository: theos/theos
-          path: theos
-          submodules: recursive
-      - name: Get Orion binary for link
+      - name: Compile the native download interceptor
         run: |
-          curl -fL https://github.com/zbzxbg/es-build-tools/releases/download/v1.0.0/Orion.zip -o "$RUNNER_TEMP/Orion.zip"
-          unzip -q "$RUNNER_TEMP/Orion.zip" -d "$RUNNER_TEMP/orion"
-          find "$RUNNER_TEMP/orion" -name Orion.framework -not -path '*__MACOSX*' -type d | head -1
-      - name: Compile only the download-button hook
-        run: |
-          set -o pipefail
-          THEOS_PACKAGE_SCHEME=rootless make -f modules/OfflineAudio/Makefile package FINALPACKAGE=1 2>&1 | tee tweak-build.log
-          find packages -name 'com.eevee.spotify_*.deb' -print -quit | grep .
+          set -euo pipefail
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          mkdir -p hook-build
+          xcrun clang -target arm64-apple-ios16.1 -isysroot "$SDK" -fobjc-arc -fblocks -dynamiclib \
+            -Wl,-install_name,@rpath/EeveeSpotify.dylib -framework UIKit -framework Foundation \
+            -o hook-build/EeveeSpotify.dylib modules/OfflineAudio/OfflineOnly.m
+          lipo hook-build/EeveeSpotify.dylib -verify_arch arm64
       - name: Reuse earlier Spotify IPA
         uses: actions/download-artifact@v4
         with:
@@ -64,12 +57,10 @@ jobs:
           set -euo pipefail
           BASE=$(find base-ipa -name '*.ipa' -print -quit)
           test -n "$BASE"
-          mkdir -p "$RUNNER_TEMP/deb" "$RUNNER_TEMP/spotify"
-          DEB=$(find packages -name 'com.eevee.spotify_*.deb' -print -quit)
-          dpkg-deb -x "$DEB" "$RUNNER_TEMP/deb"
+          mkdir -p "$RUNNER_TEMP/spotify"
           unzip -q "$BASE" -d "$RUNNER_TEMP/spotify"
           APP="$RUNNER_TEMP/spotify/Payload/Spotify.app"
-          DYLIB=$(find "$RUNNER_TEMP/deb" -name EeveeSpotify.dylib -print -quit)
+          DYLIB=hook-build/EeveeSpotify.dylib
           test -f "$DYLIB"
           cp "$DYLIB" "$APP/Frameworks/EeveeSpotify.dylib"
           # The older IPA contains Eevee's visual code; replace its dylib with a
@@ -105,5 +96,5 @@ jobs:
           name: spotify-offline-build-logs
           path: |
             modules/OfflineAudio/framework-build.log
-            tweak-build.log
+            hook-build/*.log
           if-no-files-found: ignore
